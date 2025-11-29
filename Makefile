@@ -1,7 +1,7 @@
 CC = gcc
 LEX = flex
 YACC = bison
-CFLAGS = -Wall -Wextra -g -I./include
+CFLAGS = -Wall -Wextra -g -I./include -DYYDEBUG=1
 LDFLAGS = -ly
 
 # Ruby support (optional)

@@ -50,6 +50,7 @@ puppet_program_t *parsed_program = NULL;
     puppet_param_t *param;
     puppet_param_list_t *param_list;
     puppet_attribute_t *attribute;
+    puppet_attribute_list_t *attribute_list;
     puppet_resource_instance_t *resource_instance;
     puppet_resource_decl_t *resource_decl;
     puppet_case_when_t *case_when;
@@ -100,6 +101,7 @@ puppet_program_t *parsed_program = NULL;
 %type <stmt> if_statement unless_statement case_statement
 %type <stmt> assignment_statement append_statement
 %type <stmt> function_statement resource_chain
+%type <stmt> include_statement require_statement contain_statement
 
 %type <expr_list> expression_list expression_list_opt
 %type <expr_list> funcall_args
@@ -109,8 +111,8 @@ puppet_program_t *parsed_program = NULL;
 %type <param> parameter
 %type <param_list> parameter_list parameter_list_opt
 
-%type <attribute> attribute attribute_list
-%type <attribute> attribute_list_opt
+%type <attribute> attribute
+%type <attribute_list> attribute_list attribute_list_opt
 %type <resource_instance> resource_instance
 %type <resource_decl> resource_body
 
@@ -123,6 +125,7 @@ puppet_program_t *parsed_program = NULL;
 %type <value> value hash_value array_value
 
 %type <string> class_parent_opt
+%type <string> qualified_name
 %type <binop> comparison_op arithmetic_op logical_op
 %type <unop> unary_op
 
@@ -133,6 +136,20 @@ program:
         parsed_program = calloc(1, sizeof(puppet_program_t));
         parsed_program->statements = *$1;
         free($1);
+    }
+    ;
+
+qualified_name:
+    NAME { $$ = $1; }
+    | qualified_name COLONCOLON NAME {
+        size_t len1 = strlen($1);
+        size_t len3 = strlen($3);
+        $$ = malloc(len1 + 2 + len3 + 1);
+        strcpy($$, $1);
+        strcat($$, "::");
+        strcat($$, $3);
+        free($1);
+        free($3);
     }
     ;
 
@@ -167,6 +184,9 @@ statement:
     | append_statement
     | function_statement
     | resource_chain
+    | include_statement
+    | require_statement
+    | contain_statement
     ;
 
 resource_declaration:
@@ -193,7 +213,7 @@ resource_declaration:
     ;
 
 resource_type:
-    NAME { $$ = $1; }
+    qualified_name { $$ = $1; }
     | CLASSREF { $$ = $1; }
     | CLASS { $$ = strdup("class"); }
     ;
@@ -228,9 +248,8 @@ resource_instance:
         $$ = calloc(1, sizeof(puppet_resource_instance_t));
         $$->title = $1;
         if ($3) {
-            $$->attr_count = 1;
-            $$->attributes = calloc(1, sizeof(puppet_attribute_t));
-            $$->attributes[0] = *$3;
+            $$->attr_count = $3->count;
+            $$->attributes = $3->attributes;
             free($3);
         } else {
             $$->attr_count = 0;
@@ -246,14 +265,25 @@ attribute_list_opt:
     | attribute_list {
         $$ = $1;
     }
+    | attribute_list ',' {
+        $$ = $1;
+    }
     ;
 
 attribute_list:
     attribute {
-        $$ = $1;
+        $$ = calloc(1, sizeof(puppet_attribute_list_t));
+        $$->attributes = malloc(sizeof(puppet_attribute_t));
+        $$->attributes[0] = *$1;
+        $$->count = 1;
+        free($1);
     }
     | attribute_list ',' attribute {
-        $$ = $1; // For now, just return the first attribute
+        $$ = $1;
+        $$->attributes = realloc($$->attributes, ($$->count + 1) * sizeof(puppet_attribute_t));
+        $$->attributes[$$->count] = *$3;
+        $$->count++;
+        free($3);
     }
     ;
 
@@ -331,24 +361,42 @@ parameter_list_opt:
     /* empty */ { $$ = NULL; }
     | '(' ')' { $$ = calloc(1, sizeof(puppet_param_list_t)); }
     | '(' parameter_list ')' { $$ = $2; }
+    | '(' parameter_list ',' ')' { $$ = $2; }
     ;
 
 parameter_list:
     parameter {
         $$ = calloc(1, sizeof(puppet_param_list_t));
-        $$->params = $1;
+        $$->params = calloc(1, sizeof(puppet_param_t));
+        $$->params[0] = *$1;
         $$->count = 1;
+        free($1);
     }
     | parameter_list ',' parameter {
         $$ = $1;
         $$->params = realloc($$->params, ($$->count + 1) * sizeof(puppet_param_t));
-        $$->params[$$->count++] = *$3;
+        $$->params[$$->count] = *$3;
+        $$->count++;
         free($3);
     }
     ;
 
 parameter:
-    type_expression VARIABLE {
+    VARIABLE {
+        $$ = calloc(1, sizeof(puppet_param_t));
+        $$->name = puppet_string_create($1);
+        $$->type_constraint = NULL;
+        $$->default_value = NULL;
+        free($1);
+    }
+    | VARIABLE '=' expression {
+        $$ = calloc(1, sizeof(puppet_param_t));
+        $$->name = puppet_string_create($1);
+        $$->type_constraint = NULL;
+        $$->default_value = $3;
+        free($1);
+    }
+    | type_expression VARIABLE {
         $$ = calloc(1, sizeof(puppet_param_t));
         $$->name = puppet_string_create($2);
         $$->type_constraint = puppet_value_create_string($1->data.variable.data, $1->data.variable.len);
@@ -364,24 +412,10 @@ parameter:
         puppet_expr_destroy($1);
         free($2);
     }
-    | VARIABLE {
-        $$ = calloc(1, sizeof(puppet_param_t));
-        $$->name = puppet_string_create($1);
-        $$->type_constraint = NULL;
-        $$->default_value = NULL;
-        free($1);
-    }
-    | VARIABLE '=' expression {
-        $$ = calloc(1, sizeof(puppet_param_t));
-        $$->name = puppet_string_create($1);
-        $$->type_constraint = NULL;
-        $$->default_value = $3;
-        free($1);
-    }
     ;
 
 define_definition:
-    DEFINE NAME parameter_list_opt '{' statement_list '}' {
+    DEFINE qualified_name parameter_list_opt '{' statement_list '}' {
         $$ = calloc(1, sizeof(puppet_stmt_t));
         $$->type = PUPPET_STMT_DEFINE;
         $$->data.define.name = puppet_string_create($2);
@@ -558,6 +592,45 @@ resource_chain:
     }
     ;
 
+include_statement:
+    INCLUDE qualified_name {
+        $$ = calloc(1, sizeof(puppet_stmt_t));
+        $$->type = PUPPET_STMT_INCLUDE;
+        $$->data.names.exprs = calloc(1, sizeof(puppet_expr_t*));
+        $$->data.names.exprs[0] = calloc(1, sizeof(puppet_expr_t));
+        $$->data.names.exprs[0]->type = PUPPET_EXPR_VALUE;
+        $$->data.names.exprs[0]->data.value = puppet_value_create_string($2, strlen($2));
+        $$->data.names.count = 1;
+        free($2);
+    }
+    ;
+
+require_statement:
+    REQUIRE_KEYWORD qualified_name {
+        $$ = calloc(1, sizeof(puppet_stmt_t));
+        $$->type = PUPPET_STMT_REQUIRE;
+        $$->data.names.exprs = calloc(1, sizeof(puppet_expr_t*));
+        $$->data.names.exprs[0] = calloc(1, sizeof(puppet_expr_t));
+        $$->data.names.exprs[0]->type = PUPPET_EXPR_VALUE;
+        $$->data.names.exprs[0]->data.value = puppet_value_create_string($2, strlen($2));
+        $$->data.names.count = 1;
+        free($2);
+    }
+    ;
+
+contain_statement:
+    CONTAIN qualified_name {
+        $$ = calloc(1, sizeof(puppet_stmt_t));
+        $$->type = PUPPET_STMT_CONTAIN;
+        $$->data.names.exprs = calloc(1, sizeof(puppet_expr_t*));
+        $$->data.names.exprs[0] = calloc(1, sizeof(puppet_expr_t));
+        $$->data.names.exprs[0]->type = PUPPET_EXPR_VALUE;
+        $$->data.names.exprs[0]->data.value = puppet_value_create_string($2, strlen($2));
+        $$->data.names.count = 1;
+        free($2);
+    }
+    ;
+
 expression:
     primary_expression
     | unary_expression
@@ -585,6 +658,7 @@ value:
     | NUMBER { $$ = puppet_value_create_number($1); }
     | STRING_LITERAL { $$ = puppet_value_create_string($1, strlen($1)); free($1); }
     | DQSTRING_LITERAL { $$ = puppet_value_create_string($1, strlen($1)); free($1); }
+    | NAME { $$ = puppet_value_create_string($1, strlen($1)); free($1); }
     | UNDEF { $$ = puppet_value_create_undef(); }
     | array_value { $$ = $1; }
     | hash_value { $$ = $1; }

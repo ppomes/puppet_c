@@ -56,7 +56,7 @@ int main(int argc, char *argv[]) {
         {0, 0, 0, 0}
     };
     
-    while ((opt = getopt_long(argc, argv, "jeo:h", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "jeo:hd", long_options, NULL)) != -1) {
         switch (opt) {
             case 'j':
                 json_output = 1;
@@ -70,6 +70,12 @@ int main(int argc, char *argv[]) {
             case 'h':
                 print_usage(argv[0]);
                 return 0;
+            case 'd':
+                #if YYDEBUG
+                extern int yydebug;
+                yydebug = 1;
+                #endif
+                break;
             default:
                 print_usage(argv[0]);
                 return 1;
