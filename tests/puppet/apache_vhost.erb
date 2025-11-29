@@ -1,0 +1,44 @@
+<VirtualHost *:<%= $listen_port %>>
+    ServerName <%= $server_name %>
+    DocumentRoot <%= $document_root %>
+    
+    # Logging
+    ErrorLog ${APACHE_LOG_DIR}/<%= $server_name %>_error.log
+    CustomLog ${APACHE_LOG_DIR}/<%= $server_name %>_access.log combined
+    
+    # Directory permissions
+    <Directory <%= $document_root %>>
+        Options Indexes FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    # SSL Configuration for port 443
+    <IfModule mod_ssl.c>
+        SSLEngine on
+        SSLProtocol all -SSLv2 -SSLv3
+        SSLCipherSuite HIGH:!aNULL:!MD5
+        SSLHonorCipherOrder on
+    </IfModule>
+
+    # Performance optimizations
+    <IfModule mod_deflate.c>
+        SetOutputFilter DEFLATE
+        SetEnvIfNoCase Request_URI \
+            \.(?:gif|jpe?g|png)$ no-gzip dont-vary
+        SetEnvIfNoCase Request_URI \
+            \.(?:exe|t?gz|zip|bz2|sit|rar)$ no-gzip dont-vary
+    </IfModule>
+    
+    # Cache static content
+    <IfModule mod_expires.c>
+        ExpiresActive On
+        ExpiresByType text/css "access plus 1 month"
+        ExpiresByType application/javascript "access plus 1 month"
+        ExpiresByType image/png "access plus 1 month"
+        ExpiresByType image/jpg "access plus 1 month"
+        ExpiresByType image/jpeg "access plus 1 month"
+        ExpiresByType image/gif "access plus 1 month"
+    </IfModule>
+    
+</VirtualHost>
