@@ -349,6 +349,11 @@ typedef struct {
 } puppet_attribute_t;
 
 typedef struct {
+    puppet_attribute_t *attributes;
+    size_t count;
+} puppet_attribute_list_t;
+
+typedef struct {
     puppet_expr_t *title;
     puppet_attribute_t *attributes;
     size_t attr_count;

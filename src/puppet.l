@@ -206,7 +206,7 @@ NON_WORD    [^a-zA-Z0-9_]
     sscanf(yytext + 2, "%x", &result);
     string_buf_append_char((char)result);
 }
-<DQSTRING>"$"           { string_buf_append("${", 2); return DQSTRING_INTERP_START; }
+<DQSTRING>"$"           { string_buf_append_char('$'); }
 <DQSTRING>[^\\\"\n$]+   { string_buf_append(yytext, yyleng); }
 <DQSTRING>\n            { 
     fprintf(stderr, "Unterminated string\n"); 

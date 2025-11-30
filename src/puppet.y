@@ -294,6 +294,16 @@ attribute:
         $$->value = $3;
         free($1);
     }
+    | REQUIRE_KEYWORD FARROW expression {
+        $$ = calloc(1, sizeof(puppet_attribute_t));
+        $$->name = puppet_string_create("require");
+        $$->value = $3;
+    }
+    | NOTIFY_KEYWORD FARROW expression {
+        $$ = calloc(1, sizeof(puppet_attribute_t));
+        $$->name = puppet_string_create("notify");
+        $$->value = $3;
+    }
     ;
 
 resource_default:
@@ -843,6 +853,13 @@ lambda_expression:
 
 resource_reference:
     TYPE_NAME '[' expression ']' {
+        $$ = calloc(1, sizeof(puppet_expr_t));
+        $$->type = PUPPET_EXPR_RESOURCE_REF;
+        $$->data.resource_ref.type = puppet_string_create($1);
+        $$->data.resource_ref.title = $3;
+        free($1);
+    }
+    | CLASSREF '[' expression ']' {
         $$ = calloc(1, sizeof(puppet_expr_t));
         $$->type = PUPPET_EXPR_RESOURCE_REF;
         $$->data.resource_ref.type = puppet_string_create($1);
