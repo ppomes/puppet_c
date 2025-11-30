@@ -216,6 +216,7 @@ resource_type:
     qualified_name { $$ = $1; }
     | CLASSREF { $$ = $1; }
     | CLASS { $$ = strdup("class"); }
+    | NOTIFY_KEYWORD { $$ = strdup("notify"); }
     ;
 
 resource_body:

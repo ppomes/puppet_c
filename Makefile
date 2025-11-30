@@ -65,9 +65,42 @@ clean:
 test: $(TARGET)
 	@echo "Running parser tests..."
 	@mkdir -p tests/output
-	@for file in tests/puppet/*.pp; do \
-		echo "Testing $$file..."; \
-		./$(TARGET) $$file > tests/output/$$(basename $$file).out 2>&1 || true; \
-	done
+	@total=0; passed=0; \
+	for file in tests/puppet/*.pp; do \
+		printf "Testing %s... " "$$(basename $$file)"; \
+		if ./$(TARGET) $$file > tests/output/$$(basename $$file).out 2>&1; then \
+			echo "✓ PASS"; \
+			passed=$$((passed + 1)); \
+		else \
+			echo "✗ FAIL"; \
+		fi; \
+		total=$$((total + 1)); \
+	done; \
+	echo; \
+	echo "Test Results: $$passed/$$total tests passed"; \
+	if [ $$passed -eq $$total ]; then \
+		echo "🎉 All tests passed!"; \
+		exit 0; \
+	else \
+		echo "❌ Some tests failed. Check tests/output/ for details."; \
+		exit 1; \
+	fi
 
-.PHONY: all clean test directories
+test-unit: $(TARGET)
+	@echo "Running unit tests..."
+	@mkdir -p tests/output
+	@total=0; passed=0; \
+	for file in tests/unit/*.pp; do \
+		printf "Testing %s... " "$$(basename $$file)"; \
+		if ./$(TARGET) $$file > tests/output/$$(basename $$file).out 2>&1; then \
+			echo "✓ PASS"; \
+			passed=$$((passed + 1)); \
+		else \
+			echo "✗ FAIL"; \
+		fi; \
+		total=$$((total + 1)); \
+	done; \
+	echo; \
+	echo "Unit Test Results: $$passed/$$total tests passed"
+
+.PHONY: all clean test test-unit directories
