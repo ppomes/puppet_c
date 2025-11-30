@@ -1,13 +1,13 @@
-<VirtualHost *:<%= $listen_port %>>
-    ServerName <%= $server_name %>
-    DocumentRoot <%= $document_root %>
+<VirtualHost *:<%= @listen_port %>>
+    ServerName <%= @server_name %>
+    DocumentRoot <%= @document_root %>
     
     # Logging
-    ErrorLog ${APACHE_LOG_DIR}/<%= $server_name %>_error.log
-    CustomLog ${APACHE_LOG_DIR}/<%= $server_name %>_access.log combined
+    ErrorLog ${APACHE_LOG_DIR}/<%= @server_name %>_error.log
+    CustomLog ${APACHE_LOG_DIR}/<%= @server_name %>_access.log combined
     
     # Directory permissions
-    <Directory <%= $document_root %>>
+    <Directory <%= @document_root %>>
         Options Indexes FollowSymLinks
         AllowOverride All
         Require all granted
