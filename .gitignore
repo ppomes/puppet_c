@@ -1,0 +1,22 @@
+# Build directories
+obj/
+bin/
+
+# Generated flex/bison files
+src/lex.yy.c
+src/puppet.tab.c
+src/puppet.tab.h
+include/puppet.tab.h
+
+# Test files
+test_*.pp
+
+# OS specific
+.DS_Store
+*.swp
+*~
+
+# IDE files
+.vscode/
+.idea/
+*.sublime-*
