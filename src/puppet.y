@@ -265,9 +265,6 @@ attribute_list_opt:
     | attribute_list {
         $$ = $1;
     }
-    | attribute_list ',' {
-        $$ = $1;
-    }
     ;
 
 attribute_list:
@@ -284,6 +281,9 @@ attribute_list:
         $$->attributes[$$->count] = *$3;
         $$->count++;
         free($3);
+    }
+    | attribute_list ',' {
+        $$ = $1;
     }
     ;
 
@@ -302,6 +302,11 @@ attribute:
     | NOTIFY_KEYWORD FARROW expression {
         $$ = calloc(1, sizeof(puppet_attribute_t));
         $$->name = puppet_string_create("notify");
+        $$->value = $3;
+    }
+    | BEFORE_KEYWORD FARROW expression {
+        $$ = calloc(1, sizeof(puppet_attribute_t));
+        $$->name = puppet_string_create("before");
         $$->value = $3;
     }
     ;
@@ -720,6 +725,7 @@ funcall_expression:
         }
         free($1);
     }
+    /* Commented out to fix ambiguity with commas
     | NAME funcall_args {
         $$ = calloc(1, sizeof(puppet_expr_t));
         $$->type = PUPPET_EXPR_FUNCALL;
@@ -730,6 +736,7 @@ funcall_expression:
         }
         free($1);
     }
+    */
     ;
 
 funcall_args:
