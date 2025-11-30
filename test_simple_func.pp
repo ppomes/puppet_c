@@ -1,1 +1,0 @@
-$x = template("test.erb"),

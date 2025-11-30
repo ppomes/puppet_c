@@ -8,8 +8,10 @@ src/puppet.tab.c
 src/puppet.tab.h
 include/puppet.tab.h
 
-# Test files
+# Generated test files (not the official test suite)
 test_*.pp
+tests/unit/
+tests/development/
 
 # OS specific
 .DS_Store
