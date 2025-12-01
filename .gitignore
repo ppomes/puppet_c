@@ -8,6 +8,35 @@ src/puppet.tab.c
 src/puppet.tab.h
 include/puppet.tab.h
 
+# Autotools generated files
+/aclocal.m4
+/autom4te.cache/
+/compile
+/config.log
+/config.status
+/configure
+/depcomp
+/install-sh
+/missing
+/Makefile
+/Makefile.in
+/src/Makefile
+/src/Makefile.in
+/tests/Makefile
+/tests/Makefile.in
+
+# Autotools build artifacts
+src/.deps/
+src/*.o
+src/lex.yy.o
+src/puppetc
+tests/output/
+
+# Distribution tarballs
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+
 # Generated test files (not the official test suite)
 test_*.pp
 tests/unit/
