@@ -19,6 +19,9 @@ This implementation is feature-complete for core Puppet language parsing:
 - ✅ Interpreter/evaluator with variable scoping
 - ✅ ERB template support with Ruby integration
 - ✅ Template function for manifest evaluation
+- ✅ **Module autoloading system (NEW)**
+- ✅ **Directory-based execution with site.pp support (NEW)**
+- ✅ **Include statement with automatic class loading (NEW)**
 - ⏳ Standard library functions (partial implementation)
 - ⏳ PuppetDB integration (not yet implemented)
 - ⏳ Hiera support (not yet implemented)
@@ -51,6 +54,8 @@ The build system automatically detects Ruby headers and enables ERB support when
 
 ## Usage
 
+### Single File Mode
+
 Basic parsing:
 ```bash
 ./bin/puppetc manifest.pp
@@ -67,9 +72,53 @@ Manifest evaluation with variables:
 ./bin/puppetc --eval manifest.pp
 ```
 
-Template processing example:
+### Directory Mode (Module Support)
+
+Parse a Puppet directory structure:
 ```bash
-./bin/puppetc --eval tests/puppet/erb_test.pp
+./bin/puppetc /path/to/puppet/code
+```
+
+This will:
+1. Load `manifests/site.pp` as the main manifest
+2. Auto-load classes from `modules/` when they are included
+3. Resolve class names like `apache::vhost` to `modules/apache/manifests/vhost.pp`
+
+Evaluate with module loading:
+```bash
+./bin/puppetc --eval /path/to/puppet/code
+```
+
+Custom modules path:
+```bash
+./bin/puppetc --modules /custom/modules/path --eval /path/to/code
+```
+
+### Module Structure Example
+
+Standard Puppet directory layout:
+```
+puppet_code/
+├── manifests/
+│   └── site.pp          # Main entry point
+└── modules/
+    ├── apache/
+    │   └── manifests/
+    │       ├── init.pp   # Defines 'apache' class
+    │       └── vhost.pp  # Defines 'apache::vhost' class
+    └── mysql/
+        └── manifests/
+            └── init.pp   # Defines 'mysql' class
+```
+
+Example site.pp with includes:
+```puppet
+# manifests/site.pp
+$environment = "production"
+
+include apache
+include apache::vhost
+include mysql
 ```
 
 Help:
@@ -106,8 +155,19 @@ The implementation follows a traditional compiler architecture:
 2. **Parser** (`puppet.y`) - Builds an AST from tokens
 3. **AST** (`puppet_ast.h/c`) - Represents the program structure
 4. **Interpreter** (`puppet_interpreter.h/c`) - Evaluates the AST with variable scoping
-5. **ERB Integration** (`puppet_erb.h/c`) - Ruby template processing with fallback
-6. **Runtime** - Provides built-in functions and resource management
+5. **Module Loader** (`puppet_loader.h/c`) - Handles module autoloading and class resolution
+6. **ERB Integration** (`puppet_erb.h/c`) - Ruby template processing with fallback
+7. **Runtime** - Provides built-in functions and resource management
+
+### Module Loading System
+
+The parser implements Puppet's standard module autoloading conventions:
+
+- **Class Name Resolution**: Maps `class::subclass` to `modules/class/manifests/subclass.pp`
+- **Include Support**: `include` statements automatically load classes from modules
+- **Directory Mode**: Pass a directory to load `manifests/site.pp` and modules
+- **Caching**: Loaded classes are cached to prevent duplicate loading
+- **Backward Compatible**: Single file mode continues to work as before
 
 ### ERB Template Support
 
@@ -131,10 +191,13 @@ See `docs/ERB_ARCHITECTURE.md` for detailed technical documentation.
 
 This parser has been significantly enhanced and now successfully parses complex Puppet manifests:
 
+- **Module Autoloading**: Full support for Puppet's standard directory structure with automatic class loading
+- **Directory Mode**: Can now process entire Puppet code directories, not just single files
+- **Include Statement**: Functional `include` statements that load classes from modules on demand
 - **Complete Apache Module Support**: Successfully parses 154-line Apache configuration with all advanced features
 - **Enhanced Parser Grammar**: Fixed parsing of trailing commas, string interpolation, and resource references
 - **Robust Test Suite**: All 17 test cases pass, covering real-world Puppet scenarios
-- **Proper Git Hygiene**: Generated files excluded from version control with comprehensive .gitignore
+- **Proper Git Hygiene**: Binary files removed from tracking, comprehensive .gitignore
 - **Organized Project Structure**: Tests properly organized in `tests/` directory structure
 
 ## Next Steps
