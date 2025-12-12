@@ -262,6 +262,20 @@ void puppet_stmt_to_json(json_buffer_t *buf, puppet_stmt_t *stmt, int indent) {
             json_buffer_append(buf, "]");
             break;
             
+        case PUPPET_STMT_NODE:
+            json_buffer_append(buf, "\"type\": \"node\",\n");
+            json_indent(buf, indent + 1);
+            json_buffer_append(buf, "\"name\": ");
+            json_buffer_append_escaped_string(buf, stmt->data.node.name.data);
+            json_buffer_append(buf, ",\n");
+            json_indent(buf, indent + 1);
+            json_buffer_append(buf, "\"body\": [\n");
+            puppet_stmt_list_to_json(buf, &stmt->data.node.body, indent + 2);
+            json_buffer_append(buf, "\n");
+            json_indent(buf, indent + 1);
+            json_buffer_append(buf, "]");
+            break;
+            
         default:
             json_buffer_append(buf, "\"type\": \"unknown\"");
             break;

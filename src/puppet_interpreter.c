@@ -13,6 +13,8 @@ puppet_env_t *puppet_env_create(void) {
     env->scope_stack = calloc(env->stack_capacity, sizeof(puppet_scope_t*));
     env->stack_depth = 0;
     env->loader = NULL;  /* Loader is optional, set separately */
+    env->node_name = NULL;  /* No node filtering by default */
+    env->execute_all_nodes = false;
     return env;
 }
 
@@ -26,6 +28,7 @@ void puppet_env_destroy(puppet_env_t *env) {
     
     puppet_scope_destroy(env->global_scope);
     free(env->scope_stack);
+    free(env->node_name);
     free(env);
 }
 
@@ -311,6 +314,10 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
             puppet_exec_class_def(stmt, env);
             break;
             
+        case PUPPET_STMT_NODE:
+            puppet_exec_node(stmt, env);
+            break;
+            
         case PUPPET_STMT_INCLUDE:
             puppet_exec_include(stmt, env);
             break;
@@ -408,4 +415,67 @@ void puppet_exec_include(puppet_stmt_t *include_stmt, puppet_env_t *env) {
 void puppet_env_set_loader(puppet_env_t *env, puppet_loader_t *loader) {
     if (!env) return;
     env->loader = loader;
+}
+
+void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
+    if (!node_stmt || node_stmt->type != PUPPET_STMT_NODE) return;
+    
+    const char *node_name = node_stmt->data.node.name.data;
+    
+    /* Check if we should execute this node */
+    bool should_execute = false;
+    
+    if (env->execute_all_nodes) {
+        /* Execute all nodes when --all-nodes is specified */
+        should_execute = true;
+    } else if (!env->node_name) {
+        /* No node specified - only execute 'default' node */
+        should_execute = (strcmp(node_name, "default") == 0);
+    } else {
+        /* Specific node requested - check for match */
+        should_execute = (strcmp(node_name, env->node_name) == 0);
+    }
+    
+    if (should_execute) {
+        printf("Executing node: %s\n", node_name);
+        
+        /* Create a new scope for the node */
+        puppet_scope_t *node_scope = puppet_scope_create(env->current_scope, node_name);
+        puppet_scope_push(env, node_scope);
+        
+        /* Set automatic variables like $hostname */
+        puppet_value_t *hostname_value = puppet_value_create_string(node_name, strlen(node_name));
+        puppet_scope_set_var(node_scope, "hostname", hostname_value);
+        
+        /* Execute node body */
+        puppet_exec_stmt_list(&node_stmt->data.node.body, env);
+        
+        /* Pop the node scope */
+        puppet_scope_t *old_scope = puppet_scope_pop(env);
+        puppet_scope_destroy(old_scope);
+    } else {
+        /* Skip this node */
+        if (!env->execute_all_nodes && env->node_name) {
+            /* Only report skipping when a specific node was requested */
+            printf("Skipping node: %s (looking for %s)\n", node_name, env->node_name);
+        }
+    }
+}
+
+void puppet_env_set_node(puppet_env_t *env, const char *node_name) {
+    if (!env) return;
+    
+    free(env->node_name);
+    env->node_name = node_name ? strdup(node_name) : NULL;
+    env->execute_all_nodes = false;  /* Specific node mode */
+}
+
+void puppet_env_set_execute_all_nodes(puppet_env_t *env, bool execute_all) {
+    if (!env) return;
+    
+    env->execute_all_nodes = execute_all;
+    if (execute_all) {
+        free(env->node_name);
+        env->node_name = NULL;  /* Clear specific node when in all-nodes mode */
+    }
 }

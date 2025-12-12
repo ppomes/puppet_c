@@ -38,13 +38,19 @@ extern puppet_program_t *parsed_program;
 static void print_usage(const char *program_name) {
     printf("Usage: %s [OPTIONS] <puppet_file_or_directory>\n", program_name);
     printf("Options:\n");
-    printf("  -j, --json     Output AST as JSON\n");
-    printf("  -e, --eval     Evaluate the manifest\n");
-    printf("  -o, --output   Output file (default: stdout)\n");
-    printf("  -m, --modules  Path to modules directory (default: ./modules)\n");
-    printf("  -h, --help     Show this help message\n");
+    printf("  -j, --json        Output AST as JSON\n");
+    printf("  -e, --eval        Evaluate the manifest\n");
+    printf("  -o, --output      Output file (default: stdout)\n");
+    printf("  -m, --modules     Path to modules directory (default: ./modules)\n");
+    printf("  -n, --node        Execute only the specified node\n");
+    printf("  -a, --all-nodes   Execute all nodes (default: only 'default' node)\n");
+    printf("  -h, --help        Show this help message\n");
     printf("\nWhen a directory is provided, site.pp will be loaded from manifests/\n");
     printf("and modules will be loaded from modules/ subdirectory.\n");
+    printf("\nNode execution:\n");
+    printf("  By default, only the 'default' node is executed.\n");
+    printf("  Use --node <name> to execute a specific node.\n");
+    printf("  Use --all-nodes to execute all defined nodes.\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -52,6 +58,8 @@ int main(int argc, char *argv[]) {
     int eval_mode = 0;
     char *output_file = NULL;
     char *modules_path = NULL;
+    char *node_name = NULL;
+    int all_nodes = 0;
     int opt;
     
     static struct option long_options[] = {
@@ -59,11 +67,13 @@ int main(int argc, char *argv[]) {
         {"eval", no_argument, 0, 'e'},
         {"output", required_argument, 0, 'o'},
         {"modules", required_argument, 0, 'm'},
+        {"node", required_argument, 0, 'n'},
+        {"all-nodes", no_argument, 0, 'a'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
     
-    while ((opt = getopt_long(argc, argv, "jeo:m:hd", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "jeo:m:n:ahd", long_options, NULL)) != -1) {
         switch (opt) {
             case 'j':
                 json_output = 1;
@@ -76,6 +86,12 @@ int main(int argc, char *argv[]) {
                 break;
             case 'm':
                 modules_path = optarg;
+                break;
+            case 'n':
+                node_name = optarg;
+                break;
+            case 'a':
+                all_nodes = 1;
                 break;
             case 'h':
                 print_usage(argv[0]);
@@ -95,6 +111,12 @@ int main(int argc, char *argv[]) {
     if (optind >= argc) {
         fprintf(stderr, "Error: No input file or directory specified\n");
         print_usage(argv[0]);
+        return 1;
+    }
+    
+    /* Validate node options */
+    if (node_name && all_nodes) {
+        fprintf(stderr, "Error: Cannot specify both --node and --all-nodes\n");
         return 1;
     }
     
@@ -191,6 +213,17 @@ int main(int argc, char *argv[]) {
             /* Set loader if in directory mode */
             if (loader) {
                 puppet_env_set_loader(env, loader);
+            }
+            
+            /* Configure node execution */
+            if (all_nodes) {
+                puppet_env_set_execute_all_nodes(env, true);
+                printf("Executing all nodes.\n");
+            } else if (node_name) {
+                puppet_env_set_node(env, node_name);
+                printf("Executing node: %s\n", node_name);
+            } else {
+                printf("Executing default node only.\n");
             }
             
             puppet_exec_program(program, env);
