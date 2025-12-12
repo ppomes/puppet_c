@@ -220,6 +220,48 @@ void puppet_stmt_to_json(json_buffer_t *buf, puppet_stmt_t *stmt, int indent) {
             puppet_expr_to_json(buf, stmt->data.expr, indent + 1);
             break;
             
+        case PUPPET_STMT_INCLUDE:
+            json_buffer_append(buf, "\"type\": \"include\",\n");
+            json_indent(buf, indent + 1);
+            json_buffer_append(buf, "\"classes\": [\n");
+            for (size_t i = 0; i < stmt->data.names.count; i++) {
+                if (i > 0) json_buffer_append(buf, ",\n");
+                json_indent(buf, indent + 2);
+                puppet_expr_to_json(buf, stmt->data.names.exprs[i], indent + 2);
+            }
+            json_buffer_append(buf, "\n");
+            json_indent(buf, indent + 1);
+            json_buffer_append(buf, "]");
+            break;
+            
+        case PUPPET_STMT_REQUIRE:
+            json_buffer_append(buf, "\"type\": \"require\",\n");
+            json_indent(buf, indent + 1);
+            json_buffer_append(buf, "\"classes\": [\n");
+            for (size_t i = 0; i < stmt->data.names.count; i++) {
+                if (i > 0) json_buffer_append(buf, ",\n");
+                json_indent(buf, indent + 2);
+                puppet_expr_to_json(buf, stmt->data.names.exprs[i], indent + 2);
+            }
+            json_buffer_append(buf, "\n");
+            json_indent(buf, indent + 1);
+            json_buffer_append(buf, "]");
+            break;
+            
+        case PUPPET_STMT_CONTAIN:
+            json_buffer_append(buf, "\"type\": \"contain\",\n");
+            json_indent(buf, indent + 1);
+            json_buffer_append(buf, "\"classes\": [\n");
+            for (size_t i = 0; i < stmt->data.names.count; i++) {
+                if (i > 0) json_buffer_append(buf, ",\n");
+                json_indent(buf, indent + 2);
+                puppet_expr_to_json(buf, stmt->data.names.exprs[i], indent + 2);
+            }
+            json_buffer_append(buf, "\n");
+            json_indent(buf, indent + 1);
+            json_buffer_append(buf, "]");
+            break;
+            
         default:
             json_buffer_append(buf, "\"type\": \"unknown\"");
             break;
