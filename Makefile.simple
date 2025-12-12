@@ -6,7 +6,7 @@ LDFLAGS = -ly
 
 # Ruby support (optional)
 # Uncomment to enable Ruby/ERB support:
-ENABLE_RUBY = 1
+# ENABLE_RUBY = 1
 
 ifdef ENABLE_RUBY
     # Homebrew Ruby paths

@@ -10,6 +10,7 @@ puppetc_SOURCES = \
     puppet_ast.c \
     puppet_interpreter.c \
     puppet_json.c \
+    puppet_loader.c \
     $(BUILT_SOURCES)
 
 # Conditionally add ERB support
@@ -26,17 +27,18 @@ AM_CFLAGS = -Wall -Wextra -g
 # Conditional Ruby flags
 if HAVE_RUBY
 AM_CFLAGS += $(RUBY_CFLAGS) -DHAVE_RUBY
-puppetc_LDADD = $(RUBY_LIBS) -ly
+puppetc_LDADD = $(RUBY_LIBS) -lm -lpthread
 else
 AM_CFLAGS += -DDISABLE_RUBY
-puppetc_LDADD = -ly
+puppetc_LDADD = 
 endif
 
 # Header files to install
 include_HEADERS = \
     $(top_srcdir)/include/puppet_ast.h \
     $(top_srcdir)/include/puppet_interpreter.h \
-    $(top_srcdir)/include/puppet_json.h
+    $(top_srcdir)/include/puppet_json.h \
+    $(top_srcdir)/include/puppet_loader.h
 
 if HAVE_RUBY
 include_HEADERS += $(top_srcdir)/include/puppet_erb.h
@@ -54,6 +56,7 @@ puppet.tab.c puppet.tab.h: puppet.y
 puppet_ast.$(OBJEXT): puppet.tab.h
 puppet_interpreter.$(OBJEXT): puppet.tab.h
 puppet_json.$(OBJEXT): puppet.tab.h
+puppet_loader.$(OBJEXT): puppet.tab.h
 main.$(OBJEXT): puppet.tab.h
 if HAVE_RUBY
 puppet_erb.$(OBJEXT): puppet.tab.h

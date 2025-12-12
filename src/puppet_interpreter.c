@@ -1,5 +1,6 @@
 #include "puppet_interpreter.h"
 #include "puppet_erb.h"
+#include "puppet_loader.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -11,6 +12,7 @@ puppet_env_t *puppet_env_create(void) {
     env->stack_capacity = 16;
     env->scope_stack = calloc(env->stack_capacity, sizeof(puppet_scope_t*));
     env->stack_depth = 0;
+    env->loader = NULL;  /* Loader is optional, set separately */
     return env;
 }
 
@@ -309,6 +311,10 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
             puppet_exec_class_def(stmt, env);
             break;
             
+        case PUPPET_STMT_INCLUDE:
+            puppet_exec_include(stmt, env);
+            break;
+            
         case PUPPET_STMT_RESOURCE:
             printf("Executing resource: %s\n", stmt->data.resource.type.data);
             // TODO: Implement resource execution
@@ -370,4 +376,36 @@ void puppet_exec_class_def(puppet_stmt_t *class_stmt, puppet_env_t *env) {
 
 void puppet_exec_program(puppet_program_t *program, puppet_env_t *env) {
     puppet_exec_stmt_list(&program->statements, env);
+}
+
+void puppet_exec_include(puppet_stmt_t *include_stmt, puppet_env_t *env) {
+    if (!include_stmt || include_stmt->type != PUPPET_STMT_INCLUDE) return;
+    
+    /* Check if loader is available */
+    if (!env->loader) {
+        printf("Warning: Include statements require a module loader to be configured\n");
+        return;
+    }
+    
+    /* Process each included class */
+    for (size_t i = 0; i < include_stmt->data.names.count; i++) {
+        puppet_expr_t *name_expr = include_stmt->data.names.exprs[i];
+        
+        /* Extract class name from expression */
+        if (name_expr && name_expr->type == PUPPET_EXPR_VALUE &&
+            name_expr->data.value->type == PUPPET_VALUE_STRING) {
+            
+            const char *class_name = name_expr->data.value->data.string.data;
+            
+            /* Include the class using the loader */
+            if (!puppet_loader_include_class(env->loader, class_name, env)) {
+                printf("Warning: Failed to include class '%s'\n", class_name);
+            }
+        }
+    }
+}
+
+void puppet_env_set_loader(puppet_env_t *env, puppet_loader_t *loader) {
+    if (!env) return;
+    env->loader = loader;
 }

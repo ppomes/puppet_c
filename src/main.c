@@ -19,9 +19,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <getopt.h>
+#include <sys/stat.h>
 #include "puppet_ast.h"
 #include "puppet_json.h"
 #include "puppet_interpreter.h"
+#include "puppet_loader.h"
 #include "puppet.tab.h"
 
 /* External symbols from generated parser */
@@ -34,29 +36,34 @@ extern puppet_program_t *parsed_program;
  * @param program_name Name of the executable for usage display
  */
 static void print_usage(const char *program_name) {
-    printf("Usage: %s [OPTIONS] <puppet_file>\n", program_name);
+    printf("Usage: %s [OPTIONS] <puppet_file_or_directory>\n", program_name);
     printf("Options:\n");
     printf("  -j, --json     Output AST as JSON\n");
     printf("  -e, --eval     Evaluate the manifest\n");
     printf("  -o, --output   Output file (default: stdout)\n");
+    printf("  -m, --modules  Path to modules directory (default: ./modules)\n");
     printf("  -h, --help     Show this help message\n");
+    printf("\nWhen a directory is provided, site.pp will be loaded from manifests/\n");
+    printf("and modules will be loaded from modules/ subdirectory.\n");
 }
 
 int main(int argc, char *argv[]) {
     int json_output = 0;
     int eval_mode = 0;
     char *output_file = NULL;
+    char *modules_path = NULL;
     int opt;
     
     static struct option long_options[] = {
         {"json", no_argument, 0, 'j'},
         {"eval", no_argument, 0, 'e'},
         {"output", required_argument, 0, 'o'},
+        {"modules", required_argument, 0, 'm'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
     
-    while ((opt = getopt_long(argc, argv, "jeo:hd", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "jeo:m:hd", long_options, NULL)) != -1) {
         switch (opt) {
             case 'j':
                 json_output = 1;
@@ -66,6 +73,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'o':
                 output_file = optarg;
+                break;
+            case 'm':
+                modules_path = optarg;
                 break;
             case 'h':
                 print_usage(argv[0]);
@@ -83,70 +93,123 @@ int main(int argc, char *argv[]) {
     }
     
     if (optind >= argc) {
-        fprintf(stderr, "Error: No input file specified\n");
+        fprintf(stderr, "Error: No input file or directory specified\n");
         print_usage(argv[0]);
         return 1;
     }
     
-    char *input_file = argv[optind];
+    char *input_path = argv[optind];
     
-    yyin = fopen(input_file, "r");
-    if (!yyin) {
-        perror("fopen");
+    /* Check if input is a directory */
+    struct stat path_stat;
+    if (stat(input_path, &path_stat) != 0) {
+        perror("stat");
         return 1;
     }
     
-    if (!json_output && !eval_mode) {
-        printf("Parsing %s...\n", input_file);
+    int result = 0;
+    puppet_loader_t *loader = NULL;
+    puppet_program_t *program = NULL;
+    
+    if (S_ISDIR(path_stat.st_mode)) {
+        /* Directory mode - use module loader */
+        if (!json_output && !eval_mode) {
+            printf("Loading Puppet directory: %s\n", input_path);
+        }
+        
+        /* Create module loader */
+        loader = puppet_loader_create(input_path);
+        if (!loader) {
+            fprintf(stderr, "Error: Failed to create module loader\n");
+            return 1;
+        }
+        
+        /* Override modules path if specified */
+        if (modules_path) {
+            puppet_loader_set_modules_path(loader, modules_path);
+        }
+        
+        /* Try to load site.pp */
+        program = puppet_loader_load_site(loader);
+        if (!program) {
+            /* If no site.pp, create empty program */
+            program = calloc(1, sizeof(puppet_program_t));
+            program->statements.stmts = NULL;
+            program->statements.count = 0;
+        }
+        
+        if (!json_output && !eval_mode) {
+            if (program && program->statements.count > 0) {
+                printf("Loaded site.pp with %zu statements\n", program->statements.count);
+            } else {
+                printf("No site.pp found or empty site.pp\n");
+            }
+        }
+    } else {
+        /* File mode - traditional parsing */
+        yyin = fopen(input_path, "r");
+        if (!yyin) {
+            perror("fopen");
+            return 1;
+        }
+        
+        if (!json_output && !eval_mode) {
+            printf("Parsing %s...\n", input_path);
+        }
+        
+        result = yyparse();
+        fclose(yyin);
+        
+        if (result == 0) {
+            program = parsed_program;
+            parsed_program = NULL;
+        }
     }
     
-    int result = yyparse();
-    
-    fclose(yyin);
-    
-    if (result == 0) {
+    if (result == 0 && program) {
         if (json_output) {
             FILE *output = stdout;
             if (output_file) {
                 output = fopen(output_file, "w");
                 if (!output) {
                     perror("fopen output");
-                    puppet_program_destroy(parsed_program);
+                    puppet_program_destroy(program);
+                    if (loader) puppet_loader_destroy(loader);
                     return 1;
                 }
             }
             
-            if (parsed_program) {
-                puppet_program_to_json(parsed_program, output);
-            } else {
-                fprintf(output, "{\"type\":\"program\",\"statements\":[]}\n");
-            }
+            puppet_program_to_json(program, output);
             
             if (output_file) {
                 fclose(output);
             }
         } else if (eval_mode) {
-            if (parsed_program) {
-                printf("Evaluating manifest...\n");
-                puppet_env_t *env = puppet_env_create();
-                puppet_exec_program(parsed_program, env);
-                printf("Evaluation complete.\n");
-                puppet_env_destroy(env);
+            printf("Evaluating manifest...\n");
+            puppet_env_t *env = puppet_env_create();
+            
+            /* Set loader if in directory mode */
+            if (loader) {
+                puppet_env_set_loader(env, loader);
             }
+            
+            puppet_exec_program(program, env);
+            printf("Evaluation complete.\n");
+            puppet_env_destroy(env);
         } else {
             printf("Parse successful!\n");
-            if (parsed_program) {
-                printf("Program has %zu top-level statements\n", parsed_program->statements.count);
-            }
+            printf("Program has %zu top-level statements\n", program->statements.count);
         }
         
-        if (parsed_program) {
-            puppet_program_destroy(parsed_program);
-        }
-    } else {
+        puppet_program_destroy(program);
+    } else if (result != 0) {
         if (!json_output && !eval_mode) {
             printf("Parse failed!\n");
         }
+    }
+    
+    if (loader) {
+        puppet_loader_destroy(loader);
     }
     
     return result;

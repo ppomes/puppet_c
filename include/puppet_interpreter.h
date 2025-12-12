@@ -55,6 +55,7 @@ typedef struct puppet_env {
     puppet_scope_t **scope_stack;   /**< Stack of nested scopes */
     size_t stack_depth;            /**< Current stack depth */
     size_t stack_capacity;         /**< Maximum stack capacity */
+    struct puppet_loader *loader;   /**< Module loader for includes */
 } puppet_env_t;
 
 /*
@@ -90,8 +91,12 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env);
 void puppet_exec_stmt_list(puppet_stmt_list_t *stmts, puppet_env_t *env);
 void puppet_exec_assignment(const char *var, puppet_expr_t *value, puppet_env_t *env);
 void puppet_exec_class_def(puppet_stmt_t *class_stmt, puppet_env_t *env);
+void puppet_exec_include(puppet_stmt_t *include_stmt, puppet_env_t *env);
 
 /* Program execution */
 void puppet_exec_program(puppet_program_t *program, puppet_env_t *env);
+
+/* Module loader integration */
+void puppet_env_set_loader(puppet_env_t *env, struct puppet_loader *loader);
 
 #endif
