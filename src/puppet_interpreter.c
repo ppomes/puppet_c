@@ -1,16 +1,17 @@
 #include "puppet_interpreter.h"
 #include "puppet_erb.h"
 #include "puppet_loader.h"
+#include "puppet_memory.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
 puppet_env_t *puppet_env_create(void) {
-    puppet_env_t *env = calloc(1, sizeof(puppet_env_t));
+    puppet_env_t *env = puppet_calloc(1, sizeof(puppet_env_t));
     env->global_scope = puppet_scope_create(NULL, "global");
     env->current_scope = env->global_scope;
     env->stack_capacity = 16;
-    env->scope_stack = calloc(env->stack_capacity, sizeof(puppet_scope_t*));
+    env->scope_stack = puppet_calloc(env->stack_capacity, sizeof(puppet_scope_t*));
     env->stack_depth = 0;
     env->loader = NULL;  /* Loader is optional, set separately */
     env->node_name = NULL;  /* No node filtering by default */
@@ -27,18 +28,18 @@ void puppet_env_destroy(puppet_env_t *env) {
     }
     
     puppet_scope_destroy(env->global_scope);
-    free(env->scope_stack);
-    free(env->node_name);
-    free(env);
+    puppet_free(env->scope_stack);
+    puppet_free(env->node_name);
+    puppet_free(env);
 }
 
 puppet_scope_t *puppet_scope_create(puppet_scope_t *parent, const char *name) {
-    puppet_scope_t *scope = calloc(1, sizeof(puppet_scope_t));
+    puppet_scope_t *scope = puppet_calloc(1, sizeof(puppet_scope_t));
     scope->parent = parent;
     scope->name = puppet_string_create(name ? name : "");
-    scope->variables = calloc(1, sizeof(puppet_hash_t));
+    scope->variables = puppet_calloc(1, sizeof(puppet_hash_t));
     scope->variables->bucket_count = 16;
-    scope->variables->buckets = calloc(scope->variables->bucket_count, sizeof(puppet_hash_entry_t*));
+    scope->variables->buckets = puppet_calloc(scope->variables->bucket_count, sizeof(puppet_hash_entry_t*));
     return scope;
 }
 
@@ -52,20 +53,20 @@ void puppet_scope_destroy(puppet_scope_t *scope) {
             puppet_hash_entry_t *next = entry->next;
             puppet_string_free(entry->key);
             puppet_value_destroy(entry->value);
-            free(entry);
+            puppet_free(entry);
             entry = next;
         }
     }
-    free(scope->variables->buckets);
-    free(scope->variables);
+    puppet_free(scope->variables->buckets);
+    puppet_free(scope->variables);
     puppet_string_free(scope->name);
-    free(scope);
+    puppet_free(scope);
 }
 
 void puppet_scope_push(puppet_env_t *env, puppet_scope_t *scope) {
     if (env->stack_depth >= env->stack_capacity) {
         env->stack_capacity *= 2;
-        env->scope_stack = realloc(env->scope_stack, env->stack_capacity * sizeof(puppet_scope_t*));
+        env->scope_stack = puppet_realloc(env->scope_stack, env->stack_capacity * sizeof(puppet_scope_t*));
     }
     
     env->scope_stack[env->stack_depth++] = env->current_scope;
@@ -465,8 +466,8 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
 void puppet_env_set_node(puppet_env_t *env, const char *node_name) {
     if (!env) return;
     
-    free(env->node_name);
-    env->node_name = node_name ? strdup(node_name) : NULL;
+    puppet_free(env->node_name);
+    env->node_name = node_name ? puppet_strdup(node_name) : NULL;
     env->execute_all_nodes = false;  /* Specific node mode */
 }
 
@@ -475,7 +476,7 @@ void puppet_env_set_execute_all_nodes(puppet_env_t *env, bool execute_all) {
     
     env->execute_all_nodes = execute_all;
     if (execute_all) {
-        free(env->node_name);
+        puppet_free(env->node_name);
         env->node_name = NULL;  /* Clear specific node when in all-nodes mode */
     }
 }

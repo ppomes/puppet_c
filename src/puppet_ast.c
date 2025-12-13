@@ -17,6 +17,7 @@
  */
 
 #include "puppet_ast.h"
+#include "puppet_memory.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -29,40 +30,46 @@
 puppet_string_t puppet_string_create(const char *str) {
     puppet_string_t s;
     s.len = strlen(str);
-    s.data = malloc(s.len + 1);
+    s.data = puppet_malloc(s.len + 1);
     strcpy(s.data, str);
     return s;
 }
 
 void puppet_string_free(puppet_string_t str) {
-    free(str.data);
+    puppet_free(str.data);
 }
 
 static puppet_string_t puppet_string_dup(puppet_string_t str) {
     puppet_string_t result;
     result.len = str.len;
-    result.data = malloc(str.len + 1);
+    result.data = puppet_malloc(str.len + 1);
     memcpy(result.data, str.data, str.len + 1);
     return result;
 }
 
 puppet_value_t *puppet_value_create_undef(void) {
-    puppet_value_t *value = calloc(1, sizeof(puppet_value_t));
+    puppet_value_t *value = puppet_calloc(1, sizeof(puppet_value_t));
+    if (!value) {
+        return NULL;  /* Let caller handle failure */
+    }
     value->type = PUPPET_VALUE_UNDEF;
     return value;
 }
 
 puppet_value_t *puppet_value_create_bool(bool val) {
-    puppet_value_t *value = calloc(1, sizeof(puppet_value_t));
+    puppet_value_t *value = puppet_calloc(1, sizeof(puppet_value_t));
+    if (!value) {
+        return NULL;  /* Let caller handle failure */
+    }
     value->type = PUPPET_VALUE_BOOL;
     value->data.boolean = val;
     return value;
 }
 
 puppet_value_t *puppet_value_create_string(const char *str, size_t len) {
-    puppet_value_t *value = calloc(1, sizeof(puppet_value_t));
+    puppet_value_t *value = puppet_calloc(1, sizeof(puppet_value_t));
     value->type = PUPPET_VALUE_STRING;
-    value->data.string.data = malloc(len + 1);
+    value->data.string.data = puppet_malloc(len + 1);
     memcpy(value->data.string.data, str, len);
     value->data.string.data[len] = '\0';
     value->data.string.len = len;
@@ -70,34 +77,34 @@ puppet_value_t *puppet_value_create_string(const char *str, size_t len) {
 }
 
 puppet_value_t *puppet_value_create_number(double val) {
-    puppet_value_t *value = calloc(1, sizeof(puppet_value_t));
+    puppet_value_t *value = puppet_calloc(1, sizeof(puppet_value_t));
     value->type = PUPPET_VALUE_NUMBER;
     value->data.number = val;
     return value;
 }
 
 puppet_value_t *puppet_value_create_array(void) {
-    puppet_value_t *value = calloc(1, sizeof(puppet_value_t));
+    puppet_value_t *value = puppet_calloc(1, sizeof(puppet_value_t));
     value->type = PUPPET_VALUE_ARRAY;
-    value->data.array = calloc(1, sizeof(puppet_array_t));
+    value->data.array = puppet_calloc(1, sizeof(puppet_array_t));
     value->data.array->capacity = 8;
-    value->data.array->items = malloc(value->data.array->capacity * sizeof(puppet_value_t*));
+    value->data.array->items = puppet_malloc(value->data.array->capacity * sizeof(puppet_value_t*));
     return value;
 }
 
 puppet_value_t *puppet_value_create_hash(void) {
-    puppet_value_t *value = calloc(1, sizeof(puppet_value_t));
+    puppet_value_t *value = puppet_calloc(1, sizeof(puppet_value_t));
     value->type = PUPPET_VALUE_HASH;
-    value->data.hash = calloc(1, sizeof(puppet_hash_t));
+    value->data.hash = puppet_calloc(1, sizeof(puppet_hash_t));
     value->data.hash->bucket_count = 16;
-    value->data.hash->buckets = calloc(value->data.hash->bucket_count, sizeof(puppet_hash_entry_t*));
+    value->data.hash->buckets = puppet_calloc(value->data.hash->bucket_count, sizeof(puppet_hash_entry_t*));
     return value;
 }
 
 void puppet_array_append(puppet_array_t *array, puppet_value_t *value) {
     if (array->count >= array->capacity) {
         array->capacity *= 2;
-        array->items = realloc(array->items, array->capacity * sizeof(puppet_value_t*));
+        array->items = puppet_realloc(array->items, array->capacity * sizeof(puppet_value_t*));
     }
     array->items[array->count++] = value;
 }
@@ -124,8 +131,8 @@ void puppet_hash_set(puppet_hash_t *hash, const char *key, size_t key_len, puppe
         entry = entry->next;
     }
     
-    entry = malloc(sizeof(puppet_hash_entry_t));
-    entry->key.data = malloc(key_len + 1);
+    entry = puppet_malloc(sizeof(puppet_hash_entry_t));
+    entry->key.data = puppet_malloc(key_len + 1);
     memcpy(entry->key.data, key, key_len);
     entry->key.data[key_len] = '\0';
     entry->key.len = key_len;
@@ -162,8 +169,8 @@ void puppet_value_destroy(puppet_value_t *value) {
                 for (size_t i = 0; i < value->data.array->count; i++) {
                     puppet_value_destroy(value->data.array->items[i]);
                 }
-                free(value->data.array->items);
-                free(value->data.array);
+                puppet_free(value->data.array->items);
+                puppet_free(value->data.array);
             }
             break;
             
@@ -175,12 +182,12 @@ void puppet_value_destroy(puppet_value_t *value) {
                         puppet_hash_entry_t *next = entry->next;
                         puppet_string_free(entry->key);
                         puppet_value_destroy(entry->value);
-                        free(entry);
+                        puppet_free(entry);
                         entry = next;
                     }
                 }
-                free(value->data.hash->buckets);
-                free(value->data.hash);
+                puppet_free(value->data.hash->buckets);
+                puppet_free(value->data.hash);
             }
             break;
             
@@ -195,26 +202,26 @@ void puppet_value_destroy(puppet_value_t *value) {
             break;
     }
     
-    free(value);
+    puppet_free(value);
 }
 
 puppet_expr_t *puppet_expr_create_value(puppet_value_t *value) {
-    puppet_expr_t *expr = calloc(1, sizeof(puppet_expr_t));
+    puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
     expr->type = PUPPET_EXPR_VALUE;
     expr->data.value = value;
     return expr;
 }
 
 puppet_expr_t *puppet_expr_create_variable(const char *name) {
-    puppet_expr_t *expr = calloc(1, sizeof(puppet_expr_t));
+    puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
     expr->type = PUPPET_EXPR_VARIABLE;
-    expr->data.variable.data = strdup(name);
+    expr->data.variable.data = puppet_strdup(name);
     expr->data.variable.len = strlen(name);
     return expr;
 }
 
 puppet_expr_t *puppet_expr_create_binop(puppet_binop_t op, puppet_expr_t *left, puppet_expr_t *right) {
-    puppet_expr_t *expr = calloc(1, sizeof(puppet_expr_t));
+    puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
     expr->type = PUPPET_EXPR_BINOP;
     expr->data.binop.op = op;
     expr->data.binop.left = left;
@@ -223,7 +230,7 @@ puppet_expr_t *puppet_expr_create_binop(puppet_binop_t op, puppet_expr_t *left, 
 }
 
 puppet_expr_t *puppet_expr_create_unop(puppet_unop_t op, puppet_expr_t *operand) {
-    puppet_expr_t *expr = calloc(1, sizeof(puppet_expr_t));
+    puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
     expr->type = PUPPET_EXPR_UNOP;
     expr->data.unop.op = op;
     expr->data.unop.expr = operand;
@@ -256,9 +263,9 @@ void puppet_expr_destroy(puppet_expr_t *expr) {
             for (size_t i = 0; i < expr->data.funcall.args.count; i++) {
                 puppet_expr_destroy(expr->data.funcall.args.exprs[i]);
             }
-            free(expr->data.funcall.args.exprs);
+            puppet_free(expr->data.funcall.args.exprs);
             if (expr->data.funcall.lambda) {
-                free(expr->data.funcall.lambda);
+                puppet_free(expr->data.funcall.lambda);
             }
             break;
             
@@ -285,12 +292,12 @@ void puppet_expr_destroy(puppet_expr_t *expr) {
                     puppet_value_destroy(expr->data.lambda->params.params[i].type_constraint);
                     puppet_expr_destroy(expr->data.lambda->params.params[i].default_value);
                 }
-                free(expr->data.lambda->params.params);
+                puppet_free(expr->data.lambda->params.params);
                 for (size_t i = 0; i < expr->data.lambda->body.count; i++) {
                     puppet_expr_destroy(expr->data.lambda->body.exprs[i]);
                 }
-                free(expr->data.lambda->body.exprs);
-                free(expr->data.lambda);
+                puppet_free(expr->data.lambda->body.exprs);
+                puppet_free(expr->data.lambda);
             }
             break;
             
@@ -306,25 +313,25 @@ void puppet_expr_destroy(puppet_expr_t *expr) {
                 if (expr->data.interpolated.exprs)
                     puppet_expr_destroy(expr->data.interpolated.exprs[i]);
             }
-            free(expr->data.interpolated.parts);
-            free(expr->data.interpolated.exprs);
+            puppet_free(expr->data.interpolated.parts);
+            puppet_free(expr->data.interpolated.exprs);
             break;
     }
     
-    free(expr);
+    puppet_free(expr);
 }
 
 puppet_stmt_t *puppet_stmt_create_resource(puppet_resource_decl_t decl) {
-    puppet_stmt_t *stmt = calloc(1, sizeof(puppet_stmt_t));
+    puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
     stmt->type = PUPPET_STMT_RESOURCE;
     stmt->data.resource = decl;
     return stmt;
 }
 
 puppet_stmt_t *puppet_stmt_create_assignment(const char *var, puppet_expr_t *value) {
-    puppet_stmt_t *stmt = calloc(1, sizeof(puppet_stmt_t));
+    puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
     stmt->type = PUPPET_STMT_ASSIGNMENT;
-    stmt->data.assignment.variable.data = strdup(var);
+    stmt->data.assignment.variable.data = puppet_strdup(var);
     stmt->data.assignment.variable.len = strlen(var);
     stmt->data.assignment.value = value;
     return stmt;
@@ -339,16 +346,16 @@ static void puppet_resource_decl_destroy(puppet_resource_decl_t *decl) {
             puppet_string_free(decl->instances[i].attributes[j].name);
             puppet_expr_destroy(decl->instances[i].attributes[j].value);
         }
-        free(decl->instances[i].attributes);
+        puppet_free(decl->instances[i].attributes);
     }
-    free(decl->instances);
+    puppet_free(decl->instances);
 }
 
 static void puppet_stmt_list_destroy(puppet_stmt_list_t *list) {
     for (size_t i = 0; i < list->count; i++) {
         puppet_stmt_destroy(list->stmts[i]);
     }
-    free(list->stmts);
+    puppet_free(list->stmts);
 }
 
 void puppet_stmt_destroy(puppet_stmt_t *stmt) {
@@ -365,7 +372,7 @@ void puppet_stmt_destroy(puppet_stmt_t *stmt) {
                 puppet_string_free(stmt->data.resource_default.attributes[i].name);
                 puppet_expr_destroy(stmt->data.resource_default.attributes[i].value);
             }
-            free(stmt->data.resource_default.attributes);
+            puppet_free(stmt->data.resource_default.attributes);
             break;
             
         case PUPPET_STMT_RESOURCE_OVERRIDE:
@@ -374,7 +381,7 @@ void puppet_stmt_destroy(puppet_stmt_t *stmt) {
                 puppet_string_free(stmt->data.resource_override.attributes[i].name);
                 puppet_expr_destroy(stmt->data.resource_override.attributes[i].value);
             }
-            free(stmt->data.resource_override.attributes);
+            puppet_free(stmt->data.resource_override.attributes);
             break;
             
         case PUPPET_STMT_RESOURCE_COLLECTOR:
@@ -384,7 +391,7 @@ void puppet_stmt_destroy(puppet_stmt_t *stmt) {
                 puppet_string_free(stmt->data.collector.attributes[i].name);
                 puppet_expr_destroy(stmt->data.collector.attributes[i].value);
             }
-            free(stmt->data.collector.attributes);
+            puppet_free(stmt->data.collector.attributes);
             break;
             
         case PUPPET_STMT_CLASS_DEF:
@@ -394,10 +401,10 @@ void puppet_stmt_destroy(puppet_stmt_t *stmt) {
                 puppet_value_destroy(stmt->data.class_def.params.params[i].type_constraint);
                 puppet_expr_destroy(stmt->data.class_def.params.params[i].default_value);
             }
-            free(stmt->data.class_def.params.params);
+            puppet_free(stmt->data.class_def.params.params);
             if (stmt->data.class_def.inherits) {
                 puppet_string_free(*stmt->data.class_def.inherits);
-                free(stmt->data.class_def.inherits);
+                puppet_free(stmt->data.class_def.inherits);
             }
             puppet_stmt_list_destroy(&stmt->data.class_def.body);
             break;
@@ -409,7 +416,7 @@ void puppet_stmt_destroy(puppet_stmt_t *stmt) {
                 puppet_value_destroy(stmt->data.define.params.params[i].type_constraint);
                 puppet_expr_destroy(stmt->data.define.params.params[i].default_value);
             }
-            free(stmt->data.define.params.params);
+            puppet_free(stmt->data.define.params.params);
             puppet_stmt_list_destroy(&stmt->data.define.body);
             break;
             
@@ -425,12 +432,12 @@ void puppet_stmt_destroy(puppet_stmt_t *stmt) {
                     puppet_if_branch_t *next = branch->next;
                     puppet_expr_destroy(branch->condition);
                     puppet_stmt_list_destroy(&branch->body);
-                    free(branch);
+                    puppet_free(branch);
                     branch = next;
                 }
                 if (stmt->data.if_stmt.else_body) {
                     puppet_stmt_list_destroy(stmt->data.if_stmt.else_body);
-                    free(stmt->data.if_stmt.else_body);
+                    puppet_free(stmt->data.if_stmt.else_body);
                 }
             }
             break;
@@ -446,10 +453,10 @@ void puppet_stmt_destroy(puppet_stmt_t *stmt) {
                 puppet_expr_destroy(stmt->data.case_stmt.whens[i].test);
                 puppet_stmt_list_destroy(&stmt->data.case_stmt.whens[i].body);
             }
-            free(stmt->data.case_stmt.whens);
+            puppet_free(stmt->data.case_stmt.whens);
             if (stmt->data.case_stmt.default_body) {
                 puppet_stmt_list_destroy(stmt->data.case_stmt.default_body);
-                free(stmt->data.case_stmt.default_body);
+                puppet_free(stmt->data.case_stmt.default_body);
             }
             break;
             
@@ -479,7 +486,7 @@ void puppet_stmt_destroy(puppet_stmt_t *stmt) {
             for (size_t i = 0; i < stmt->data.names.count; i++) {
                 puppet_expr_destroy(stmt->data.names.exprs[i]);
             }
-            free(stmt->data.names.exprs);
+            puppet_free(stmt->data.names.exprs);
             break;
             
         case PUPPET_STMT_IMPORT:
@@ -487,11 +494,11 @@ void puppet_stmt_destroy(puppet_stmt_t *stmt) {
             break;
     }
     
-    free(stmt);
+    puppet_free(stmt);
 }
 
 void puppet_program_destroy(puppet_program_t *program) {
     if (!program) return;
     puppet_stmt_list_destroy(&program->statements);
-    free(program);
+    puppet_free(program);
 }

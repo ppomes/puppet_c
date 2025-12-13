@@ -24,6 +24,7 @@
 #include "puppet_json.h"
 #include "puppet_interpreter.h"
 #include "puppet_loader.h"
+#include "puppet_memory.h"
 #include "puppet.tab.h"
 
 /* External symbols from generated parser */
@@ -54,6 +55,9 @@ static void print_usage(const char *program_name) {
 }
 
 int main(int argc, char *argv[]) {
+    /* Initialize memory tracking */
+    puppet_memory_init();
+    
     int json_output = 0;
     int eval_mode = 0;
     char *output_file = NULL;
@@ -155,7 +159,7 @@ int main(int argc, char *argv[]) {
         program = puppet_loader_load_site(loader);
         if (!program) {
             /* If no site.pp, create empty program */
-            program = calloc(1, sizeof(puppet_program_t));
+            program = puppet_calloc(1, sizeof(puppet_program_t));
             program->statements.stmts = NULL;
             program->statements.count = 0;
         }
@@ -243,6 +247,12 @@ int main(int argc, char *argv[]) {
     
     if (loader) {
         puppet_loader_destroy(loader);
+    }
+    
+    /* Shutdown memory tracking and report leaks */
+    int memory_leaks = puppet_memory_shutdown();
+    if (memory_leaks > 0) {
+        fprintf(stderr, "Warning: %d memory leaks detected\n", memory_leaks);
     }
     
     return result;

@@ -21,22 +21,23 @@
  */
 
 #include "puppet_json.h"
+#include "puppet_memory.h"
 #include <stdlib.h>
 #include <string.h>
 
 json_buffer_t *json_buffer_create(void) {
-    json_buffer_t *buf = malloc(sizeof(json_buffer_t));
+    json_buffer_t *buf = puppet_malloc(sizeof(json_buffer_t));
     buf->capacity = 1024;
     buf->size = 0;
-    buf->data = malloc(buf->capacity);
+    buf->data = puppet_malloc(buf->capacity);
     buf->data[0] = '\0';
     return buf;
 }
 
 void json_buffer_destroy(json_buffer_t *buf) {
     if (buf) {
-        free(buf->data);
-        free(buf);
+        puppet_free(buf->data);
+        puppet_free(buf);
     }
 }
 
@@ -44,7 +45,7 @@ void json_buffer_append(json_buffer_t *buf, const char *str) {
     size_t len = strlen(str);
     while (buf->size + len + 1 >= buf->capacity) {
         buf->capacity *= 2;
-        buf->data = realloc(buf->data, buf->capacity);
+        buf->data = puppet_realloc(buf->data, buf->capacity);
     }
     strcpy(buf->data + buf->size, str);
     buf->size += len;
@@ -53,7 +54,7 @@ void json_buffer_append(json_buffer_t *buf, const char *str) {
 void json_buffer_append_char(json_buffer_t *buf, char c) {
     if (buf->size + 2 >= buf->capacity) {
         buf->capacity *= 2;
-        buf->data = realloc(buf->data, buf->capacity);
+        buf->data = puppet_realloc(buf->data, buf->capacity);
     }
     buf->data[buf->size++] = c;
     buf->data[buf->size] = '\0';

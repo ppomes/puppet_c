@@ -5,6 +5,7 @@
 
 #include "puppet_loader.h"
 #include "puppet.tab.h"
+#include "puppet_memory.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,25 +18,25 @@ extern FILE *yyin;
 extern puppet_program_t *parsed_program;
 
 puppet_loader_t *puppet_loader_create(const char *base_path) {
-    puppet_loader_t *loader = calloc(1, sizeof(puppet_loader_t));
+    puppet_loader_t *loader = puppet_calloc(1, sizeof(puppet_loader_t));
     if (!loader) return NULL;
     
     /* Set up base paths */
-    loader->base_path = strdup(base_path ? base_path : ".");
+    loader->base_path = puppet_strdup(base_path ? base_path : ".");
     
     /* Construct default paths */
     size_t base_len = strlen(loader->base_path);
     
-    loader->modules_path = malloc(base_len + 10);
+    loader->modules_path = puppet_malloc(base_len + 10);
     sprintf(loader->modules_path, "%s/modules", loader->base_path);
     
-    loader->manifests_path = malloc(base_len + 12);
+    loader->manifests_path = puppet_malloc(base_len + 12);
     sprintf(loader->manifests_path, "%s/manifests", loader->base_path);
     
     /* Initialize class cache */
     loader->loaded_classes.capacity = 16;
-    loader->loaded_classes.class_names = calloc(loader->loaded_classes.capacity, sizeof(char*));
-    loader->loaded_classes.class_defs = calloc(loader->loaded_classes.capacity, sizeof(puppet_stmt_t*));
+    loader->loaded_classes.class_names = puppet_calloc(loader->loaded_classes.capacity, sizeof(char*));
+    loader->loaded_classes.class_defs = puppet_calloc(loader->loaded_classes.capacity, sizeof(puppet_stmt_t*));
     loader->loaded_classes.count = 0;
     
     return loader;
@@ -46,16 +47,16 @@ void puppet_loader_destroy(puppet_loader_t *loader) {
     
     /* Clean up loaded classes cache */
     for (size_t i = 0; i < loader->loaded_classes.count; i++) {
-        free(loader->loaded_classes.class_names[i]);
+        puppet_free(loader->loaded_classes.class_names[i]);
         /* Note: class_defs are owned by their programs, not freed here */
     }
-    free(loader->loaded_classes.class_names);
-    free(loader->loaded_classes.class_defs);
+    puppet_free(loader->loaded_classes.class_names);
+    puppet_free(loader->loaded_classes.class_defs);
     
-    free(loader->base_path);
-    free(loader->modules_path);
-    free(loader->manifests_path);
-    free(loader);
+    puppet_free(loader->base_path);
+    puppet_free(loader->modules_path);
+    puppet_free(loader->manifests_path);
+    puppet_free(loader);
 }
 
 bool puppet_loader_resolve_class_path(puppet_loader_t *loader,
@@ -74,13 +75,13 @@ bool puppet_loader_resolve_class_path(puppet_loader_t *loader,
         /* Namespaced class: modules/module/manifests/subclass.pp */
         /* Extract module name (part before first ::) */
         size_t module_len = separator - class_name;
-        char *module_name = malloc(module_len + 1);
+        char *module_name = puppet_malloc(module_len + 1);
         strncpy(module_name, class_name, module_len);
         module_name[module_len] = '\0';
         
         /* Convert remaining :: to / for path */
         const char *rest = separator + 2;
-        char *manifest_path = strdup(rest);
+        char *manifest_path = puppet_strdup(rest);
         
         /* Replace :: with / in the remaining path */
         char *pos = manifest_path;
@@ -92,8 +93,8 @@ bool puppet_loader_resolve_class_path(puppet_loader_t *loader,
         snprintf(path_buffer, buffer_size, "%s/%s/manifests/%s.pp",
                 loader->modules_path, module_name, manifest_path);
         
-        free(module_name);
-        free(manifest_path);
+        puppet_free(module_name);
+        puppet_free(manifest_path);
     }
     
     /* Check if the file exists */
@@ -156,13 +157,13 @@ puppet_stmt_t *puppet_loader_load_class(puppet_loader_t *loader,
     /* Cache the loaded class */
     if (loader->loaded_classes.count >= loader->loaded_classes.capacity) {
         loader->loaded_classes.capacity *= 2;
-        loader->loaded_classes.class_names = realloc(loader->loaded_classes.class_names,
+        loader->loaded_classes.class_names = puppet_realloc(loader->loaded_classes.class_names,
             loader->loaded_classes.capacity * sizeof(char*));
-        loader->loaded_classes.class_defs = realloc(loader->loaded_classes.class_defs,
+        loader->loaded_classes.class_defs = puppet_realloc(loader->loaded_classes.class_defs,
             loader->loaded_classes.capacity * sizeof(puppet_stmt_t*));
     }
     
-    loader->loaded_classes.class_names[loader->loaded_classes.count] = strdup(class_name);
+    loader->loaded_classes.class_names[loader->loaded_classes.count] = puppet_strdup(class_name);
     loader->loaded_classes.class_defs[loader->loaded_classes.count] = class_def;
     loader->loaded_classes.count++;
     
@@ -267,14 +268,14 @@ void puppet_loader_set_modules_path(puppet_loader_t *loader,
                                     const char *modules_path) {
     if (!loader || !modules_path) return;
     
-    free(loader->modules_path);
-    loader->modules_path = strdup(modules_path);
+    puppet_free(loader->modules_path);
+    loader->modules_path = puppet_strdup(modules_path);
 }
 
 void puppet_loader_set_manifests_path(puppet_loader_t *loader,
                                       const char *manifests_path) {
     if (!loader || !manifests_path) return;
     
-    free(loader->manifests_path);
-    loader->manifests_path = strdup(manifests_path);
+    puppet_free(loader->manifests_path);
+    loader->manifests_path = puppet_strdup(manifests_path);
 }

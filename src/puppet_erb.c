@@ -13,6 +13,7 @@
  */
 
 #include "puppet_erb.h"
+#include "puppet_memory.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,7 +41,7 @@ puppet_ruby_context_t *puppet_ruby_init(void) {
         return global_ruby_ctx;
     }
     
-    puppet_ruby_context_t *ctx = calloc(1, sizeof(puppet_ruby_context_t));
+    puppet_ruby_context_t *ctx = puppet_calloc(1, sizeof(puppet_ruby_context_t));
     
     // Initialize Ruby VM with complete environment
     ruby_init();                    // Initialize Ruby interpreter
@@ -123,7 +124,7 @@ void puppet_ruby_cleanup(puppet_ruby_context_t *ctx) {
     if (global_ruby_ctx == ctx) {
         global_ruby_ctx = NULL;
     }
-    free(ctx);
+    puppet_free(ctx);
 }
 
 /**
@@ -274,7 +275,7 @@ char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_
         
         if (!state) {
             const char *rendered = StringValueCStr(result);
-            return strdup(rendered);
+            return puppet_strdup(rendered);
         }
         
         printf("ERB failed (state=%d), falling back to simple interpolation\n", state);
@@ -343,7 +344,7 @@ char *puppet_simple_template_render(const char *template, puppet_env_t *env) {
     
     size_t template_len = strlen(template);
     size_t output_capacity = template_len * 2; // Start with 2x template size
-    char *output = malloc(output_capacity);
+    char *output = puppet_malloc(output_capacity);
     size_t output_len = 0;
     
     const char *pos = template;
@@ -377,7 +378,7 @@ char *puppet_simple_template_render(const char *template, puppet_env_t *env) {
                             // Dynamically expand output buffer if needed
                             while (output_len + str_len >= output_capacity) {
                                 output_capacity *= 2;
-                                output = realloc(output, output_capacity);
+                                output = puppet_realloc(output, output_capacity);
                             }
                             
                             // Insert variable value into output
@@ -395,7 +396,7 @@ char *puppet_simple_template_render(const char *template, puppet_env_t *env) {
         // Regular character - copy directly to output
         if (output_len + 1 >= output_capacity) {
             output_capacity *= 2;
-            output = realloc(output, output_capacity);
+            output = puppet_realloc(output, output_capacity);
         }
         output[output_len++] = *pos++;
     }
@@ -417,13 +418,13 @@ char *puppet_erb_file(const char *template_path, puppet_env_t *env, puppet_ruby_
     long file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
     
-    char *content = malloc(file_size + 1);
+    char *content = puppet_malloc(file_size + 1);
     fread(content, 1, file_size, file);
     content[file_size] = '\0';
     fclose(file);
     
     char *result = puppet_erb_render(content, env, ruby_ctx);
-    free(content);
+    puppet_free(content);
     return result;
 }
 
@@ -513,6 +514,6 @@ puppet_value_t *puppet_func_template(puppet_expr_list_t *args, puppet_env_t *env
     }
     
     puppet_value_t *result = puppet_value_create_string(rendered, strlen(rendered));
-    free(rendered);
+    puppet_free(rendered);
     return result;
 }
