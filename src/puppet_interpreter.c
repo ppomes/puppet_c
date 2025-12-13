@@ -24,6 +24,11 @@ puppet_env_t *puppet_env_create(void) {
     env->node_scope = puppet_scope_create(env->global_scope, "node");
     env->class_scope = NULL;  /* Set when entering class context */
     
+    /* Initialize class definition registry */
+    env->class_def_capacity = 4;
+    env->class_definitions = puppet_calloc(env->class_def_capacity, sizeof(puppet_stmt_t*));
+    env->class_def_count = 0;
+    
     return env;
 }
 
@@ -50,6 +55,9 @@ void puppet_env_destroy(puppet_env_t *env) {
         puppet_free(provider);
     }
     puppet_free(env->data_providers);
+    
+    // Clean up class definition registry (don't destroy statements, they're owned by AST)
+    puppet_free(env->class_definitions);
     
     puppet_free(env->scope_stack);
     puppet_free(env->node_name);
@@ -400,6 +408,9 @@ void puppet_exec_class_def(puppet_stmt_t *class_stmt, puppet_env_t *env) {
     const char *class_name = class_stmt->data.class_def.name.data;
     printf("Defining class: %s\n", class_name);
     
+    // Register this class definition for later instantiation
+    puppet_register_class_def(env, class_stmt);
+    
     // Create a new scope for the class
     puppet_scope_t *class_scope = puppet_scope_create(env->current_scope, class_name);
     puppet_scope_push(env, class_scope);
@@ -557,7 +568,14 @@ void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t
     const char *class_name = class_instance_stmt->data.class_instance.class_name.data;
     printf("Instantiating class: %s\n", class_name);
     
-    // For now, create a simple class scope and set provided arguments
+    // Find the class definition
+    puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
+    if (!class_def) {
+        printf("Error: Class '%s' not found\n", class_name);
+        return;
+    }
+    
+    // Create a new scope for the class instance
     puppet_scope_t *class_scope = puppet_scope_create(env->current_scope, class_name);
     puppet_scope_push(env, class_scope);
     
@@ -565,41 +583,63 @@ void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t
     puppet_scope_t *old_class_scope = env->class_scope;
     env->class_scope = class_scope;
     
-    // Process provided arguments and set them as variables
-    for (size_t i = 0; i < class_instance_stmt->data.class_instance.arg_count; i++) {
-        puppet_attribute_t *arg = &class_instance_stmt->data.class_instance.arguments[i];
-        const char *param_name = arg->name.data;
+    // Process class parameters and apply defaults first
+    for (size_t i = 0; i < class_def->data.class_def.params.count; i++) {
+        puppet_param_t *param = &class_def->data.class_def.params.params[i];
+        const char *param_name = param->name.data;
         
-        // Evaluate the argument value
-        puppet_value_t *param_value = puppet_eval_expr(arg->value, env);
+        // Look for this parameter in provided arguments
+        puppet_value_t *param_value = NULL;
+        bool found_arg = false;
         
-        // Set the parameter in class scope
-        puppet_scope_set_var(class_scope, param_name, param_value);
-        
-        printf("Set class argument $%s = ", param_name);
-        switch (param_value->type) {
-            case PUPPET_VALUE_BOOL:
-                printf("%s", param_value->data.boolean ? "true" : "false");
+        for (size_t j = 0; j < class_instance_stmt->data.class_instance.arg_count; j++) {
+            puppet_attribute_t *arg = &class_instance_stmt->data.class_instance.arguments[j];
+            if (strcmp(arg->name.data, param_name) == 0) {
+                param_value = puppet_eval_expr(arg->value, env);
+                found_arg = true;
+                printf("Set class parameter $%s = ", param_name);
                 break;
-            case PUPPET_VALUE_NUMBER:
-                printf("%.6g", param_value->data.number);
-                break;
-            case PUPPET_VALUE_STRING:
-                printf("\"%s\"", param_value->data.string.data);
-                break;
-            default:
-                printf("(complex value)");
-                break;
+            }
         }
-        printf("\n");
+        
+        // If not provided, use default value
+        if (!found_arg && param->default_value) {
+            param_value = puppet_eval_expr(param->default_value, env);
+            printf("Set class parameter $%s = ", param_name);
+        } else if (!found_arg) {
+            param_value = puppet_value_create_undef();
+            printf("Set class parameter $%s = undef (no default)\n", param_name);
+        }
+        
+        // Set the parameter value in class scope
+        if (param_value) {
+            puppet_scope_set_var(class_scope, param_name, param_value);
+            
+            if (found_arg || param->default_value) {
+                switch (param_value->type) {
+                    case PUPPET_VALUE_BOOL:
+                        printf("%s", param_value->data.boolean ? "true" : "false");
+                        break;
+                    case PUPPET_VALUE_NUMBER:
+                        printf("%.6g", param_value->data.number);
+                        break;
+                    case PUPPET_VALUE_STRING:
+                        printf("\"%s\"", param_value->data.string.data);
+                        break;
+                    default:
+                        printf("(complex value)");
+                        break;
+                }
+                printf("%s\n", found_arg ? " (provided)" : " (default)");
+            }
+        }
     }
     
-    printf("Class %s instantiated with %zu arguments\n", class_name, 
-           class_instance_stmt->data.class_instance.arg_count);
+    // Execute the class body
+    printf("Executing class body for: %s\n", class_name);
+    puppet_exec_stmt_list(&class_def->data.class_def.body, env);
     
-    // TODO: Find the class definition and execute its body
-    // TODO: Match arguments with class parameters
-    // TODO: Apply parameter defaults
+    printf("Class %s instantiation complete\n", class_name);
     
     // Restore old class scope
     env->class_scope = old_class_scope;
@@ -607,6 +647,62 @@ void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t
     // Pop the class scope
     puppet_scope_t *old_scope = puppet_scope_pop(env);
     puppet_scope_destroy(old_scope);
+}
+
+/*
+ * ===========================================================================
+ * CLASS DEFINITION MANAGEMENT
+ * ===========================================================================
+ */
+
+/**
+ * @brief Register a class definition for later instantiation
+ *
+ * @param env Execution environment
+ * @param class_def Class definition statement
+ * @return 0 on success, -1 on error
+ */
+int puppet_register_class_def(puppet_env_t *env, puppet_stmt_t *class_def) {
+    if (!env || !class_def || class_def->type != PUPPET_STMT_CLASS_DEF) return -1;
+    
+    // Expand class definition array if needed
+    if (env->class_def_count >= env->class_def_capacity) {
+        env->class_def_capacity *= 2;
+        env->class_definitions = puppet_realloc(env->class_definitions, 
+            env->class_def_capacity * sizeof(puppet_stmt_t*));
+        if (!env->class_definitions) {
+            return -1;
+        }
+    }
+    
+    // Add class definition to registry
+    env->class_definitions[env->class_def_count] = class_def;
+    env->class_def_count++;
+    
+    return 0;
+}
+
+/**
+ * @brief Find a class definition by name
+ *
+ * @param env Execution environment
+ * @param class_name Class name to find
+ * @return Class definition statement or NULL if not found
+ */
+puppet_stmt_t *puppet_find_class_def(puppet_env_t *env, const char *class_name) {
+    if (!env || !class_name) return NULL;
+    
+    for (size_t i = 0; i < env->class_def_count; i++) {
+        puppet_stmt_t *class_def = env->class_definitions[i];
+        if (class_def && class_def->type == PUPPET_STMT_CLASS_DEF) {
+            const char *def_name = class_def->data.class_def.name.data;
+            if (strcmp(def_name, class_name) == 0) {
+                return class_def;
+            }
+        }
+    }
+    
+    return NULL;
 }
 
 /*

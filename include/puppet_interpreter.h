@@ -101,6 +101,11 @@ typedef struct puppet_env {
     size_t data_provider_capacity;            /**< Provider array capacity */
     puppet_scope_t *node_scope;               /**< Node-specific variables */
     puppet_scope_t *class_scope;              /**< Current class scope */
+    
+    /* Class definition registry */
+    puppet_stmt_t **class_definitions;        /**< Array of class definition statements */
+    size_t class_def_count;                   /**< Number of registered class definitions */
+    size_t class_def_capacity;                /**< Class definition array capacity */
 } puppet_env_t;
 
 /*
@@ -134,6 +139,10 @@ void puppet_env_set_scoped_var(puppet_env_t *env, const char *name, puppet_value
 int puppet_register_data_provider(puppet_env_t *env, puppet_data_provider_t *provider);
 void puppet_unregister_data_provider(puppet_env_t *env, const char *name);
 puppet_data_provider_t *puppet_get_data_provider(puppet_env_t *env, const char *name);
+
+/* Class definition management */
+int puppet_register_class_def(puppet_env_t *env, puppet_stmt_t *class_def);
+puppet_stmt_t *puppet_find_class_def(puppet_env_t *env, const char *class_name);
 
 /* Expression evaluation */
 puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env);

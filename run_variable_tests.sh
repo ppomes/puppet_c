@@ -67,9 +67,18 @@ run_test "$TEST_DIR/test_variable_arithmetic.pp"
 echo -e "\n=== Test 4: Edge Cases and Error Handling ==="
 run_test "$TEST_DIR/test_edge_cases.pp"
 
-# Test 5: Original test file
-echo -e "\n=== Test 5: Original Test File ==="
-run_test "./test_variables.pp"
+# Test 5: Class Instantiation
+echo -e "\n=== Test 5: Class Instantiation with Parameters ==="
+run_test "$TEST_DIR/variables/test_class_instantiation.pp"
+
+# Test 6: Original test file (if exists)
+if [ -f "./test_variables.pp" ]; then
+    echo -e "\n=== Test 6: Original Test File ==="
+    run_test "./test_variables.pp"
+    total_tests=6
+else
+    total_tests=5
+fi
 
 echo -e "\n======================================="
 echo -e "${GREEN}Test Suite Complete${NC}"
@@ -78,7 +87,6 @@ echo "======================================="
 # Summary
 echo -e "\nTest Summary:"
 echo "-------------"
-total_tests=5
 passed_tests=$(find $RESULTS_DIR -name "*.out" -exec grep -l "Evaluation complete" {} \; | wc -l)
 failed_tests=$((total_tests - passed_tests))
 
