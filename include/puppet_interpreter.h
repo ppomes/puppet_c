@@ -28,6 +28,42 @@
  */
 
 /**
+ * @brief Variable scope types for enhanced lookup
+ */
+typedef enum {
+    PUPPET_VAR_LOCAL,     /**< Local scope variable ($var) */
+    PUPPET_VAR_CLASS,     /**< Class scope variable ($::class::var) */
+    PUPPET_VAR_GLOBAL,    /**< Global scope variable ($::var) */
+    PUPPET_VAR_NODE,      /**< Node scope variable */
+    PUPPET_VAR_FACT       /**< System fact ($facts['name']) */
+} puppet_var_scope_t;
+
+/**
+ * @brief Data provider interface for external data sources (Hiera, etc.)
+ */
+typedef struct puppet_data_provider {
+    char *name;                    /**< Provider name (e.g., "hiera", "consul") */
+    
+    /** Core lookup function */
+    puppet_value_t *(*lookup)(
+        const char *key,           /**< Variable name to look up */
+        struct puppet_env *env,    /**< Current environment/scope */
+        void *provider_data        /**< Provider-specific data */
+    );
+    
+    /** Check if key exists (optional optimization) */
+    bool (*has_key)(const char *key, struct puppet_env *env, void *data);
+    
+    /** Initialize provider (load config, connect, etc.) */
+    int (*init)(void **provider_data, const char *config);
+    
+    /** Cleanup provider */
+    void (*cleanup)(void *provider_data);
+    
+    void *data;                   /**< Provider-specific data */
+} puppet_data_provider_t;
+
+/**
  * @brief Variable scope for lexical scoping
  * 
  * Implements lexical scoping for Puppet variables. Each scope contains
@@ -58,6 +94,13 @@ typedef struct puppet_env {
     struct puppet_loader *loader;   /**< Module loader for includes */
     char *node_name;               /**< Current node name (for filtering) */
     bool execute_all_nodes;        /**< Execute all nodes regardless of name */
+    
+    /* Enhanced variable system */
+    puppet_data_provider_t **data_providers;  /**< External data providers (Hiera, etc.) */
+    size_t data_provider_count;               /**< Number of registered providers */
+    size_t data_provider_capacity;            /**< Provider array capacity */
+    puppet_scope_t *node_scope;               /**< Node-specific variables */
+    puppet_scope_t *class_scope;              /**< Current class scope */
 } puppet_env_t;
 
 /*
@@ -81,6 +124,16 @@ void puppet_env_set_var(puppet_env_t *env, const char *name, puppet_value_t *val
 puppet_value_t *puppet_env_get_var(puppet_env_t *env, const char *name);
 void puppet_scope_set_var(puppet_scope_t *scope, const char *name, puppet_value_t *value);
 puppet_value_t *puppet_scope_get_var(puppet_scope_t *scope, const char *name, bool recursive);
+
+/* Enhanced variable operations */
+puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name);
+puppet_value_t *puppet_variable_lookup_scoped(puppet_env_t *env, const char *name, puppet_var_scope_t scope);
+void puppet_env_set_scoped_var(puppet_env_t *env, const char *name, puppet_value_t *value, puppet_var_scope_t scope);
+
+/* Data provider management */
+int puppet_register_data_provider(puppet_env_t *env, puppet_data_provider_t *provider);
+void puppet_unregister_data_provider(puppet_env_t *env, const char *name);
+puppet_data_provider_t *puppet_get_data_provider(puppet_env_t *env, const char *name);
 
 /* Expression evaluation */
 puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env);

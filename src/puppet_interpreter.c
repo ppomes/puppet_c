@@ -16,6 +16,14 @@ puppet_env_t *puppet_env_create(void) {
     env->loader = NULL;  /* Loader is optional, set separately */
     env->node_name = NULL;  /* No node filtering by default */
     env->execute_all_nodes = false;
+    
+    /* Initialize enhanced variable system */
+    env->data_provider_capacity = 4;
+    env->data_providers = puppet_calloc(env->data_provider_capacity, sizeof(puppet_data_provider_t*));
+    env->data_provider_count = 0;
+    env->node_scope = puppet_scope_create(env->global_scope, "node");
+    env->class_scope = NULL;  /* Set when entering class context */
+    
     return env;
 }
 
@@ -27,7 +35,22 @@ void puppet_env_destroy(puppet_env_t *env) {
         puppet_scope_pop(env);
     }
     
+    // Clean up scopes
     puppet_scope_destroy(env->global_scope);
+    if (env->node_scope) puppet_scope_destroy(env->node_scope);
+    if (env->class_scope) puppet_scope_destroy(env->class_scope);
+    
+    // Clean up data providers
+    for (size_t i = 0; i < env->data_provider_count; i++) {
+        puppet_data_provider_t *provider = env->data_providers[i];
+        if (provider && provider->cleanup) {
+            provider->cleanup(provider->data);
+        }
+        puppet_free(provider->name);
+        puppet_free(provider);
+    }
+    puppet_free(env->data_providers);
+    
     puppet_free(env->scope_stack);
     puppet_free(env->node_name);
     puppet_free(env);
@@ -165,7 +188,8 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
 }
 
 puppet_value_t *puppet_eval_variable(const char *name, puppet_env_t *env) {
-    puppet_value_t *value = puppet_env_get_var(env, name);
+    // Use enhanced lookup chain instead of simple scope lookup
+    puppet_value_t *value = puppet_variable_lookup_chain(env, name);
     
     if (!value) {
         printf("Warning: Undefined variable: %s\n", name);
@@ -342,7 +366,9 @@ void puppet_exec_stmt_list(puppet_stmt_list_t *stmts, puppet_env_t *env) {
 
 void puppet_exec_assignment(const char *var, puppet_expr_t *value, puppet_env_t *env) {
     puppet_value_t *val = puppet_eval_expr(value, env);
-    puppet_env_set_var(env, var, val);
+    
+    // Use scoped variable assignment (defaults to local scope)
+    puppet_env_set_scoped_var(env, var, val, PUPPET_VAR_LOCAL);
     
     // Debug output
     printf("Set $%s = ", var);
@@ -374,8 +400,48 @@ void puppet_exec_class_def(puppet_stmt_t *class_stmt, puppet_env_t *env) {
     puppet_scope_t *class_scope = puppet_scope_create(env->current_scope, class_name);
     puppet_scope_push(env, class_scope);
     
+    // Set class scope in environment for enhanced variable lookup
+    puppet_scope_t *old_class_scope = env->class_scope;
+    env->class_scope = class_scope;
+    
+    // Process parameters and set default values
+    for (size_t i = 0; i < class_stmt->data.class_def.params.count; i++) {
+        puppet_param_t *param = &class_stmt->data.class_def.params.params[i];
+        const char *param_name = param->name.data;
+        
+        if (param->default_value) {
+            // Evaluate default value and set in class scope
+            puppet_value_t *default_val = puppet_eval_expr(param->default_value, env);
+            puppet_scope_set_var(class_scope, param_name, default_val);
+            printf("Set class parameter $%s = ", param_name);
+            switch (default_val->type) {
+                case PUPPET_VALUE_BOOL:
+                    printf("%s", default_val->data.boolean ? "true" : "false");
+                    break;
+                case PUPPET_VALUE_NUMBER:
+                    printf("%.6g", default_val->data.number);
+                    break;
+                case PUPPET_VALUE_STRING:
+                    printf("\"%s\"", default_val->data.string.data);
+                    break;
+                default:
+                    printf("(complex value)");
+                    break;
+            }
+            printf(" (default)\n");
+        } else {
+            // Set parameter to undef if no default provided
+            puppet_value_t *undef_val = puppet_value_create_undef();
+            puppet_scope_set_var(class_scope, param_name, undef_val);
+            printf("Set class parameter $%s = undef (no default)\n", param_name);
+        }
+    }
+    
     // Execute class body
     puppet_exec_stmt_list(&class_stmt->data.class_def.body, env);
+    
+    // Restore old class scope
+    env->class_scope = old_class_scope;
     
     // Pop the class scope
     puppet_scope_t *old_scope = puppet_scope_pop(env);
@@ -479,4 +545,231 @@ void puppet_env_set_execute_all_nodes(puppet_env_t *env, bool execute_all) {
         puppet_free(env->node_name);
         env->node_name = NULL;  /* Clear specific node when in all-nodes mode */
     }
+}
+
+/*
+ * ===========================================================================
+ * ENHANCED VARIABLE SYSTEM IMPLEMENTATION
+ * ===========================================================================
+ */
+
+/**
+ * @brief Enhanced variable lookup with full chain traversal
+ *
+ * Implements the complete Puppet variable lookup chain:
+ * 1. Local scope (current function/class)
+ * 2. Class scope (if inside class)
+ * 3. Node scope (node-specific variables)  
+ * 4. Global scope (top-level variables)
+ * 5. Data providers (Hiera, external data sources)
+ *
+ * @param env Execution environment
+ * @param name Variable name to look up
+ * @return Variable value or NULL if not found
+ */
+puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name) {
+    if (!env || !name) return NULL;
+    
+    puppet_value_t *value = NULL;
+    
+    // 1. Local scope (current scope, non-recursive)
+    value = puppet_scope_get_var(env->current_scope, name, false);
+    if (value) return value;
+    
+    // 2. Class scope (if we're inside a class)
+    if (env->class_scope && env->class_scope != env->current_scope) {
+        value = puppet_scope_get_var(env->class_scope, name, false);
+        if (value) return value;
+    }
+    
+    // 3. Node scope (node-specific variables)
+    if (env->node_scope && env->node_scope != env->current_scope) {
+        value = puppet_scope_get_var(env->node_scope, name, false);
+        if (value) return value;
+    }
+    
+    // 4. Global scope (top-level variables)
+    if (env->global_scope != env->current_scope) {
+        value = puppet_scope_get_var(env->global_scope, name, false);
+        if (value) return value;
+    }
+    
+    // 5. Data providers (Hiera, external data sources)
+    for (size_t i = 0; i < env->data_provider_count; i++) {
+        puppet_data_provider_t *provider = env->data_providers[i];
+        if (provider && provider->lookup) {
+            value = provider->lookup(name, env, provider->data);
+            if (value) return value;
+        }
+    }
+    
+    // 6. Not found
+    return NULL;
+}
+
+/**
+ * @brief Look up variable in specific scope type
+ *
+ * @param env Execution environment
+ * @param name Variable name
+ * @param scope Scope type to search
+ * @return Variable value or NULL if not found
+ */
+puppet_value_t *puppet_variable_lookup_scoped(puppet_env_t *env, const char *name, puppet_var_scope_t scope) {
+    if (!env || !name) return NULL;
+    
+    switch (scope) {
+        case PUPPET_VAR_LOCAL:
+            return puppet_scope_get_var(env->current_scope, name, false);
+            
+        case PUPPET_VAR_CLASS:
+            return env->class_scope ? 
+                puppet_scope_get_var(env->class_scope, name, false) : NULL;
+                
+        case PUPPET_VAR_NODE:
+            return env->node_scope ? 
+                puppet_scope_get_var(env->node_scope, name, false) : NULL;
+                
+        case PUPPET_VAR_GLOBAL:
+            return puppet_scope_get_var(env->global_scope, name, false);
+            
+        case PUPPET_VAR_FACT:
+            // Facts would be handled by a fact provider
+            // For now, fall through to data providers
+            for (size_t i = 0; i < env->data_provider_count; i++) {
+                puppet_data_provider_t *provider = env->data_providers[i];
+                if (provider && provider->lookup) {
+                    puppet_value_t *value = provider->lookup(name, env, provider->data);
+                    if (value) return value;
+                }
+            }
+            return NULL;
+            
+        default:
+            return NULL;
+    }
+}
+
+/**
+ * @brief Set variable in specific scope
+ *
+ * @param env Execution environment
+ * @param name Variable name
+ * @param value Variable value
+ * @param scope Target scope type
+ */
+void puppet_env_set_scoped_var(puppet_env_t *env, const char *name, puppet_value_t *value, puppet_var_scope_t scope) {
+    if (!env || !name) return;
+    
+    switch (scope) {
+        case PUPPET_VAR_LOCAL:
+            puppet_scope_set_var(env->current_scope, name, value);
+            break;
+            
+        case PUPPET_VAR_CLASS:
+            if (env->class_scope) {
+                puppet_scope_set_var(env->class_scope, name, value);
+            } else {
+                // Create class scope if it doesn't exist
+                env->class_scope = puppet_scope_create(env->global_scope, "class");
+                puppet_scope_set_var(env->class_scope, name, value);
+            }
+            break;
+            
+        case PUPPET_VAR_NODE:
+            puppet_scope_set_var(env->node_scope, name, value);
+            break;
+            
+        case PUPPET_VAR_GLOBAL:
+            puppet_scope_set_var(env->global_scope, name, value);
+            break;
+            
+        case PUPPET_VAR_FACT:
+            // Facts are typically read-only, but we could support setting
+            // them in node scope for now
+            puppet_scope_set_var(env->node_scope, name, value);
+            break;
+    }
+}
+
+/*
+ * ===========================================================================
+ * DATA PROVIDER MANAGEMENT
+ * ===========================================================================
+ */
+
+/**
+ * @brief Register a data provider (Hiera, etc.)
+ *
+ * @param env Execution environment
+ * @param provider Data provider to register
+ * @return 0 on success, -1 on error
+ */
+int puppet_register_data_provider(puppet_env_t *env, puppet_data_provider_t *provider) {
+    if (!env || !provider) return -1;
+    
+    // Expand provider array if needed
+    if (env->data_provider_count >= env->data_provider_capacity) {
+        env->data_provider_capacity *= 2;
+        env->data_providers = puppet_realloc(env->data_providers, 
+            env->data_provider_capacity * sizeof(puppet_data_provider_t*));
+        if (!env->data_providers) {
+            return -1;
+        }
+    }
+    
+    // Add provider to array
+    env->data_providers[env->data_provider_count] = provider;
+    env->data_provider_count++;
+    
+    return 0;
+}
+
+/**
+ * @brief Unregister data provider by name
+ *
+ * @param env Execution environment
+ * @param name Provider name to remove
+ */
+void puppet_unregister_data_provider(puppet_env_t *env, const char *name) {
+    if (!env || !name) return;
+    
+    for (size_t i = 0; i < env->data_provider_count; i++) {
+        puppet_data_provider_t *provider = env->data_providers[i];
+        if (provider && provider->name && strcmp(provider->name, name) == 0) {
+            // Clean up provider
+            if (provider->cleanup) {
+                provider->cleanup(provider->data);
+            }
+            puppet_free(provider->name);
+            puppet_free(provider);
+            
+            // Shift remaining providers down
+            for (size_t j = i; j < env->data_provider_count - 1; j++) {
+                env->data_providers[j] = env->data_providers[j + 1];
+            }
+            env->data_provider_count--;
+            break;
+        }
+    }
+}
+
+/**
+ * @brief Get data provider by name
+ *
+ * @param env Execution environment
+ * @param name Provider name to find
+ * @return Provider pointer or NULL if not found
+ */
+puppet_data_provider_t *puppet_get_data_provider(puppet_env_t *env, const char *name) {
+    if (!env || !name) return NULL;
+    
+    for (size_t i = 0; i < env->data_provider_count; i++) {
+        puppet_data_provider_t *provider = env->data_providers[i];
+        if (provider && provider->name && strcmp(provider->name, name) == 0) {
+            return provider;
+        }
+    }
+    
+    return NULL;
 }
