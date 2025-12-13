@@ -98,7 +98,7 @@ puppet_program_t *parsed_program = NULL;
 
 %type <stmt> statement resource_declaration
 %type <stmt> resource_default resource_override resource_collector
-%type <stmt> class_definition define_definition node_definition
+%type <stmt> class_definition class_instantiation define_definition node_definition
 %type <stmt> if_statement unless_statement case_statement
 %type <stmt> assignment_statement append_statement
 %type <stmt> function_statement resource_chain
@@ -176,6 +176,7 @@ statement:
     | resource_override
     | resource_collector
     | class_definition
+    | class_instantiation
     | define_definition
     | node_definition
     | if_statement
@@ -366,6 +367,23 @@ class_definition:
         $$->data.class_def.body = *$6;
         free($2);
         free($6);
+    }
+    ;
+
+class_instantiation:
+    CLASS '{' STRING_LITERAL ':' attribute_list_opt '}' {
+        $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
+        $$->type = PUPPET_STMT_CLASS_INSTANCE;
+        $$->data.class_instance.class_name = puppet_string_create($3);
+        if ($5) {
+            $$->data.class_instance.arguments = $5->attributes;
+            $$->data.class_instance.arg_count = $5->count;
+            puppet_free($5);
+        } else {
+            $$->data.class_instance.arguments = NULL;
+            $$->data.class_instance.arg_count = 0;
+        }
+        free($3);
     }
     ;
 

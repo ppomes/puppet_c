@@ -409,6 +409,15 @@ void puppet_stmt_destroy(puppet_stmt_t *stmt) {
             puppet_stmt_list_destroy(&stmt->data.class_def.body);
             break;
             
+        case PUPPET_STMT_CLASS_INSTANCE:
+            puppet_string_free(stmt->data.class_instance.class_name);
+            for (size_t i = 0; i < stmt->data.class_instance.arg_count; i++) {
+                puppet_string_free(stmt->data.class_instance.arguments[i].name);
+                puppet_expr_destroy(stmt->data.class_instance.arguments[i].value);
+            }
+            puppet_free(stmt->data.class_instance.arguments);
+            break;
+            
         case PUPPET_STMT_DEFINE:
             puppet_string_free(stmt->data.define.name);
             for (size_t i = 0; i < stmt->data.define.params.count; i++) {

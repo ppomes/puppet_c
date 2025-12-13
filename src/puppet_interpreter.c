@@ -339,6 +339,10 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
             puppet_exec_class_def(stmt, env);
             break;
             
+        case PUPPET_STMT_CLASS_INSTANCE:
+            puppet_exec_class_instance(stmt, env);
+            break;
+            
         case PUPPET_STMT_NODE:
             puppet_exec_node(stmt, env);
             break;
@@ -545,6 +549,64 @@ void puppet_env_set_execute_all_nodes(puppet_env_t *env, bool execute_all) {
         puppet_free(env->node_name);
         env->node_name = NULL;  /* Clear specific node when in all-nodes mode */
     }
+}
+
+void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t *env) {
+    if (!class_instance_stmt || class_instance_stmt->type != PUPPET_STMT_CLASS_INSTANCE) return;
+    
+    const char *class_name = class_instance_stmt->data.class_instance.class_name.data;
+    printf("Instantiating class: %s\n", class_name);
+    
+    // For now, create a simple class scope and set provided arguments
+    puppet_scope_t *class_scope = puppet_scope_create(env->current_scope, class_name);
+    puppet_scope_push(env, class_scope);
+    
+    // Set class scope in environment for enhanced variable lookup
+    puppet_scope_t *old_class_scope = env->class_scope;
+    env->class_scope = class_scope;
+    
+    // Process provided arguments and set them as variables
+    for (size_t i = 0; i < class_instance_stmt->data.class_instance.arg_count; i++) {
+        puppet_attribute_t *arg = &class_instance_stmt->data.class_instance.arguments[i];
+        const char *param_name = arg->name.data;
+        
+        // Evaluate the argument value
+        puppet_value_t *param_value = puppet_eval_expr(arg->value, env);
+        
+        // Set the parameter in class scope
+        puppet_scope_set_var(class_scope, param_name, param_value);
+        
+        printf("Set class argument $%s = ", param_name);
+        switch (param_value->type) {
+            case PUPPET_VALUE_BOOL:
+                printf("%s", param_value->data.boolean ? "true" : "false");
+                break;
+            case PUPPET_VALUE_NUMBER:
+                printf("%.6g", param_value->data.number);
+                break;
+            case PUPPET_VALUE_STRING:
+                printf("\"%s\"", param_value->data.string.data);
+                break;
+            default:
+                printf("(complex value)");
+                break;
+        }
+        printf("\n");
+    }
+    
+    printf("Class %s instantiated with %zu arguments\n", class_name, 
+           class_instance_stmt->data.class_instance.arg_count);
+    
+    // TODO: Find the class definition and execute its body
+    // TODO: Match arguments with class parameters
+    // TODO: Apply parameter defaults
+    
+    // Restore old class scope
+    env->class_scope = old_class_scope;
+    
+    // Pop the class scope
+    puppet_scope_t *old_scope = puppet_scope_pop(env);
+    puppet_scope_destroy(old_scope);
 }
 
 /*

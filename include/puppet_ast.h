@@ -323,6 +323,7 @@ typedef enum {
     PUPPET_STMT_APPEND,             /**< Array append ($var += value) */
     PUPPET_STMT_FUNCTION_CALL,      /**< Function call as statement */
     PUPPET_STMT_RESOURCE_CHAIN,     /**< Resource chaining (A -> B) */
+    PUPPET_STMT_CLASS_INSTANCE,     /**< Class instantiation (class { 'name': ... }) */
     PUPPET_STMT_INCLUDE,            /**< Class inclusion (include class) */
     PUPPET_STMT_REQUIRE,            /**< Class requirement (require class) */
     PUPPET_STMT_CONTAIN,            /**< Class containment (contain class) */
@@ -405,6 +406,11 @@ struct puppet_stmt {
             puppet_string_t *inherits;
             puppet_stmt_list_t body;
         } class_def;
+        struct {
+            puppet_string_t class_name;
+            puppet_attribute_t *arguments;
+            size_t arg_count;
+        } class_instance;
         struct {
             puppet_string_t name;
             puppet_param_list_t params;
