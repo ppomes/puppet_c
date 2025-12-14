@@ -129,6 +129,9 @@ typedef struct puppet_env {
     
     /* Facts database */
     puppet_facts_db_t *facts_db;              /**< Facts database for node-specific facts */
+    
+    /* Resource catalog for duplicate detection */
+    puppet_hash_t *resource_catalog;          /**< Track declared resources (type::title → true) */
 } puppet_env_t;
 
 /*

@@ -23,6 +23,8 @@ EXTRA_DIST = \
     puppet/interpolation_test.pp \
     puppet/resource_title_interpolation.pp \
     puppet/resource_title_facts.pp \
+    puppet/duplicate_resource_test.pp \
+    puppet/duplicate_multinode_test.pp \
     facts/sample_facts.json \
     facts/multi_node_facts.json \
     facts/test_facts_usage.pp \

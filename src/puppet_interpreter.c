@@ -53,6 +53,11 @@ puppet_env_t *puppet_env_create(void) {
     /* Initialize facts database */
     env->facts_db = NULL;
     
+    /* Initialize resource catalog for duplicate detection */
+    env->resource_catalog = puppet_calloc(1, sizeof(puppet_hash_t));
+    env->resource_catalog->bucket_count = 64;  /* Start with reasonable size */
+    env->resource_catalog->buckets = puppet_calloc(env->resource_catalog->bucket_count, sizeof(puppet_hash_entry_t*));
+    
     return env;
 }
 
@@ -86,6 +91,23 @@ void puppet_env_destroy(puppet_env_t *env) {
     // Clean up facts database
     if (env->facts_db) {
         puppet_facts_db_destroy(env->facts_db);
+    }
+    
+    // Clean up resource catalog
+    if (env->resource_catalog) {
+        /* Clean up resource catalog */
+        for (size_t i = 0; i < env->resource_catalog->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->resource_catalog->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                puppet_value_destroy(entry->value);
+                puppet_free(entry);
+                entry = next;
+            }
+        }
+        puppet_free(env->resource_catalog->buckets);
+        puppet_free(env->resource_catalog);
     }
     
     puppet_free(env->scope_stack);
@@ -441,15 +463,34 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
         case PUPPET_STMT_RESOURCE:
             printf("Executing resource: %s\n", stmt->data.resource.type.data);
             
-            // Evaluate resource titles
+            // Evaluate resource titles and check for duplicates
             for (size_t i = 0; i < stmt->data.resource.instance_count; i++) {
                 puppet_resource_instance_t *instance = &stmt->data.resource.instances[i];
                 if (instance->title) {
                     puppet_value_t *title_val = puppet_eval_expr(instance->title, env);
                     const char *title_str = puppet_value_to_string(title_val);
+                    
+                    // Build resource identifier (type::title)
+                    size_t res_id_len = strlen(stmt->data.resource.type.data) + strlen(title_str) + 3;
+                    char *resource_id = puppet_malloc(res_id_len);
+                    snprintf(resource_id, res_id_len, "%s[%s]", stmt->data.resource.type.data, title_str);
+                    
+                    // Check for duplicate resource
+                    puppet_value_t *existing = puppet_hash_get(env->resource_catalog, 
+                                                               resource_id, strlen(resource_id));
+                    if (existing) {
+                        fprintf(stderr, "Error: Duplicate declaration - %s is already declared\n", resource_id);
+                        fprintf(stderr, "       Resource titles must be unique within their type\n");
+                        puppet_free(resource_id);
+                        puppet_value_destroy(title_val);
+                        continue;  // Skip this duplicate resource
+                    }
+                    
+                    // Add to catalog
+                    puppet_value_t *marker = puppet_value_create_bool(true);
+                    puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);
+                    
                     printf("  Title: %s\n", title_str);
-                    // Don't free title_str - it's internal to title_val
-                    puppet_value_destroy(title_val);
                     
                     // Show attributes for this instance
                     for (size_t j = 0; j < instance->attr_count; j++) {
@@ -460,6 +501,9 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         // Don't free attr_str - it's internal to attr_val
                         puppet_value_destroy(attr_val);
                     }
+                    
+                    puppet_free(resource_id);
+                    puppet_value_destroy(title_val);
                 }
             }
             break;
@@ -620,6 +664,23 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
     
     if (should_execute) {
         printf("Executing node: %s\n", node_name);
+        
+        /* Clear resource catalog for this node (each node has its own catalog) */
+        if (env->resource_catalog) {
+            /* Clear existing entries but keep the hash table structure */
+            for (size_t i = 0; i < env->resource_catalog->bucket_count; i++) {
+                puppet_hash_entry_t *entry = env->resource_catalog->buckets[i];
+                while (entry) {
+                    puppet_hash_entry_t *next = entry->next;
+                    puppet_free(entry->key.data);
+                    puppet_value_destroy(entry->value);
+                    puppet_free(entry);
+                    entry = next;
+                }
+                env->resource_catalog->buckets[i] = NULL;
+            }
+            /* Size tracking is handled internally */
+        }
         
         /* Switch to node-specific facts if available */
         if (env->facts_db) {
