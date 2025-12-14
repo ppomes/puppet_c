@@ -20,6 +20,7 @@ EXTRA_DIST = \
     puppet/site.pp \
     puppet/system_resources.pp \
     puppet/template_test.pp \
+    puppet/interpolation_test.pp \
     facts/sample_facts.json \
     facts/multi_node_facts.json \
     facts/test_facts_usage.pp \
@@ -87,6 +88,16 @@ check-facts:
 	else \
 		echo "    ✗ Default node facts test failed"; \
 		sed 's/^/      /' output/facts_default.out; \
+	fi; \
+	total=$$((total + 1)); \
+	echo "  Testing string interpolation with facts..."; \
+	if $(top_builddir)/src/puppetc --eval --facts $(srcdir)/facts/sample_facts.json \
+	   $(srcdir)/puppet/interpolation_test.pp > output/interpolation.out 2>&1; then \
+		echo "    ✓ String interpolation test passed"; \
+		passed=$$((passed + 1)); \
+	else \
+		echo "    ✗ String interpolation test failed"; \
+		sed 's/^/      /' output/interpolation.out; \
 	fi; \
 	total=$$((total + 1)); \
 	echo; \

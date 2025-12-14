@@ -37,6 +37,94 @@ extern char *yytext;
 void yyerror(const char *s);
 puppet_program_t *parsed_program = NULL;
 
+// Helper function to create interpolated string expression
+static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
+    // Check if string contains ${...} patterns
+    const char *p = str;
+    int has_interpolation = 0;
+    
+    while (*p) {
+        if (p[0] == '$' && p[1] == '{') {
+            has_interpolation = 1;
+            break;
+        }
+        p++;
+    }
+    
+    // If no interpolation found, return simple string expression
+    if (!has_interpolation) {
+        puppet_value_t *val = puppet_value_create_string(str, strlen(str));
+        return puppet_expr_create_value(val);
+    }
+    
+    // Parse string with interpolation
+    puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
+    expr->type = PUPPET_EXPR_INTERPOLATED_STRING;
+    
+    // Count parts and expressions
+    size_t part_count = 0;
+    size_t max_parts = 10; // Initial allocation
+    expr->data.interpolated.parts = puppet_calloc(max_parts, sizeof(puppet_string_t));
+    expr->data.interpolated.exprs = puppet_calloc(max_parts, sizeof(puppet_expr_t*));
+    
+    p = str;
+    const char *start = str;
+    
+    while (*p) {
+        if (p[0] == '$' && p[1] == '{') {
+            // Save literal part before variable
+            if (p > start) {
+                size_t len = p - start;
+                expr->data.interpolated.parts[part_count].data = puppet_malloc(len + 1);
+                memcpy(expr->data.interpolated.parts[part_count].data, start, len);
+                expr->data.interpolated.parts[part_count].data[len] = '\0';
+                expr->data.interpolated.parts[part_count].len = len;
+            }
+            
+            // Find end of variable reference
+            const char *var_start = p + 2;
+            const char *var_end = var_start;
+            while (*var_end && *var_end != '}') var_end++;
+            
+            if (*var_end == '}') {
+                // Create variable expression
+                size_t var_len = var_end - var_start;
+                char *var_name = puppet_malloc(var_len + 1);
+                memcpy(var_name, var_start, var_len);
+                var_name[var_len] = '\0';
+                
+                expr->data.interpolated.exprs[part_count] = puppet_calloc(1, sizeof(puppet_expr_t));
+                expr->data.interpolated.exprs[part_count]->type = PUPPET_EXPR_VARIABLE;
+                expr->data.interpolated.exprs[part_count]->data.variable.data = var_name;
+                expr->data.interpolated.exprs[part_count]->data.variable.len = var_len;
+                
+                part_count++;
+                p = var_end + 1;
+                start = p;
+            } else {
+                // Malformed variable reference, treat as literal
+                p++;
+            }
+        } else {
+            p++;
+        }
+    }
+    
+    // Save final literal part
+    if (p > start) {
+        size_t len = p - start;
+        expr->data.interpolated.parts[part_count].data = puppet_malloc(len + 1);
+        memcpy(expr->data.interpolated.parts[part_count].data, start, len);
+        expr->data.interpolated.parts[part_count].data[len] = '\0';
+        expr->data.interpolated.parts[part_count].len = len;
+        part_count++;
+    }
+    
+    expr->data.interpolated.count = part_count;
+    
+    return expr;
+}
+
 %}
 
 %union {
@@ -686,13 +774,17 @@ primary_expression:
 
 literal_expression:
     value { $$ = puppet_expr_create_value($1); }
+    | DQSTRING_LITERAL {
+        // Parse double-quoted string for interpolation
+        $$ = puppet_create_interpolated_expr($1);
+        puppet_free($1);
+    }
     ;
 
 value:
     BOOLEAN { $$ = puppet_value_create_bool($1); }
     | NUMBER { $$ = puppet_value_create_number($1); }
     | STRING_LITERAL { $$ = puppet_value_create_string($1, strlen($1)); puppet_free($1); }
-    | DQSTRING_LITERAL { $$ = puppet_value_create_string($1, strlen($1)); puppet_free($1); }
     | NAME { $$ = puppet_value_create_string($1, strlen($1)); puppet_free($1); }
     | UNDEF { $$ = puppet_value_create_undef(); }
     | array_value { $$ = $1; }

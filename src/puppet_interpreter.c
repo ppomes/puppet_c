@@ -6,6 +6,27 @@
 #include <string.h>
 #include <stdio.h>
 
+// Helper function to convert value to string
+static const char *puppet_value_to_string(puppet_value_t *value) {
+    if (!value) return "";
+    
+    static char buffer[1024];  // Static buffer for conversions
+    
+    switch (value->type) {
+        case PUPPET_VALUE_STRING:
+            return value->data.string.data;
+        case PUPPET_VALUE_NUMBER:
+            snprintf(buffer, sizeof(buffer), "%g", value->data.number);
+            return buffer;
+        case PUPPET_VALUE_BOOL:
+            return value->data.boolean ? "true" : "false";
+        case PUPPET_VALUE_UNDEF:
+            return "";
+        default:
+            return "";
+    }
+}
+
 puppet_env_t *puppet_env_create(void) {
     puppet_env_t *env = puppet_calloc(1, sizeof(puppet_env_t));
     env->global_scope = puppet_scope_create(NULL, "global");
@@ -195,6 +216,56 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
                 printf("Error: Unknown function: %s\n", func_name);
                 return puppet_value_create_undef();
             }
+        }
+            
+        case PUPPET_EXPR_INTERPOLATED_STRING: {
+            // Build interpolated string
+            size_t total_len = 0;
+            char **parts = puppet_calloc(expr->data.interpolated.count * 2 + 1, sizeof(char*));
+            size_t part_count = 0;
+            
+            // Evaluate all parts
+            for (size_t i = 0; i < expr->data.interpolated.count; i++) {
+                // Add literal part if present
+                if (expr->data.interpolated.parts && expr->data.interpolated.parts[i].data) {
+                    parts[part_count] = puppet_strdup(expr->data.interpolated.parts[i].data);
+                    total_len += expr->data.interpolated.parts[i].len;
+                    part_count++;
+                }
+                
+                // Evaluate expression if present
+                if (expr->data.interpolated.exprs && expr->data.interpolated.exprs[i]) {
+                    puppet_value_t *val = puppet_eval_expr(expr->data.interpolated.exprs[i], env);
+                    const char *str = puppet_value_to_string(val);
+                    if (str && *str) {
+                        // Make a copy immediately since puppet_value_to_string may use static buffer
+                        size_t str_len = strlen(str);
+                        parts[part_count] = puppet_malloc(str_len + 1);
+                        memcpy(parts[part_count], str, str_len + 1);
+                        total_len += str_len;
+                        part_count++;
+                    }
+                    puppet_value_destroy(val);
+                }
+            }
+            
+            // Build final string
+            char *result = puppet_malloc(total_len + 1);
+            size_t pos = 0;
+            for (size_t i = 0; i < part_count; i++) {
+                if (parts[i]) {
+                    size_t len = strlen(parts[i]);
+                    memcpy(result + pos, parts[i], len);
+                    pos += len;
+                    puppet_free(parts[i]);
+                }
+            }
+            result[total_len] = '\0';
+            puppet_free(parts);
+            
+            puppet_value_t *ret = puppet_value_create_string(result, total_len);
+            puppet_free(result);
+            return ret;
         }
             
         default:
