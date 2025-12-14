@@ -561,6 +561,14 @@ node_definition:
         puppet_free($2);
         puppet_free($4);
     }
+    | NODE DQSTRING_LITERAL '{' statement_list '}' {
+        $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
+        $$->type = PUPPET_STMT_NODE;
+        $$->data.node.name = puppet_string_create($2);
+        $$->data.node.body = *$4;
+        puppet_free($2);
+        puppet_free($4);
+    }
     | NODE REGEX '{' statement_list '}' {
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
         $$->type = PUPPET_STMT_NODE;
