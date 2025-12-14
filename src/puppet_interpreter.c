@@ -440,7 +440,28 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
             
         case PUPPET_STMT_RESOURCE:
             printf("Executing resource: %s\n", stmt->data.resource.type.data);
-            // TODO: Implement resource execution
+            
+            // Evaluate resource titles
+            for (size_t i = 0; i < stmt->data.resource.instance_count; i++) {
+                puppet_resource_instance_t *instance = &stmt->data.resource.instances[i];
+                if (instance->title) {
+                    puppet_value_t *title_val = puppet_eval_expr(instance->title, env);
+                    const char *title_str = puppet_value_to_string(title_val);
+                    printf("  Title: %s\n", title_str);
+                    // Don't free title_str - it's internal to title_val
+                    puppet_value_destroy(title_val);
+                    
+                    // Show attributes for this instance
+                    for (size_t j = 0; j < instance->attr_count; j++) {
+                        printf("    %s => ", instance->attributes[j].name.data);
+                        puppet_value_t *attr_val = puppet_eval_expr(instance->attributes[j].value, env);
+                        const char *attr_str = puppet_value_to_string(attr_val);
+                        printf("%s\n", attr_str);
+                        // Don't free attr_str - it's internal to attr_val
+                        puppet_value_destroy(attr_val);
+                    }
+                }
+            }
             break;
             
         default:
