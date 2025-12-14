@@ -19,10 +19,18 @@ EXTRA_DIST = \
     puppet/single_attr.pp \
     puppet/site.pp \
     puppet/system_resources.pp \
-    puppet/template_test.pp
+    puppet/template_test.pp \
+    facts/sample_facts.json \
+    facts/multi_node_facts.json \
+    facts/test_facts_usage.pp \
+    facts/test_single_quotes.pp \
+    facts/simple_test.pp
 
 # Test output directory
-check-local:
+check-local: check-parser check-facts
+	@echo "All tests completed."
+
+check-parser:
 	@echo "Running parser tests..."
 	@$(MKDIR_P) output
 	@total=0; passed=0; \
@@ -39,12 +47,54 @@ check-local:
 		total=$$((total + 1)); \
 	done; \
 	echo; \
-	echo "Test Results: $$passed/$$total tests passed"; \
+	echo "Parser Test Results: $$passed/$$total tests passed"; \
 	if [ $$passed -eq $$total ]; then \
-		echo "🎉 All tests passed!"; \
-		exit 0; \
+		echo "✅ All parser tests passed!"; \
 	else \
-		echo "❌ Some tests failed. Check output/ for details."; \
+		echo "❌ Some parser tests failed. Check output/ for details."; \
+		exit 1; \
+	fi
+
+check-facts:
+	@echo "Running facts system tests..."
+	@$(MKDIR_P) output
+	@total=0; passed=0; \
+	echo "  Testing single-node facts..."; \
+	if $(top_builddir)/src/puppetc --eval --facts $(srcdir)/facts/sample_facts.json \
+	   $(srcdir)/facts/test_facts_usage.pp > output/facts_single.out 2>&1; then \
+		echo "    ✓ Single-node facts test passed"; \
+		passed=$$((passed + 1)); \
+	else \
+		echo "    ✗ Single-node facts test failed"; \
+		sed 's/^/      /' output/facts_single.out; \
+	fi; \
+	total=$$((total + 1)); \
+	echo "  Testing multi-node facts..."; \
+	if $(top_builddir)/src/puppetc --eval --all-nodes --facts $(srcdir)/facts/multi_node_facts.json \
+	   $(srcdir)/facts/test_single_quotes.pp > output/facts_multi.out 2>&1; then \
+		echo "    ✓ Multi-node facts test passed"; \
+		passed=$$((passed + 1)); \
+	else \
+		echo "    ✗ Multi-node facts test failed"; \
+		sed 's/^/      /' output/facts_multi.out; \
+	fi; \
+	total=$$((total + 1)); \
+	echo "  Testing facts with default node..."; \
+	if $(top_builddir)/src/puppetc --eval --facts $(srcdir)/facts/multi_node_facts.json \
+	   $(srcdir)/facts/simple_test.pp > output/facts_default.out 2>&1; then \
+		echo "    ✓ Default node facts test passed"; \
+		passed=$$((passed + 1)); \
+	else \
+		echo "    ✗ Default node facts test failed"; \
+		sed 's/^/      /' output/facts_default.out; \
+	fi; \
+	total=$$((total + 1)); \
+	echo; \
+	echo "Facts Test Results: $$passed/$$total tests passed"; \
+	if [ $$passed -eq $$total ]; then \
+		echo "✅ All facts tests passed!"; \
+	else \
+		echo "❌ Some facts tests failed. Check output/ for details."; \
 		exit 1; \
 	fi
 
@@ -91,4 +141,4 @@ clean-local:
 $(builddir)/output:
 	$(MKDIR_P) $@
 
-.PHONY: check-memory check-asan
+.PHONY: check-parser check-facts check-memory check-asan
