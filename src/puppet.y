@@ -136,7 +136,7 @@ program:
     statement_list {
         parsed_program = puppet_calloc(1, sizeof(puppet_program_t));
         parsed_program->statements = *$1;
-        free($1);
+        puppet_free($1);
     }
     ;
 
@@ -149,8 +149,8 @@ qualified_name:
         strcpy($$, $1);
         strcat($$, "::");
         strcat($$, $3);
-        free($1);
-        free($3);
+        puppet_free($1);
+        puppet_free($3);
     }
     ;
 
@@ -195,21 +195,21 @@ resource_declaration:
     resource_type resource_body {
         $$ = puppet_stmt_create_resource(*$2);
         $$->data.resource.type = puppet_string_create($1);
-        free($1);
-        free($2);
+        puppet_free($1);
+        puppet_free($2);
     }
     | '@' resource_type resource_body {
         $$ = puppet_stmt_create_resource(*$3);
         $$->data.resource.type = puppet_string_create($2);
         $$->data.resource.style = PUPPET_RES_VIRTUAL;
-        free($2);
+        puppet_free($2);
         puppet_free($3);
     }
     | AT2 resource_type resource_body {
         $$ = puppet_stmt_create_resource(*$3);
         $$->data.resource.type = puppet_string_create($2);
         $$->data.resource.style = PUPPET_RES_EXPORTED;
-        free($2);
+        puppet_free($2);
         puppet_free($3);
     }
     ;
@@ -276,7 +276,7 @@ attribute_list:
         $$->attributes = puppet_malloc(sizeof(puppet_attribute_t));
         $$->attributes[0] = *$1;
         $$->count = 1;
-        free($1);
+        puppet_free($1);
     }
     | attribute_list ',' attribute {
         $$ = $1;
@@ -295,7 +295,7 @@ attribute:
         $$ = puppet_calloc(1, sizeof(puppet_attribute_t));
         $$->name = puppet_string_create($1);
         $$->value = $3;
-        free($1);
+        puppet_free($1);
     }
     | REQUIRE_KEYWORD FARROW expression {
         $$ = puppet_calloc(1, sizeof(puppet_attribute_t));
@@ -319,7 +319,7 @@ resource_default:
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
         $$->type = PUPPET_STMT_RESOURCE_DEFAULT;
         $$->data.resource_default.type = puppet_string_create($1);
-        free($1);
+        puppet_free($1);
     }
     ;
 
@@ -338,7 +338,7 @@ resource_collector:
         $$->data.collector.style = PUPPET_RES_NORMAL;
         $$->data.collector.type = puppet_string_create($1);
         $$->data.collector.search_expr = $3;
-        free($1);
+        puppet_free($1);
     }
     | TYPE_NAME LCOLLECT RCOLLECT {
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
@@ -346,7 +346,7 @@ resource_collector:
         $$->data.collector.style = PUPPET_RES_NORMAL;
         $$->data.collector.type = puppet_string_create($1);
         $$->data.collector.search_expr = NULL;
-        free($1);
+        puppet_free($1);
     }
     ;
 
@@ -362,11 +362,11 @@ class_definition:
         if ($4) {
             $$->data.class_def.inherits = puppet_calloc(1, sizeof(puppet_string_t));
             *$$->data.class_def.inherits = puppet_string_create($4);
-            free($4);
+            puppet_free($4);
         }
         $$->data.class_def.body = *$6;
-        free($2);
-        free($6);
+        puppet_free($2);
+        puppet_free($6);
     }
     ;
 
@@ -383,7 +383,7 @@ class_instantiation:
             $$->data.class_instance.arguments = NULL;
             $$->data.class_instance.arg_count = 0;
         }
-        free($3);
+        puppet_free($3);
     }
     ;
 
@@ -405,7 +405,7 @@ parameter_list:
         $$->params = puppet_calloc(1, sizeof(puppet_param_t));
         $$->params[0] = *$1;
         $$->count = 1;
-        free($1);
+        puppet_free($1);
     }
     | parameter_list ',' parameter {
         $$ = $1;
@@ -422,14 +422,14 @@ parameter:
         $$->name = puppet_string_create($1);
         $$->type_constraint = NULL;
         $$->default_value = NULL;
-        free($1);
+        puppet_free($1);
     }
     | VARIABLE '=' expression {
         $$ = puppet_calloc(1, sizeof(puppet_param_t));
         $$->name = puppet_string_create($1);
         $$->type_constraint = NULL;
         $$->default_value = $3;
-        free($1);
+        puppet_free($1);
     }
     | type_expression VARIABLE {
         $$ = puppet_calloc(1, sizeof(puppet_param_t));
@@ -437,7 +437,7 @@ parameter:
         $$->type_constraint = puppet_value_create_string($1->data.variable.data, $1->data.variable.len);
         $$->default_value = NULL;
         puppet_expr_destroy($1);
-        free($2);
+        puppet_free($2);
     }
     | type_expression VARIABLE '=' expression {
         $$ = puppet_calloc(1, sizeof(puppet_param_t));
@@ -445,7 +445,7 @@ parameter:
         $$->type_constraint = puppet_value_create_string($1->data.variable.data, $1->data.variable.len);
         $$->default_value = $4;
         puppet_expr_destroy($1);
-        free($2);
+        puppet_free($2);
     }
     ;
 
@@ -459,8 +459,8 @@ define_definition:
             puppet_free($3);
         }
         $$->data.define.body = *$5;
-        free($2);
-        free($5);
+        puppet_free($2);
+        puppet_free($5);
     }
     ;
 
@@ -470,23 +470,23 @@ node_definition:
         $$->type = PUPPET_STMT_NODE;
         $$->data.node.name = puppet_string_create($2);
         $$->data.node.body = *$4;
-        free($2);
-        free($4);
+        puppet_free($2);
+        puppet_free($4);
     }
     | NODE REGEX '{' statement_list '}' {
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
         $$->type = PUPPET_STMT_NODE;
         $$->data.node.name = puppet_string_create($2);
         $$->data.node.body = *$4;
-        free($2);
-        free($4);
+        puppet_free($2);
+        puppet_free($4);
     }
     | NODE DEFAULT '{' statement_list '}' {
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
         $$->type = PUPPET_STMT_NODE;
         $$->data.node.name = puppet_string_create("default");
         $$->data.node.body = *$4;
-        free($4);
+        puppet_free($4);
     }
     ;
 
@@ -500,7 +500,7 @@ if_statement:
         first->next = $6;
         $$->data.if_stmt.branches = first;
         $$->data.if_stmt.else_body = NULL;
-        free($4);
+        puppet_free($4);
     }
     | IF expression '{' statement_list '}' elsif_clauses ELSE '{' statement_list '}' {
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
@@ -511,7 +511,7 @@ if_statement:
         first->next = $6;
         $$->data.if_stmt.branches = first;
         $$->data.if_stmt.else_body = $9;
-        free($4);
+        puppet_free($4);
     }
     ;
 
@@ -522,7 +522,7 @@ elsif_clauses:
         branch->condition = $3;
         branch->body = *$5;
         branch->next = NULL;
-        free($5);
+        puppet_free($5);
         
         if ($1 == NULL) {
             $$ = branch;
@@ -541,7 +541,7 @@ unless_statement:
         $$->type = PUPPET_STMT_UNLESS;
         $$->data.unless_stmt.condition = $2;
         $$->data.unless_stmt.body = *$4;
-        free($4);
+        puppet_free($4);
     }
     ;
 
@@ -573,7 +573,7 @@ case_when:
 assignment_statement:
     VARIABLE '=' expression {
         $$ = puppet_stmt_create_assignment($1, $3);
-        free($1);
+        puppet_free($1);
     }
     ;
 
@@ -583,7 +583,7 @@ append_statement:
         $$->type = PUPPET_STMT_APPEND;
         $$->data.append.variable = puppet_string_create($1);
         $$->data.append.value = $3;
-        free($1);
+        puppet_free($1);
     }
     ;
 
@@ -596,7 +596,7 @@ function_statement:
         $$->data.expr->data.funcall.name = puppet_string_create($1);
         $$->data.expr->data.funcall.args.count = 0;
         $$->data.expr->data.funcall.args.exprs = NULL;
-        free($1);
+        puppet_free($1);
     }
     | NAME '(' expression_list ')' {
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
@@ -605,7 +605,7 @@ function_statement:
         $$->data.expr->type = PUPPET_EXPR_FUNCALL;
         $$->data.expr->data.funcall.name = puppet_string_create($1);
         $$->data.expr->data.funcall.args = *$3;
-        free($1);
+        puppet_free($1);
         puppet_free($3);
     }
     ;
@@ -636,7 +636,7 @@ include_statement:
         $$->data.names.exprs[0]->type = PUPPET_EXPR_VALUE;
         $$->data.names.exprs[0]->data.value = puppet_value_create_string($2, strlen($2));
         $$->data.names.count = 1;
-        free($2);
+        puppet_free($2);
     }
     ;
 
@@ -649,7 +649,7 @@ require_statement:
         $$->data.names.exprs[0]->type = PUPPET_EXPR_VALUE;
         $$->data.names.exprs[0]->data.value = puppet_value_create_string($2, strlen($2));
         $$->data.names.count = 1;
-        free($2);
+        puppet_free($2);
     }
     ;
 
@@ -662,7 +662,7 @@ contain_statement:
         $$->data.names.exprs[0]->type = PUPPET_EXPR_VALUE;
         $$->data.names.exprs[0]->data.value = puppet_value_create_string($2, strlen($2));
         $$->data.names.count = 1;
-        free($2);
+        puppet_free($2);
     }
     ;
 
@@ -691,9 +691,9 @@ literal_expression:
 value:
     BOOLEAN { $$ = puppet_value_create_bool($1); }
     | NUMBER { $$ = puppet_value_create_number($1); }
-    | STRING_LITERAL { $$ = puppet_value_create_string($1, strlen($1)); free($1); }
-    | DQSTRING_LITERAL { $$ = puppet_value_create_string($1, strlen($1)); free($1); }
-    | NAME { $$ = puppet_value_create_string($1, strlen($1)); free($1); }
+    | STRING_LITERAL { $$ = puppet_value_create_string($1, strlen($1)); puppet_free($1); }
+    | DQSTRING_LITERAL { $$ = puppet_value_create_string($1, strlen($1)); puppet_free($1); }
+    | NAME { $$ = puppet_value_create_string($1, strlen($1)); puppet_free($1); }
     | UNDEF { $$ = puppet_value_create_undef(); }
     | array_value { $$ = $1; }
     | hash_value { $$ = $1; }
@@ -701,7 +701,7 @@ value:
         $$ = puppet_calloc(1, sizeof(puppet_value_t));
         $$->type = PUPPET_VALUE_REGEXP;
         $$->data.regexp = puppet_string_create($1);
-        free($1);
+        puppet_free($1);
     }
     ;
 
@@ -731,7 +731,7 @@ hash_pair:
     ;
 
 variable_expression:
-    VARIABLE { $$ = puppet_expr_create_variable($1); free($1); }
+    VARIABLE { $$ = puppet_expr_create_variable($1); puppet_free($1); }
     ;
 
 funcall_expression:
@@ -743,7 +743,7 @@ funcall_expression:
             $$->data.funcall.args = *$3;
             puppet_free($3);
         }
-        free($1);
+        puppet_free($1);
     }
     /* Commented out to fix ambiguity with commas
     | NAME funcall_args {
@@ -752,9 +752,9 @@ funcall_expression:
         $$->data.funcall.name = puppet_string_create($1);
         if ($2) {
             $$->data.funcall.args = *$2;
-            free($2);
+            puppet_free($2);
         }
-        free($1);
+        puppet_free($1);
     }
     */
     ;
@@ -870,11 +870,11 @@ lambda_expression:
         puppet_lambda_t *lambda = puppet_calloc(1, sizeof(puppet_lambda_t));
         if ($2) {
             lambda->params = *$2;
-            free($2);
+            puppet_free($2);
         }
         /* TODO: Convert statements to expressions */
         $$->data.lambda = lambda;
-        free($5);
+        puppet_free($5);
     }
     ;
 
@@ -884,23 +884,23 @@ resource_reference:
         $$->type = PUPPET_EXPR_RESOURCE_REF;
         $$->data.resource_ref.type = puppet_string_create($1);
         $$->data.resource_ref.title = $3;
-        free($1);
+        puppet_free($1);
     }
     | CLASSREF '[' expression ']' {
         $$ = puppet_calloc(1, sizeof(puppet_expr_t));
         $$->type = PUPPET_EXPR_RESOURCE_REF;
         $$->data.resource_ref.type = puppet_string_create($1);
         $$->data.resource_ref.title = $3;
-        free($1);
+        puppet_free($1);
     }
     ;
 
 type_expression:
-    TYPE_NAME { $$ = puppet_expr_create_variable($1); free($1); }
+    TYPE_NAME { $$ = puppet_expr_create_variable($1); puppet_free($1); }
     | TYPE_NAME '[' expression_list ']' {
         /* TODO: Implement parameterized types */
         $$ = puppet_expr_create_variable($1); 
-        free($1);
+        puppet_free($1);
     }
     ;
 

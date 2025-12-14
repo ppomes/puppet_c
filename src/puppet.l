@@ -27,6 +27,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "puppet_ast.h"
+#include "puppet_memory.h"
 #include "puppet.tab.h"
 
 static char *string_buf;
@@ -119,8 +120,8 @@ NON_WORD    [^a-zA-Z0-9_]
 "<|"                    { return LCOLLECT; }
 "|>"                    { return RCOLLECT; }
 
-"$"{WORD}+              { yylval.string = strdup(yytext + 1); return VARIABLE; }
-"$""::"?({WORD}+"::")*{WORD}+ { yylval.string = strdup(yytext + 1); return VARIABLE; }
+"$"{WORD}+              { yylval.string = puppet_strdup(yytext + 1); return VARIABLE; }
+"$""::"?({WORD}+"::")*{WORD}+ { yylval.string = puppet_strdup(yytext + 1); return VARIABLE; }
 
 "if"                    { return IF; }
 "elsif"                 { return ELSIF; }
@@ -164,8 +165,8 @@ NON_WORD    [^a-zA-Z0-9_]
 "0x"{HEXDIGIT}+         { yylval.number = strtol(yytext + 2, NULL, 16); return NUMBER; }
 "0"{OCTALDIGIT}+        { yylval.number = strtol(yytext + 1, NULL, 8); return NUMBER; }
 
-{LOWERCASE}{WORD}*      { yylval.string = strdup(yytext); return NAME; }
-{UPPERCASE}{WORD}*      { yylval.string = strdup(yytext); return CLASSREF; }
+{LOWERCASE}{WORD}*      { yylval.string = puppet_strdup(yytext); return NAME; }
+{UPPERCASE}{WORD}*      { yylval.string = puppet_strdup(yytext); return CLASSREF; }
 "::"                    { return COLONCOLON; }
 
 \'                      { string_buf_init(); BEGIN(STRING); }
@@ -215,7 +216,10 @@ NON_WORD    [^a-zA-Z0-9_]
 
 "/"[^/\n\* \t]([^/\n]*[^/\n\\])?"/"{NON_WORD} {
     yyless(yyleng - 1);
-    yylval.string = strndup(yytext + 1, yyleng - 2);
+    char *tmp = puppet_malloc(yyleng - 1);
+    memcpy(tmp, yytext + 1, yyleng - 2);
+    tmp[yyleng - 2] = '\0';
+    yylval.string = tmp;
     return REGEX;
 }
 
@@ -225,7 +229,7 @@ NON_WORD    [^a-zA-Z0-9_]
 
 static void string_buf_init(void) {
     string_buf_size = 256;
-    string_buf = malloc(string_buf_size);
+    string_buf = puppet_malloc(string_buf_size);
     string_buf_len = 0;
 }
 
@@ -233,7 +237,7 @@ static void string_buf_append(const char *str, int len) {
     if (string_buf_len + len + 1 > string_buf_size) {
         while (string_buf_len + len + 1 > string_buf_size)
             string_buf_size *= 2;
-        string_buf = realloc(string_buf, string_buf_size);
+        string_buf = puppet_realloc(string_buf, string_buf_size);
     }
     memcpy(string_buf + string_buf_len, str, len);
     string_buf_len += len;
