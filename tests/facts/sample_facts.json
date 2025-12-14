@@ -1,0 +1,45 @@
+{
+  "hostname": "web01",
+  "fqdn": "web01.example.com",
+  "operatingsystem": "Ubuntu",
+  "operatingsystemrelease": "20.04",
+  "architecture": "x86_64",
+  "kernel": "Linux",
+  "kernelversion": "5.4.0",
+  "uptime": "7 days",
+  "timezone": "UTC",
+  "networking": {
+    "fqdn": "web01.example.com", 
+    "hostname": "web01",
+    "domain": "example.com",
+    "interfaces": {
+      "eth0": {
+        "ip": "192.168.1.100",
+        "netmask": "255.255.255.0",
+        "mac": "00:16:3e:12:34:56"
+      },
+      "lo": {
+        "ip": "127.0.0.1",
+        "netmask": "255.0.0.0"
+      }
+    }
+  },
+  "memory": {
+    "system": {
+      "total": "4.00 GiB",
+      "available": "2.50 GiB",
+      "used": "1.50 GiB"
+    },
+    "swap": {
+      "total": "2.00 GiB",
+      "used": "0 bytes"
+    }
+  },
+  "processors": {
+    "count": 4,
+    "models": ["Intel(R) Core(TM) i5-8400 CPU @ 2.80GHz"]
+  },
+  "environment": "production",
+  "role": "webserver",
+  "datacenter": "us-east-1"
+}

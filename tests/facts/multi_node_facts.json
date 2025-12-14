@@ -1,0 +1,59 @@
+[
+  {
+    "certname": "web01.example.com",
+    "environment": "production",
+    "facts": {
+      "hostname": "web01",
+      "operatingsystem": "Ubuntu",
+      "operatingsystemrelease": "20.04",
+      "role": "webserver",
+      "datacenter": "us-east-1",
+      "memory": {
+        "system": {
+          "total": "4.00 GiB"
+        }
+      },
+      "processors": {
+        "count": 4
+      }
+    }
+  },
+  {
+    "certname": "db01.example.com", 
+    "environment": "production",
+    "facts": {
+      "hostname": "db01",
+      "operatingsystem": "CentOS",
+      "operatingsystemrelease": "8.3",
+      "role": "database",
+      "datacenter": "us-west-1",
+      "memory": {
+        "system": {
+          "total": "8.00 GiB"
+        }
+      },
+      "processors": {
+        "count": 8
+      }
+    }
+  },
+  {
+    "certname": "default",
+    "environment": "development",
+    "facts": {
+      "hostname": "default",
+      "operatingsystem": "Ubuntu",
+      "operatingsystemrelease": "22.04",
+      "role": "unknown",
+      "datacenter": "local",
+      "memory": {
+        "system": {
+          "total": "2.00 GiB"
+        }
+      },
+      "processors": {
+        "count": 2
+      }
+    }
+  }
+]

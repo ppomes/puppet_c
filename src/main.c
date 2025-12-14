@@ -45,6 +45,7 @@ static void print_usage(const char *program_name) {
     printf("  -m, --modules     Path to modules directory (default: ./modules)\n");
     printf("  -n, --node        Execute only the specified node\n");
     printf("  -a, --all-nodes   Execute all nodes (default: only 'default' node)\n");
+    printf("  -f, --facts       Load facts from JSON file (facter or PuppetDB format)\n");
     printf("  -h, --help        Show this help message\n");
     printf("\nWhen a directory is provided, site.pp will be loaded from manifests/\n");
     printf("and modules will be loaded from modules/ subdirectory.\n");
@@ -64,6 +65,7 @@ int main(int argc, char *argv[]) {
     char *modules_path = NULL;
     char *node_name = NULL;
     int all_nodes = 0;
+    char *facts_file = NULL;
     int opt;
     
     static struct option long_options[] = {
@@ -73,11 +75,12 @@ int main(int argc, char *argv[]) {
         {"modules", required_argument, 0, 'm'},
         {"node", required_argument, 0, 'n'},
         {"all-nodes", no_argument, 0, 'a'},
+        {"facts", required_argument, 0, 'f'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
     
-    while ((opt = getopt_long(argc, argv, "jeo:m:n:ahd", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "jeo:m:n:af:hd", long_options, NULL)) != -1) {
         switch (opt) {
             case 'j':
                 json_output = 1;
@@ -96,6 +99,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'a':
                 all_nodes = 1;
+                break;
+            case 'f':
+                facts_file = optarg;
                 break;
             case 'h':
                 print_usage(argv[0]);
@@ -228,6 +234,26 @@ int main(int argc, char *argv[]) {
                 printf("Executing node: %s\n", node_name);
             } else {
                 printf("Executing default node only.\n");
+            }
+            
+            /* Load facts if specified */
+            if (facts_file) {
+                printf("Loading facts from: %s\n", facts_file);
+                puppet_facts_db_t *facts_db = puppet_facts_db_create();
+                if (puppet_facts_db_load_file(facts_db, facts_file) == 0) {
+                    puppet_env_set_facts_db(env, facts_db);
+                    printf("Facts loaded successfully.\n");
+                    
+                    /* If node is specified, set it as current in facts */
+                    if (node_name) {
+                        if (puppet_facts_db_set_current_node(facts_db, node_name) == 0) {
+                            printf("Using facts for node: %s\n", node_name);
+                        }
+                    }
+                } else {
+                    printf("Warning: Failed to load facts from %s\n", facts_file);
+                    puppet_facts_db_destroy(facts_db);
+                }
             }
             
             puppet_exec_program(program, env);

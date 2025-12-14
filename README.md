@@ -10,21 +10,26 @@ This implementation is feature-complete for core Puppet language parsing:
 - ✅ Full parser grammar (bison) supporting all major Puppet syntax
 - ✅ String interpolation and complex expressions
 - ✅ Resource references, trailing commas, keyword attributes
-- ✅ Define statements with parameter lists
+- ✅ Define statements with parameter lists and defaults
 - ✅ Class definitions, includes, and inheritance
+- ✅ **Class instantiation with parameters and defaults (`class { 'name': param => value }`)**
+- ✅ **Enhanced variable system with lookup chain (Local → Class → Node → Global → Facts → Hiera)**
+- ✅ **Facts loading from JSON files with --facts option (facter and PuppetDB formats)**
+- ✅ **Comprehensive memory management with leak detection**
 - ✅ AST data structures with complete coverage
 - ✅ JSON serialization of parsed manifests
 - ✅ Command-line interface with options
-- ✅ Comprehensive test suite (17 test files, all passing)
-- ✅ Interpreter/evaluator with variable scoping
+- ✅ Comprehensive test suite (25+ test files, all passing)
+- ✅ Interpreter/evaluator with advanced variable scoping
 - ✅ ERB template support with Ruby integration
 - ✅ Template function for manifest evaluation
-- ✅ **Module autoloading system (NEW)**
-- ✅ **Directory-based execution with site.pp support (NEW)**
-- ✅ **Include statement with automatic class loading (NEW)**
+- ✅ **Module autoloading system**
+- ✅ **Directory-based execution with site.pp support**
+- ✅ **Include statement with automatic class loading**
+- ✅ **Data provider interface for Hiera integration (infrastructure ready)**
 - ⏳ Standard library functions (partial implementation)
 - ⏳ PuppetDB integration (not yet implemented)
-- ⏳ Hiera support (not yet implemented)
+- ⏳ Full Hiera backend implementation (infrastructure complete)
 
 ## Building
 
@@ -72,6 +77,11 @@ Manifest evaluation with variables:
 ./bin/puppetc --eval manifest.pp
 ```
 
+Evaluation with facts loading:
+```bash
+./bin/puppetc --eval --facts facts.json manifest.pp
+```
+
 ### Directory Mode (Module Support)
 
 Parse a Puppet directory structure:
@@ -87,6 +97,11 @@ This will:
 Evaluate with module loading:
 ```bash
 ./bin/puppetc --eval /path/to/puppet/code
+```
+
+With facts and modules:
+```bash
+./bin/puppetc --eval --facts facts.json /path/to/puppet/code
 ```
 
 Custom modules path:
@@ -128,19 +143,44 @@ Help:
 
 ## Testing
 
-The parser includes a comprehensive test suite with 17 test files covering all major Puppet language features:
+The parser includes a comprehensive test suite with 25+ test files covering all major Puppet language features:
 
 ```bash
 make test
 ```
 
-This runs all tests and provides detailed pass/fail reporting. Tests are organized in the `tests/puppet/` directory and cover:
+### Variable System Tests
+
+Enhanced variable system with dedicated test runner:
+
+```bash
+./run_variable_tests.sh
+```
+
+This runs specialized tests for:
+- Variable scoping and lookup chain
+- Class instantiation with parameters
+- Default parameter handling
+- Variable arithmetic and expressions
+- Edge cases and error handling
+
+### Core Language Tests
+
+Standard language tests in `tests/puppet/` directory:
+
+```bash
+make test
+```
+
+Covers:
 - Basic resources and classes
 - Complex Apache module configurations  
 - String interpolation and expressions
 - ERB template processing
 - Define statements with parameters
 - Resource references and collections
+- Class instantiation syntax
+- Advanced variable resolution
 
 For unit tests:
 ```bash
@@ -154,10 +194,11 @@ The implementation follows a traditional compiler architecture:
 1. **Lexer** (`puppet.l`) - Tokenizes Puppet source code
 2. **Parser** (`puppet.y`) - Builds an AST from tokens
 3. **AST** (`puppet_ast.h/c`) - Represents the program structure
-4. **Interpreter** (`puppet_interpreter.h/c`) - Evaluates the AST with variable scoping
+4. **Interpreter** (`puppet_interpreter.h/c`) - Evaluates the AST with variable scoping and facts integration
 5. **Module Loader** (`puppet_loader.h/c`) - Handles module autoloading and class resolution
-6. **ERB Integration** (`puppet_erb.h/c`) - Ruby template processing with fallback
-7. **Runtime** - Provides built-in functions and resource management
+6. **Facts System** (`puppet_json_parser.h/c`) - JSON facts loading from facter and PuppetDB formats
+7. **ERB Integration** (`puppet_erb.h/c`) - Ruby template processing with fallback
+8. **Runtime** - Provides built-in functions and resource management
 
 ### Module Loading System
 
@@ -191,14 +232,25 @@ See `docs/ERB_ARCHITECTURE.md` for detailed technical documentation.
 
 This parser has been significantly enhanced and now successfully parses complex Puppet manifests:
 
+### Core Language Features
+- **Class Instantiation**: Full `class { 'name': param => value }` syntax with parameter matching
+- **Enhanced Variable System**: Complete lookup chain supporting Local → Class → Node → Global → Facts → Data Provider scopes
+- **Facts Loading**: JSON facts support for both facter and PuppetDB formats with `--facts` command-line option
+- **Default Parameters**: Support for default values in class and define parameters
+- **Advanced Memory Management**: Comprehensive tracking and leak detection throughout the codebase
+
+### Module and Loading System
 - **Module Autoloading**: Full support for Puppet's standard directory structure with automatic class loading
 - **Directory Mode**: Can now process entire Puppet code directories, not just single files
 - **Include Statement**: Functional `include` statements that load classes from modules on demand
 - **Complete Apache Module Support**: Successfully parses 154-line Apache configuration with all advanced features
+
+### Infrastructure and Quality
 - **Enhanced Parser Grammar**: Fixed parsing of trailing commas, string interpolation, and resource references
-- **Robust Test Suite**: All 17 test cases pass, covering real-world Puppet scenarios
+- **Robust Test Suite**: 25+ test cases pass, including specialized variable system tests
+- **Data Provider Interface**: Infrastructure ready for Hiera integration and external data sources
 - **Proper Git Hygiene**: Binary files removed from tracking, comprehensive .gitignore
-- **Organized Project Structure**: Tests properly organized in `tests/` directory structure
+- **Organized Project Structure**: Tests properly organized with dedicated test runners
 
 ## Next Steps
 
@@ -212,10 +264,40 @@ The remaining work includes:
 
 ## Examples
 
+### Facts Loading and Usage
+
+Create a facts file (`facts.json`):
+```json
+{
+  "hostname": "web01",
+  "operatingsystem": "Ubuntu",
+  "operatingsystemrelease": "20.04",
+  "architecture": "x86_64",
+  "environment": "production"
+}
+```
+
+Puppet manifest using facts (`manifest.pp`):
+```puppet
+# Facts are automatically available as variables
+if $operatingsystem == "Ubuntu" {
+  $package_name = "apache2"
+} else {
+  $package_name = "httpd"
+}
+
+$deployment_info = "Deploying to ${hostname} running ${operatingsystem} ${operatingsystemrelease}"
+```
+
+Run with facts:
+```bash
+./bin/puppetc --eval --facts facts.json manifest.pp
+```
+
 ### Basic Puppet Class
 
 ```puppet
-class apache {
+class apache($port = 80, $ssl = false, $workers = 2) {
   package { 'httpd':
     ensure => installed,
   }
@@ -224,9 +306,19 @@ class apache {
     ensure  => running,
     require => Package['httpd'],
   }
+  
+  # Use class parameters
+  file { '/etc/httpd/conf.d/port.conf':
+    content => "Listen ${port}\n",
+  }
 }
 
-include apache
+# Class instantiation with parameters
+class { 'apache':
+  port    => 8080,
+  ssl     => true,
+  workers => 4,
+}
 ```
 
 ### ERB Template Usage

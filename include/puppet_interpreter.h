@@ -64,6 +64,26 @@ typedef struct puppet_data_provider {
 } puppet_data_provider_t;
 
 /**
+ * @brief Facts storage for a single node
+ */
+typedef struct puppet_node_facts {
+    char *certname;               /**< Node certificate name */
+    char *environment;            /**< Node environment (optional) */
+    puppet_hash_t *facts;         /**< Fact name → value mapping */
+} puppet_node_facts_t;
+
+/**
+ * @brief Facts database for multiple nodes
+ */
+typedef struct puppet_facts_db {
+    puppet_node_facts_t *nodes;   /**< Array of node facts */
+    size_t node_count;           /**< Number of nodes */
+    size_t node_capacity;        /**< Node array capacity */
+    puppet_hash_t *node_index;   /**< certname → node_facts mapping for fast lookup */
+    char *current_node;          /**< Currently selected node (if any) */
+} puppet_facts_db_t;
+
+/**
  * @brief Variable scope for lexical scoping
  * 
  * Implements lexical scoping for Puppet variables. Each scope contains
@@ -106,6 +126,9 @@ typedef struct puppet_env {
     puppet_stmt_t **class_definitions;        /**< Array of class definition statements */
     size_t class_def_count;                   /**< Number of registered class definitions */
     size_t class_def_capacity;                /**< Class definition array capacity */
+    
+    /* Facts database */
+    puppet_facts_db_t *facts_db;              /**< Facts database for node-specific facts */
 } puppet_env_t;
 
 /*
@@ -143,6 +166,14 @@ puppet_data_provider_t *puppet_get_data_provider(puppet_env_t *env, const char *
 /* Class definition management */
 int puppet_register_class_def(puppet_env_t *env, puppet_stmt_t *class_def);
 puppet_stmt_t *puppet_find_class_def(puppet_env_t *env, const char *class_name);
+
+/* Facts database management */
+puppet_facts_db_t *puppet_facts_db_create(void);
+void puppet_facts_db_destroy(puppet_facts_db_t *facts_db);
+int puppet_facts_db_load_file(puppet_facts_db_t *facts_db, const char *filepath);
+int puppet_facts_db_set_current_node(puppet_facts_db_t *facts_db, const char *certname);
+puppet_value_t *puppet_facts_get(puppet_env_t *env, const char *fact_name);
+int puppet_env_set_facts_db(puppet_env_t *env, puppet_facts_db_t *facts_db);
 
 /* Expression evaluation */
 puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env);

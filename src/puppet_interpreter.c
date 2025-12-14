@@ -29,6 +29,9 @@ puppet_env_t *puppet_env_create(void) {
     env->class_definitions = puppet_calloc(env->class_def_capacity, sizeof(puppet_stmt_t*));
     env->class_def_count = 0;
     
+    /* Initialize facts database */
+    env->facts_db = NULL;
+    
     return env;
 }
 
@@ -58,6 +61,11 @@ void puppet_env_destroy(puppet_env_t *env) {
     
     // Clean up class definition registry (don't destroy statements, they're owned by AST)
     puppet_free(env->class_definitions);
+    
+    // Clean up facts database
+    if (env->facts_db) {
+        puppet_facts_db_destroy(env->facts_db);
+    }
     
     puppet_free(env->scope_stack);
     puppet_free(env->node_name);
@@ -521,6 +529,15 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
     if (should_execute) {
         printf("Executing node: %s\n", node_name);
         
+        /* Switch to node-specific facts if available */
+        if (env->facts_db) {
+            if (puppet_facts_db_set_current_node(env->facts_db, node_name) == 0) {
+                printf("Using facts for node: %s\n", node_name);
+            } else {
+                printf("No facts found for node %s, using default facts\n", node_name);
+            }
+        }
+        
         /* Create a new scope for the node */
         puppet_scope_t *node_scope = puppet_scope_create(env->current_scope, node_name);
         puppet_scope_push(env, node_scope);
@@ -752,7 +769,13 @@ puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name
         if (value) return value;
     }
     
-    // 5. Data providers (Hiera, external data sources)
+    // 5. Facts lookup (check for direct fact access)
+    if (env->facts_db) {
+        value = puppet_facts_get(env, name);
+        if (value) return value;
+    }
+    
+    // 6. Data providers (Hiera, external data sources)
     for (size_t i = 0; i < env->data_provider_count; i++) {
         puppet_data_provider_t *provider = env->data_providers[i];
         if (provider && provider->lookup) {
@@ -761,7 +784,7 @@ puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name
         }
     }
     
-    // 6. Not found
+    // 7. Not found
     return NULL;
 }
 
@@ -930,4 +953,303 @@ puppet_data_provider_t *puppet_get_data_provider(puppet_env_t *env, const char *
     }
     
     return NULL;
+}
+
+/*
+ * ===========================================================================
+ * FACTS DATABASE IMPLEMENTATION
+ * ===========================================================================
+ */
+
+#include "puppet_json_parser.h"
+
+puppet_facts_db_t *puppet_facts_db_create(void) {
+    puppet_facts_db_t *facts_db = puppet_calloc(1, sizeof(puppet_facts_db_t));
+    facts_db->node_count = 0;
+    facts_db->node_capacity = 4;
+    facts_db->nodes = puppet_calloc(facts_db->node_capacity, sizeof(puppet_node_facts_t));
+    facts_db->node_index = puppet_calloc(1, sizeof(puppet_hash_t));
+    facts_db->node_index->bucket_count = 16;
+    facts_db->node_index->buckets = puppet_calloc(facts_db->node_index->bucket_count, sizeof(puppet_hash_entry_t*));
+    facts_db->current_node = NULL;
+    
+    return facts_db;
+}
+
+void puppet_facts_db_destroy(puppet_facts_db_t *facts_db) {
+    if (!facts_db) return;
+    
+    // Clean up nodes
+    for (size_t i = 0; i < facts_db->node_count; i++) {
+        puppet_node_facts_t *node = &facts_db->nodes[i];
+        puppet_free(node->certname);
+        puppet_free(node->environment);
+        
+        // Clean up facts hash table
+        if (node->facts) {
+            for (size_t j = 0; j < node->facts->bucket_count; j++) {
+                puppet_hash_entry_t *entry = node->facts->buckets[j];
+                while (entry) {
+                    puppet_hash_entry_t *next = entry->next;
+                    puppet_string_free(entry->key);
+                    puppet_value_destroy(entry->value);
+                    puppet_free(entry);
+                    entry = next;
+                }
+            }
+            puppet_free(node->facts->buckets);
+            puppet_free(node->facts);
+        }
+    }
+    puppet_free(facts_db->nodes);
+    
+    // Clean up node index
+    for (size_t i = 0; i < facts_db->node_index->bucket_count; i++) {
+        puppet_hash_entry_t *entry = facts_db->node_index->buckets[i];
+        while (entry) {
+            puppet_hash_entry_t *next = entry->next;
+            puppet_string_free(entry->key);
+            puppet_value_destroy(entry->value); // Safe to destroy index values
+            puppet_free(entry);
+            entry = next;
+        }
+    }
+    puppet_free(facts_db->node_index->buckets);
+    puppet_free(facts_db->node_index);
+    
+    puppet_free(facts_db->current_node);
+    puppet_free(facts_db);
+}
+
+static int puppet_facts_db_add_node(puppet_facts_db_t *facts_db, const char *certname, const char *environment) {
+    if (!facts_db || !certname) return -1;
+    
+    // Expand array if needed
+    if (facts_db->node_count >= facts_db->node_capacity) {
+        facts_db->node_capacity *= 2;
+        facts_db->nodes = puppet_realloc(facts_db->nodes, facts_db->node_capacity * sizeof(puppet_node_facts_t));
+    }
+    
+    // Initialize new node
+    puppet_node_facts_t *node = &facts_db->nodes[facts_db->node_count];
+    node->certname = puppet_strdup(certname);
+    node->environment = environment ? puppet_strdup(environment) : NULL;
+    node->facts = puppet_calloc(1, sizeof(puppet_hash_t));
+    node->facts->bucket_count = 16;
+    node->facts->buckets = puppet_calloc(node->facts->bucket_count, sizeof(puppet_hash_entry_t*));
+    
+    // Add to index (store array index as number)
+    puppet_value_t *index_value = puppet_value_create_number((double)facts_db->node_count);
+    puppet_hash_set(facts_db->node_index, certname, strlen(certname), index_value);
+    
+    facts_db->node_count++;
+    return 0;
+}
+
+static void puppet_facts_add_fact(puppet_node_facts_t *node, const char *fact_name, json_value_t *json_val) {
+    if (!node || !fact_name || !json_val) return;
+    
+    puppet_value_t *puppet_val = json_value_to_puppet_value(json_val);
+    puppet_hash_set(node->facts, fact_name, strlen(fact_name), puppet_val);
+}
+
+static void puppet_facts_process_object(puppet_node_facts_t *node, const char *prefix, json_value_t *obj) {
+    if (!node || !obj || obj->type != JSON_VALUE_OBJECT) return;
+    
+    for (size_t i = 0; i < obj->data.object.count; i++) {
+        const char *key = obj->data.object.keys[i];
+        json_value_t *value = obj->data.object.values[i];
+        
+        // Create fully qualified fact name
+        char *fact_name;
+        if (prefix && strlen(prefix) > 0) {
+            size_t len = strlen(prefix) + strlen(key) + 2; // +2 for '.' and '\0'
+            fact_name = puppet_malloc(len);
+            snprintf(fact_name, len, "%s.%s", prefix, key);
+        } else {
+            fact_name = puppet_strdup(key);
+        }
+        
+        if (value->type == JSON_VALUE_OBJECT) {
+            // Recursively process nested objects
+            puppet_facts_process_object(node, fact_name, value);
+        } else {
+            // Add leaf fact
+            puppet_facts_add_fact(node, fact_name, value);
+        }
+        
+        // Also add top-level key for direct access (e.g., $os instead of just $os.name)
+        if (!prefix || strlen(prefix) == 0) {
+            puppet_facts_add_fact(node, key, value);
+        }
+        
+        puppet_free(fact_name);
+    }
+}
+
+static int puppet_facts_load_facter_format(puppet_facts_db_t *facts_db, json_value_t *root) {
+    if (!facts_db || !root || root->type != JSON_VALUE_OBJECT) return -1;
+    
+    // Facter format: single object with facts
+    // Determine node name from hostname or use "localhost"
+    json_value_t *hostname_val = json_object_get(root, "hostname");
+    json_value_t *networking = json_object_get(root, "networking");
+    json_value_t *fqdn_val = networking ? json_object_get(networking, "fqdn") : NULL;
+    
+    const char *node_name = "localhost";
+    if (fqdn_val && fqdn_val->type == JSON_VALUE_STRING) {
+        node_name = fqdn_val->data.string_value;
+    } else if (hostname_val && hostname_val->type == JSON_VALUE_STRING) {
+        node_name = hostname_val->data.string_value;
+    }
+    
+    // Add node
+    if (puppet_facts_db_add_node(facts_db, node_name, NULL) < 0) {
+        return -1;
+    }
+    
+    puppet_node_facts_t *node = &facts_db->nodes[facts_db->node_count - 1];
+    
+    // Process all facts
+    puppet_facts_process_object(node, NULL, root);
+    
+    // Set as current node
+    puppet_facts_db_set_current_node(facts_db, node_name);
+    
+    return 0;
+}
+
+static int puppet_facts_load_puppetdb_format(puppet_facts_db_t *facts_db, json_value_t *root) {
+    if (!facts_db || !root || root->type != JSON_VALUE_ARRAY) return -1;
+    
+    // PuppetDB format: array of node objects
+    for (size_t i = 0; i < root->data.array.count; i++) {
+        json_value_t *node_obj = root->data.array.elements[i];
+        if (node_obj->type != JSON_VALUE_OBJECT) continue;
+        
+        json_value_t *certname = json_object_get(node_obj, "certname");
+        json_value_t *environment = json_object_get(node_obj, "environment");
+        json_value_t *facts = json_object_get(node_obj, "facts");
+        
+        if (!certname || certname->type != JSON_VALUE_STRING || !facts) continue;
+        
+        const char *node_name = certname->data.string_value;
+        const char *env_name = (environment && environment->type == JSON_VALUE_STRING) ? 
+                               environment->data.string_value : NULL;
+        
+        // Add node
+        if (puppet_facts_db_add_node(facts_db, node_name, env_name) < 0) {
+            continue;
+        }
+        
+        puppet_node_facts_t *node = &facts_db->nodes[facts_db->node_count - 1];
+        
+        // Process facts object
+        puppet_facts_process_object(node, NULL, facts);
+    }
+    
+    return 0;
+}
+
+int puppet_facts_db_load_file(puppet_facts_db_t *facts_db, const char *filepath) {
+    if (!facts_db || !filepath) return -1;
+    
+    json_value_t *root = json_parse_file(filepath);
+    if (!root) {
+        printf("Error: Failed to parse facts file: %s\n", filepath);
+        return -1;
+    }
+    
+    int result;
+    if (root->type == JSON_VALUE_ARRAY) {
+        // PuppetDB format
+        result = puppet_facts_load_puppetdb_format(facts_db, root);
+    } else if (root->type == JSON_VALUE_OBJECT) {
+        // Facter format
+        result = puppet_facts_load_facter_format(facts_db, root);
+    } else {
+        printf("Error: Unsupported facts file format\n");
+        result = -1;
+    }
+    
+    json_value_destroy(root);
+    return result;
+}
+
+int puppet_facts_db_set_current_node(puppet_facts_db_t *facts_db, const char *certname) {
+    if (!facts_db || !certname) return -1;
+    
+    // Find node index
+    puppet_value_t *index_value = puppet_hash_get(facts_db->node_index, certname, strlen(certname));
+    if (!index_value || index_value->type != PUPPET_VALUE_NUMBER) {
+        printf("Warning: Node '%s' not found in facts database\n", certname);
+        return -1;
+    }
+    
+    size_t index = (size_t)index_value->data.number;
+    if (index >= facts_db->node_count) {
+        printf("Warning: Invalid node index for '%s'\n", certname);
+        return -1;
+    }
+    
+    // Set current node
+    puppet_free(facts_db->current_node);
+    facts_db->current_node = puppet_strdup(certname);
+    
+    return 0;
+}
+
+puppet_value_t *puppet_facts_get(puppet_env_t *env, const char *fact_name) {
+    if (!env || !env->facts_db || !fact_name) {
+        return NULL;
+    }
+    
+    puppet_facts_db_t *facts_db = env->facts_db;
+    if (!facts_db->current_node) {
+        return NULL;
+    }
+    
+    // Find current node by index
+    puppet_value_t *index_value = puppet_hash_get(facts_db->node_index, facts_db->current_node, strlen(facts_db->current_node));
+    if (!index_value || index_value->type != PUPPET_VALUE_NUMBER) {
+        return NULL;
+    }
+    
+    size_t index = (size_t)index_value->data.number;
+    if (index >= facts_db->node_count) {
+        return NULL;
+    }
+    
+    puppet_node_facts_t *node = &facts_db->nodes[index];
+    
+    // Look up fact
+    puppet_value_t *fact_value = puppet_hash_get(node->facts, fact_name, strlen(fact_name));
+    if (!fact_value) {
+        return NULL;
+    }
+    
+    // Return copy to avoid double-free
+    switch (fact_value->type) {
+        case PUPPET_VALUE_UNDEF:
+            return puppet_value_create_undef();
+        case PUPPET_VALUE_BOOL:
+            return puppet_value_create_bool(fact_value->data.boolean);
+        case PUPPET_VALUE_NUMBER:
+            return puppet_value_create_number(fact_value->data.number);
+        case PUPPET_VALUE_STRING:
+            return puppet_value_create_string(fact_value->data.string.data, fact_value->data.string.len);
+        default:
+            return puppet_value_create_undef();
+    }
+}
+
+int puppet_env_set_facts_db(puppet_env_t *env, puppet_facts_db_t *facts_db) {
+    if (!env) return -1;
+    
+    if (env->facts_db) {
+        puppet_facts_db_destroy(env->facts_db);
+    }
+    
+    env->facts_db = facts_db;
+    return 0;
 }

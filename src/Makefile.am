@@ -10,6 +10,7 @@ puppetc_SOURCES = \
     puppet_ast.c \
     puppet_interpreter.c \
     puppet_json.c \
+    puppet_json_parser.c \
     puppet_loader.c \
     puppet_memory.c \
     $(BUILT_SOURCES)
@@ -39,6 +40,7 @@ include_HEADERS = \
     $(top_srcdir)/include/puppet_ast.h \
     $(top_srcdir)/include/puppet_interpreter.h \
     $(top_srcdir)/include/puppet_json.h \
+    $(top_srcdir)/include/puppet_json_parser.h \
     $(top_srcdir)/include/puppet_loader.h \
     $(top_srcdir)/include/puppet_memory.h
 
