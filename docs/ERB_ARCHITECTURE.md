@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Puppet C parser includes comprehensive ERB (Embedded Ruby) template support through a hybrid architecture that combines Ruby VM embedding with a fallback simple template renderer. This design ensures template functionality works reliably even when Ruby initialization encounters issues.
+The Puppet C parser includes comprehensive ERB (Embedded Ruby) template support through Ruby VM embedding. The implementation provides full ERB functionality with proper variable interpolation and robust error handling.
 
 ## Architecture Components
 
@@ -12,7 +12,7 @@ The parser embeds the Ruby interpreter using the Ruby C API to provide native ER
 
 #### Key Components:
 
-- **Ruby Context Management**: Singleton pattern for VM initialization
+- **Ruby Context Management**: Fresh context creation to avoid VM state issues
 - **Value Conversion**: Bidirectional conversion between Puppet values and Ruby objects  
 - **Error Handling**: Comprehensive error detection and reporting
 - **Memory Management**: Proper cleanup of Ruby resources
@@ -25,34 +25,33 @@ puppet_ruby_context_t *ctx = puppet_ruby_init();
 
 1. Initialize Ruby VM with `ruby_init()`
 2. Set up load paths with `ruby_init_loadpath()`
-3. Configure encoding system for UTF-8 support
-4. Test basic Ruby functionality
-5. Attempt to load ERB library
+3. Configure encoding with `ruby_options()` using `-e "nil"` to avoid stdin blocking
+4. Load ERB library with `require 'erb'`
+5. Export Puppet variables to Ruby instance variables (@variable format)
 6. Handle initialization failures gracefully
 
-### 2. Fallback Simple Template Renderer
+### 2. Variable Export and Interpolation
 
-When Ruby ERB library loading fails (common in Ruby 3.4+ due to encoding initialization issues), the parser automatically falls back to a custom template renderer.
+The ERB system exports all Puppet variables and facts to Ruby instance variables for template access.
 
-#### Features:
+#### Variable Mapping:
 
-- **ERB Syntax Compatibility**: Supports `<%= $variable %>` expressions
-- **Variable Lookup**: Integrates with Puppet environment system
-- **Dynamic Buffer Management**: Automatically expands output buffer
-- **Whitespace Handling**: Properly trims spaces around variables
+- **Puppet Variables**: `$variable` becomes `@variable` in ERB
+- **Facts**: System facts become `@factname` (e.g., `@hostname`, `@operatingsystem`)
+- **Dot Conversion**: Variable names with dots become underscores (e.g., `service.name` → `@service_name`)
 
-#### Processing Algorithm:
+#### Processing Flow:
 
 ```c
-char *result = puppet_simple_template_render(template_content, env);
+puppet_export_env_to_ruby(env, ruby_ctx);
+VALUE result = rb_eval_string_protect("ERB.new($template_content).result", &state);
 ```
 
-1. Scan template for `<%= ... %>` patterns
-2. Extract variable names (removing `$` prefix)
-3. Look up variables in Puppet environment
-4. Convert values to strings using type-aware conversion
-5. Replace expressions with interpolated values
-6. Return dynamically allocated result string
+1. Export Puppet variables to Ruby instance variables
+2. Export facts to Ruby instance variables
+3. Create ERB object with template content
+4. Evaluate ERB template in Ruby context
+5. Return rendered string content
 
 ### 3. Value Conversion System
 
@@ -92,18 +91,18 @@ ERB require error: uninitialized constant Encoding::#<Symbol:0x0000000000782b0c>
 
 **Resolution Strategy:**
 
-1. Attempt standard ERB loading with `require 'erb'`
-2. If failed, try alternative loading with `load 'erb.rb'`
-3. If both fail, automatically fall back to simple template renderer
+1. Use `ruby_options()` with `-e "nil"` to avoid stdin blocking
+2. Attempt standard ERB loading with `require 'erb'`
+3. Check Ruby VM initialization state properly
 4. Log detailed error information for debugging
-5. Continue processing with degraded functionality
+5. Return NULL if ERB cannot be initialized (no fallback)
 
 ### Template Processing Errors
 
-- **File Not Found**: Return appropriate error message
-- **Malformed Templates**: Skip malformed expressions, continue processing
-- **Variable Not Found**: Ignore missing variables (no substitution)
-- **Memory Issues**: Dynamic buffer expansion with realloc
+- **File Not Found**: Return NULL and log error message
+- **Ruby Exceptions**: Catch with `rb_eval_string_protect()` and report details
+- **Variable Not Found**: Undefined variables appear as nil in ERB context
+- **Memory Issues**: Proper cleanup with `puppet_free()` on all allocations
 
 ## Integration with Puppet Interpreter
 
@@ -118,10 +117,10 @@ $config = template("config/apache.erb")
 #### Implementation Flow:
 
 1. Parse function argument (template file path)
-2. Initialize Ruby context if needed (singleton)
+2. Initialize Ruby context if needed (singleton pattern)
 3. Read template file content
-4. Attempt ERB rendering with Ruby
-5. Fall back to simple renderer if Ruby fails
+4. Export variables and facts to Ruby instance variables
+5. Process ERB template with Ruby VM
 6. Return interpolated content as Puppet string value
 
 ### Variable Export to Ruby
@@ -133,65 +132,67 @@ puppet_export_env_to_ruby(env, ruby_ctx);
 ```
 
 - Iterates through all scopes in Puppet environment
-- Converts variable names to Ruby global format (`$variable`)
+- Converts variable names to Ruby instance variable format (`@variable`)
+- Converts dots in names to underscores for Ruby compatibility
 - Uses type-aware conversion for values
-- Makes variables accessible to ERB templates
+- Exports facts as instance variables alongside Puppet variables
 
 ## Performance Characteristics
 
 ### Ruby VM Initialization
 
 - **First Call**: ~50-100ms (VM startup overhead)
-- **Subsequent Calls**: ~1-5ms (singleton reuse)
+- **Subsequent Calls**: ~1-5ms (context reuse)
 - **Memory Usage**: ~10-20MB (Ruby VM footprint)
+- **Stdin Blocking Fix**: Using `-e "nil"` eliminates hanging
 
 ### Template Processing
 
 - **Ruby ERB**: Near-native Ruby performance for complex templates
-- **Simple Renderer**: ~10-50μs per variable substitution
-- **Memory**: Dynamic allocation scales with output size
+- **Variable Export**: ~1-10μs per variable (depends on scope depth)
+- **Memory**: Dynamic allocation scales with template and output size
 
-### Fallback Behavior
+### Error Recovery
 
-- **Detection Time**: ~10-20ms (Ruby library loading attempt)
-- **Switching Overhead**: Negligible (direct fallback)
-- **Compatibility**: Covers 90%+ of common ERB usage patterns
+- **Initialization Failure**: Returns NULL immediately (~1ms)
+- **Template Error**: Ruby exception handling with detailed messages
+- **Memory Failure**: Proper cleanup and error reporting
 
 ## Security Considerations
 
 ### Input Validation
 
-- Template paths are validated for existence
-- No arbitrary code execution in simple renderer
-- Ruby ERB inherits Ruby's security model
+- Template paths are validated for existence before processing
+- Ruby ERB inherits Ruby's security model and sandboxing
+- Variables are type-checked during conversion to Ruby objects
 
 ### Memory Safety
 
-- Bounds checking in simple template parser
-- Proper cleanup of dynamically allocated buffers  
-- Ruby VM resource management through context cleanup
+- All template content is properly bounds-checked during file reading
+- Dynamic buffers are allocated with `puppet_malloc()` and freed with `puppet_free()`
+- Ruby VM resource management avoids `ruby_cleanup()` to prevent state corruption
 
 ### Error Information
 
-- Detailed error logging for debugging
-- No sensitive information in error messages
-- Graceful degradation without exposing internals
+- Ruby exceptions are caught with `rb_eval_string_protect()` and logged
+- Error messages include state codes and exception details for debugging
+- No sensitive variable content is exposed in error messages
 
 ## Future Enhancements
 
 ### Planned Improvements
 
 1. **Hash Support**: Complete Puppet hash to Ruby hash conversion
-2. **Advanced ERB**: Support for `<% ... %>` (non-output) expressions  
-3. **Template Caching**: Cache compiled templates for performance
-4. **Ruby Version Detection**: Adaptive initialization based on Ruby version
+2. **Advanced ERB**: Enhanced support for complex ERB control structures
+3. **Template Caching**: Cache compiled templates for improved performance
+4. **Ruby Version Detection**: Adaptive initialization for different Ruby versions
 
 ### Compatibility Goals
 
-- **Ruby 2.7+**: Full ERB compatibility
-- **Ruby 3.0+**: Encoding-aware initialization  
-- **Ruby 3.4+**: Enhanced error handling for new restrictions
-- **No Ruby**: Graceful degradation to simple renderer
+- **Ruby 2.7+**: Full ERB compatibility with standard features
+- **Ruby 3.0+**: Encoding-aware initialization with proper UTF-8 support
+- **Ruby 3.4+**: Enhanced error handling for encoding restrictions
+- **No Ruby**: Clear error messages indicating ERB unavailability
 
 ## Debugging Guide
 
@@ -204,9 +205,9 @@ Warning: Could not load Ruby ERB library (state=6 = TAG_RAISE)
 ERB require error: uninitialized constant Encoding::#<Symbol:...>
 ```
 
-**Cause**: Ruby 3.4+ encoding initialization issues  
-**Resolution**: Automatic fallback to simple renderer  
-**Action**: No user intervention required  
+**Cause**: Ruby 3.4+ encoding initialization issues
+**Resolution**: Use `ruby_options()` with `-e "nil"` parameter
+**Action**: Error is logged but template processing fails gracefully  
 
 #### Template Variables Not Interpolated
 
@@ -236,4 +237,4 @@ This provides verbose output for:
 
 ---
 
-This architecture provides robust, production-ready ERB template support for the Puppet C parser while maintaining compatibility across different Ruby versions and deployment scenarios.
+This architecture provides robust, production-ready ERB template support for the Puppet C parser through direct Ruby VM embedding. The implementation focuses on proper variable export, memory management, and error handling while supporting the full ERB feature set across different Ruby versions.

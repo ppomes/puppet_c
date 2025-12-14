@@ -197,7 +197,7 @@ The implementation follows a traditional compiler architecture:
 4. **Interpreter** (`puppet_interpreter.h/c`) - Evaluates the AST with variable scoping and facts integration
 5. **Module Loader** (`puppet_loader.h/c`) - Handles module autoloading and class resolution
 6. **Facts System** (`puppet_json_parser.h/c`) - JSON facts loading from facter and PuppetDB formats
-7. **ERB Integration** (`puppet_erb.h/c`) - Ruby template processing with fallback
+7. **ERB Integration** (`puppet_erb.h/c`) - Ruby template processing
 8. **Runtime** - Provides built-in functions and resource management
 
 ### Module Loading System
@@ -215,9 +215,9 @@ The parser implements Puppet's standard module autoloading conventions:
 The parser includes comprehensive ERB template support through Ruby C API integration:
 
 - **Ruby VM Embedding**: Initializes Ruby interpreter for full ERB functionality
-- **Fallback Renderer**: Custom template parser when Ruby ERB library fails
-- **Variable Interpolation**: Supports `<%= @variable %>` syntax in templates
-- **Error Handling**: Graceful degradation when Ruby initialization issues occur
+- **Variable Interpolation**: Supports full ERB syntax including `<%= @variable %>` and conditionals
+- **Puppet Integration**: Variables and facts automatically exported to ERB context
+- **Error Handling**: Robust Ruby VM initialization with stdin blocking prevention
 
 See `docs/ERB_ARCHITECTURE.md` for detailed technical documentation.
 
@@ -260,7 +260,7 @@ The remaining work includes:
 2. Adding resource catalog generation and validation  
 3. Integrating with external services (PuppetDB, Hiera)
 4. Performance optimization for large manifests
-5. Enhanced ERB integration with proper Puppet scope handling
+5. Advanced Ruby gem support for extended ERB functionality
 
 ## Examples
 

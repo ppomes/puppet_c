@@ -132,6 +132,9 @@ typedef struct puppet_env {
     
     /* Resource catalog for duplicate detection */
     puppet_hash_t *resource_catalog;          /**< Track declared resources (type::title → true) */
+    
+    /* Template output mode */
+    char *template_output_target;             /**< Resource title to output template for (NULL = disabled) */
 } puppet_env_t;
 
 /*
@@ -202,5 +205,8 @@ void puppet_env_set_loader(puppet_env_t *env, struct puppet_loader *loader);
 /* Node filtering */
 void puppet_env_set_node(puppet_env_t *env, const char *node_name);
 void puppet_env_set_execute_all_nodes(puppet_env_t *env, bool execute_all);
+
+/* Template output */
+void puppet_env_set_template_output(puppet_env_t *env, const char *template_target);
 
 #endif

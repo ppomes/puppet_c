@@ -58,6 +58,9 @@ puppet_env_t *puppet_env_create(void) {
     env->resource_catalog->bucket_count = 64;  /* Start with reasonable size */
     env->resource_catalog->buckets = puppet_calloc(env->resource_catalog->bucket_count, sizeof(puppet_hash_entry_t*));
     
+    /* Initialize template output */
+    env->template_output_target = NULL;
+    
     return env;
 }
 
@@ -112,6 +115,7 @@ void puppet_env_destroy(puppet_env_t *env) {
     
     puppet_free(env->scope_stack);
     puppet_free(env->node_name);
+    puppet_free(env->template_output_target);
     puppet_free(env);
 }
 
@@ -492,12 +496,36 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                     
                     printf("  Title: %s\n", title_str);
                     
+                    // Check if this is the template target for output
+                    bool is_template_target = (env->template_output_target && 
+                                               strcmp(title_str, env->template_output_target) == 0 &&
+                                               strcmp(stmt->data.resource.type.data, "file") == 0);
+                    
                     // Show attributes for this instance
                     for (size_t j = 0; j < instance->attr_count; j++) {
                         printf("    %s => ", instance->attributes[j].name.data);
                         puppet_value_t *attr_val = puppet_eval_expr(instance->attributes[j].value, env);
                         const char *attr_str = puppet_value_to_string(attr_val);
                         printf("%s\n", attr_str);
+                        
+                        // If this is template output mode and we found the content attribute
+                        if (is_template_target && strcmp(instance->attributes[j].name.data, "content") == 0) {
+                            // Check if the expression is a template() function call
+                            puppet_expr_t *content_expr = instance->attributes[j].value;
+                            if (content_expr->type == PUPPET_EXPR_FUNCALL && 
+                                strcmp(content_expr->data.funcall.name.data, "template") == 0) {
+                                
+                                printf("\n=== ERB TEMPLATE OUTPUT ===\n");
+                                printf("%s", attr_val->data.string.data);
+                                printf("\n=== END ERB TEMPLATE OUTPUT ===\n");
+                                
+                            } else if (attr_val->type == PUPPET_VALUE_STRING) {
+                                printf("\n=== STRING CONTENT OUTPUT ===\n");
+                                printf("%s", attr_val->data.string.data);
+                                printf("\n=== END STRING CONTENT OUTPUT ===\n");
+                            }
+                        }
+                        
                         // Don't free attr_str - it's internal to attr_val
                         puppet_value_destroy(attr_val);
                     }
@@ -730,6 +758,13 @@ void puppet_env_set_execute_all_nodes(puppet_env_t *env, bool execute_all) {
         puppet_free(env->node_name);
         env->node_name = NULL;  /* Clear specific node when in all-nodes mode */
     }
+}
+
+void puppet_env_set_template_output(puppet_env_t *env, const char *template_target) {
+    if (!env) return;
+    
+    puppet_free(env->template_output_target);
+    env->template_output_target = template_target ? puppet_strdup(template_target) : NULL;
 }
 
 void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t *env) {

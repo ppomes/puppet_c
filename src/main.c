@@ -46,6 +46,7 @@ static void print_usage(const char *program_name) {
     printf("  -n, --node        Execute only the specified node\n");
     printf("  -a, --all-nodes   Execute all nodes (default: only 'default' node)\n");
     printf("  -f, --facts       Load facts from JSON file (facter or PuppetDB format)\n");
+    printf("  -t, --template    Display template output for file resource with specified title\n");
     printf("  -h, --help        Show this help message\n");
     printf("\nWhen a directory is provided, site.pp will be loaded from manifests/\n");
     printf("and modules will be loaded from modules/ subdirectory.\n");
@@ -66,6 +67,7 @@ int main(int argc, char *argv[]) {
     char *node_name = NULL;
     int all_nodes = 0;
     char *facts_file = NULL;
+    char *template_output = NULL;
     int opt;
     
     static struct option long_options[] = {
@@ -76,11 +78,12 @@ int main(int argc, char *argv[]) {
         {"node", required_argument, 0, 'n'},
         {"all-nodes", no_argument, 0, 'a'},
         {"facts", required_argument, 0, 'f'},
+        {"template", required_argument, 0, 't'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
     
-    while ((opt = getopt_long(argc, argv, "jeo:m:n:af:hd", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "jeo:m:n:af:t:hd", long_options, NULL)) != -1) {
         switch (opt) {
             case 'j':
                 json_output = 1;
@@ -102,6 +105,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'f':
                 facts_file = optarg;
+                break;
+            case 't':
+                template_output = optarg;
                 break;
             case 'h':
                 print_usage(argv[0]);
@@ -127,6 +133,17 @@ int main(int argc, char *argv[]) {
     /* Validate node options */
     if (node_name && all_nodes) {
         fprintf(stderr, "Error: Cannot specify both --node and --all-nodes\n");
+        return 1;
+    }
+    
+    /* Validate template output option */
+    if (template_output && !node_name) {
+        fprintf(stderr, "Error: --template requires --node to be specified\n");
+        return 1;
+    }
+    
+    if (template_output && !eval_mode) {
+        fprintf(stderr, "Error: --template requires --eval mode\n");
         return 1;
     }
     
@@ -234,6 +251,12 @@ int main(int argc, char *argv[]) {
                 printf("Executing node: %s\n", node_name);
             } else {
                 printf("Executing default node only.\n");
+            }
+            
+            /* Set template output target if specified */
+            if (template_output) {
+                puppet_env_set_template_output(env, template_output);
+                printf("Template output mode for resource title: %s\n", template_output);
             }
             
             /* Load facts if specified */

@@ -25,6 +25,9 @@ EXTRA_DIST = \
     puppet/resource_title_facts.pp \
     puppet/duplicate_resource_test.pp \
     puppet/duplicate_multinode_test.pp \
+    puppet/single_line_template_test.pp \
+    puppet/erb_template_test.pp \
+    puppet/apache_vhost_template.erb \
     facts/sample_facts.json \
     facts/multi_node_facts.json \
     facts/test_facts_usage.pp \

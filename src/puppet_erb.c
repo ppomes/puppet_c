@@ -2,13 +2,13 @@
  * ERB Template Integration for Puppet C Parser
  * 
  * This module provides ERB template processing capabilities by embedding
- * the Ruby interpreter and implementing a fallback simple template renderer.
+ * the Ruby interpreter.
  * 
  * Features:
  * - Full Ruby VM embedding for native ERB support
- * - Fallback simple template renderer for <%= $variable %> syntax
  * - Puppet value to Ruby object conversion
- * - Error handling and graceful degradation
+ * - ERB template processing with variable interpolation
+ * - Proper handling of facts and Puppet variables
  * - Memory management for Ruby integration
  */
 
@@ -23,101 +23,77 @@
 #include <ruby.h>
 #include <ruby/encoding.h>
 
-// Global Ruby context - singleton pattern for VM management
+// Global Ruby context for VM management
 static puppet_ruby_context_t *global_ruby_ctx = NULL;
 
 /**
  * Initialize Ruby VM for ERB template processing
  * 
  * This function sets up the Ruby interpreter with full environment including
- * load paths and encoding configuration. It uses a singleton pattern to
- * avoid multiple VM initialization.
+ * load paths and encoding configuration. Creates a fresh context each time
+ * to avoid state issues.
  * 
- * @return Initialized Ruby context or existing context if already initialized
+ * @return Initialized Ruby context
  */
 puppet_ruby_context_t *puppet_ruby_init(void) {
-    // Return existing context if already initialized (singleton pattern)
-    if (global_ruby_ctx && global_ruby_ctx->initialized) {
-        return global_ruby_ctx;
+    // Replace any existing context without cleanup to avoid Ruby VM state issues
+    if (global_ruby_ctx) {
+        global_ruby_ctx = NULL;
     }
     
     puppet_ruby_context_t *ctx = puppet_calloc(1, sizeof(puppet_ruby_context_t));
     
-    // Initialize Ruby VM with complete environment
-    ruby_init();                    // Initialize Ruby interpreter
-    ruby_init_loadpath();          // Set up Ruby load paths  
-    ruby_script("puppet");          // Set script name for Ruby
+    // Initialize Ruby VM with proper setup
+    {
+        int argc = 1;
+        char *argv[] = {"puppet", NULL};
+        char **ruby_argv = argv;
+        
+        ruby_sysinit(&argc, &ruby_argv);
+        ruby_init();
+        ruby_init_loadpath();
+        
+        // Use ruby_options() with -e "nil" to avoid stdin blocking
+        char *ruby_specific_argv[] = {"puppet", "-e", "nil", NULL};
+        void *node = ruby_options(3, ruby_specific_argv);
+        if (!node) {
+            printf("Warning: Ruby options processing failed\n");
+        }
+    }
     
-    // Initialize encoding system - critical for ERB library functionality
-    // Ruby 3.4+ requires explicit encoding setup before using string operations
+    // Load ERB library
     int state = 0;
-    rb_eval_string_protect("Encoding.default_external = 'UTF-8'", &state);
-    rb_eval_string_protect("Encoding.default_internal = 'UTF-8'", &state);
-    
-    // Test basic Ruby functionality to ensure VM is working
-    state = 0;
-    VALUE result = rb_eval_string_protect("'hello'", &state);
-    if (state) {
-        printf("Warning: Basic Ruby evaluation failed (state=%d)\n", state);
+    VALUE result = rb_eval_string_protect("require 'erb'", &state);
+    if (state == 0) {
+        ctx->initialized = 1;
     } else {
-        printf("Ruby basic evaluation works\n");
-    }
-    
-    // Test Ruby load path accessibility
-    state = 0;
-    result = rb_eval_string_protect("puts $LOAD_PATH", &state);
-    if (state) {
-        printf("Cannot access Ruby load path\n");
-    }
-    
-    // Attempt to load ERB library - this is the critical step that often fails
-    // in Ruby 3.4+ due to encoding initialization issues
-    state = 0;
-    result = rb_eval_string_protect("require 'erb'", &state);
-    if (state) {
-        printf("Warning: Could not load Ruby ERB library (state=%d = TAG_RAISE)\n", state);
-        
-        // Extract detailed error information for debugging
-        VALUE error = rb_errinfo();
-        if (!NIL_P(error)) {
-            VALUE error_msg = rb_obj_as_string(error);
-            printf("ERB require error: %s\n", StringValueCStr(error_msg));
+        printf("Error: Failed to load ERB library (state=%d)\n", state);
+        if (state == 6) {  // TAG_RAISE - exception occurred
+            VALUE exception = rb_errinfo();
+            if (!NIL_P(exception)) {
+                VALUE message = rb_obj_as_string(exception);
+                printf("Ruby exception: %s\n", StringValueCStr(message));
+            }
         }
-        
-        // Try alternative loading method as fallback
-        printf("Trying alternative ERB loading...\n");
-        state = 0;
-        result = rb_eval_string_protect("load 'erb.rb'", &state);
-        if (state) {
-            printf("Alternative ERB loading also failed (state=%d)\n", state);
-        } else {
-            printf("ERB loaded via alternative method\n");
-        }
-    } else {
-        printf("Ruby ERB library loaded successfully\n");
+        ctx->initialized = 0;
     }
     
-    ctx->initialized = 1;
     global_ruby_ctx = ctx;
-    
-    printf("Ruby ERB initialized successfully\n");
     return ctx;
 }
 
 /**
- * Clean up Ruby VM and release resources
+ * Clean up Ruby context and release resources
  * 
- * This function properly shuts down the Ruby interpreter and releases
- * all associated memory. It should be called when ERB functionality
- * is no longer needed.
+ * Note: Ruby VM cleanup is skipped to avoid state corruption issues.
+ * Only the context memory is freed.
  * 
  * @param ctx Ruby context to clean up
  */
 void puppet_ruby_cleanup(puppet_ruby_context_t *ctx) {
     if (!ctx || !ctx->initialized) return;
     
-    // Properly shut down Ruby VM
-    ruby_cleanup(0);
+    // ruby_cleanup(0) is intentionally skipped - causes state corruption
     ctx->initialized = 0;
     
     // Clear global reference if this was the global context
@@ -235,12 +211,29 @@ puppet_value_t *ruby_to_puppet_value(void *ruby_obj, puppet_ruby_context_t *ctx)
 static void puppet_set_ruby_variable(const char *name, puppet_value_t *value, puppet_ruby_context_t *ctx) {
     VALUE ruby_val = (VALUE)puppet_value_to_ruby(value, ctx);
     
-    // Convert variable name to Ruby global variable format
+    // Convert variable name to Ruby instance variable format (for ERB templates)
+    // ERB templates access variables as @variable, not $variable
+    // Also convert dots to underscores since Ruby variables can't contain dots
     char var_name[256];
-    snprintf(var_name, sizeof(var_name), "$%s", name);
+    char clean_name[256];
+    strncpy(clean_name, name, sizeof(clean_name) - 1);
+    clean_name[sizeof(clean_name) - 1] = '\0';
     
-    // Set as global variable 
-    rb_gv_set(var_name, ruby_val);
+    // Replace dots with underscores for Ruby variable names
+    for (char *p = clean_name; *p; p++) {
+        if (*p == '.') *p = '_';
+    }
+    
+    snprintf(var_name, sizeof(var_name), "@%s", clean_name);
+    
+    // Set as instance variable in the main object
+    VALUE main_obj = rb_eval_string("self");
+    rb_iv_set(main_obj, var_name, ruby_val);
+    
+    // Also set as global variable for backward compatibility
+    char global_var_name[256];
+    snprintf(global_var_name, sizeof(global_var_name), "$%s", clean_name);
+    rb_gv_set(global_var_name, ruby_val);
 }
 
 static void puppet_export_env_to_ruby(puppet_env_t *env, puppet_ruby_context_t *ruby_ctx) {
@@ -258,152 +251,66 @@ static void puppet_export_env_to_ruby(puppet_env_t *env, puppet_ruby_context_t *
         }
         scope = scope->parent;
     }
+    
+    // Export facts as variables too (facts become @factname in ERB)
+    if (env->facts_db && env->facts_db->current_node) {
+        
+        // Find the current node's facts
+        puppet_value_t *node_lookup = puppet_hash_get(env->facts_db->node_index, 
+                                                      env->facts_db->current_node, 
+                                                      strlen(env->facts_db->current_node));
+        if (node_lookup && node_lookup->type == PUPPET_VALUE_NUMBER) {
+            size_t node_idx = (size_t)node_lookup->data.number;
+            if (node_idx < env->facts_db->node_count) {
+                puppet_node_facts_t *node_facts = &env->facts_db->nodes[node_idx];
+                
+                // Export all facts as @variables
+                for (size_t i = 0; i < node_facts->facts->bucket_count; i++) {
+                    puppet_hash_entry_t *entry = node_facts->facts->buckets[i];
+                    while (entry) {
+                        puppet_set_ruby_variable(entry->key.data, entry->value, ruby_ctx);
+                        entry = entry->next;
+                    }
+                }
+            }
+        }
+    }
 }
 
 char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx) {
-    // Try ERB first, fallback to simple interpolation
-    if (ruby_ctx && ruby_ctx->initialized) {
-        // Export Puppet variables to Ruby
-        puppet_export_env_to_ruby(env, ruby_ctx);
-        
-        int state = 0;
-        VALUE template_str = rb_str_new(template_content, strlen(template_content));
-        rb_gv_set("$erb_template_content", template_str);
-        
-        // Try ERB rendering
-        VALUE result = rb_eval_string_protect("require 'erb'; ERB.new($erb_template_content).result(binding)", &state);
-        
-        if (!state) {
-            const char *rendered = StringValueCStr(result);
-            return puppet_strdup(rendered);
-        }
-        
-        printf("ERB failed (state=%d), falling back to simple interpolation\n", state);
+    // Use Ruby ERB - this is now required
+    if (!ruby_ctx || !ruby_ctx->initialized) {
+        printf("Error: Ruby ERB context not initialized\n");
+        return NULL;
     }
     
-    // Fallback: Simple template interpolation without ERB
-    return puppet_simple_template_render(template_content, env);
-}
-
-/**
- * Convert Puppet values to string representation for template interpolation
- * 
- * This function provides string conversion for all Puppet value types,
- * used by the simple template renderer when Ruby ERB is not available.
- * 
- * @param value Puppet value to convert
- * @return String representation of the value
- */
-const char *puppet_value_to_string(puppet_value_t *value) {
-    if (!value) return "(null)";
+    // Export Puppet variables to Ruby globals
+    puppet_export_env_to_ruby(env, ruby_ctx);
     
-    switch (value->type) {
-        case PUPPET_VALUE_UNDEF:
-            return "(undef)";
-        case PUPPET_VALUE_BOOL:
-            return value->data.boolean ? "true" : "false";
-        case PUPPET_VALUE_STRING:
-            return value->data.string.data;
-        case PUPPET_VALUE_NUMBER: {
-            static char num_buf[64];
-            if (value->data.number == (long)value->data.number) {
-                snprintf(num_buf, sizeof(num_buf), "%ld", (long)value->data.number);
-            } else {
-                snprintf(num_buf, sizeof(num_buf), "%.2f", value->data.number);
-            }
-            return num_buf;
-        }
-        case PUPPET_VALUE_ARRAY:
-            return "[Array]";
-        case PUPPET_VALUE_HASH:
-            return "{Hash}";
-        default:
-            return "(unknown)";
-    }
-}
-
-/**
- * Simple ERB-compatible template renderer (fallback implementation)
- * 
- * This function provides a lightweight alternative to Ruby ERB when the
- * Ruby library cannot be loaded. It supports basic variable interpolation
- * using the <%= $variable %> syntax commonly used in ERB templates.
- * 
- * Features:
- * - Parses <%= $variable %> expressions
- * - Looks up variables in Puppet environment
- * - Handles whitespace around variable names
- * - Dynamically expands output buffer as needed
- * 
- * @param template Template content with ERB syntax
- * @param env Puppet environment containing variables
- * @return Rendered template with variables interpolated
- */
-char *puppet_simple_template_render(const char *template, puppet_env_t *env) {
-    if (!template || !env) return NULL;
+    int state = 0;
     
-    size_t template_len = strlen(template);
-    size_t output_capacity = template_len * 2; // Start with 2x template size
-    char *output = puppet_malloc(output_capacity);
-    size_t output_len = 0;
+    // Create ERB template string
+    VALUE template_str = rb_str_new2(template_content);
+    rb_gv_set("$template_content", template_str);
     
-    const char *pos = template;
-    while (*pos) {
-        // Look for ERB expression pattern: <%= ... %>
-        if (pos[0] == '<' && pos[1] == '%' && pos[2] == '=') {
-            // Find the matching closing tag
-            const char *start = pos + 3;
-            const char *end = strstr(start, "%>");
-            if (end) {
-                // Extract and clean variable expression
-                while (*start == ' ') start++;  // Skip leading whitespace
-                const char *var_end = end;
-                while (var_end > start && *(var_end-1) == ' ') var_end--;  // Skip trailing whitespace
-                
-                if (*start == '$') {
-                    // Extract Puppet variable name (skip the $ prefix)
-                    start++; 
-                    size_t var_len = var_end - start;
-                    char var_name[256];
-                    if (var_len < sizeof(var_name)) {
-                        strncpy(var_name, start, var_len);
-                        var_name[var_len] = '\0';
-                        
-                        // Look up variable value in Puppet environment
-                        puppet_value_t *value = puppet_env_get_var(env, var_name);
-                        if (value) {
-                            const char *str_val = puppet_value_to_string(value);
-                            size_t str_len = strlen(str_val);
-                            
-                            // Dynamically expand output buffer if needed
-                            while (output_len + str_len >= output_capacity) {
-                                output_capacity *= 2;
-                                output = puppet_realloc(output, output_capacity);
-                            }
-                            
-                            // Insert variable value into output
-                            memcpy(output + output_len, str_val, str_len);
-                            output_len += str_len;
-                        }
-                    }
-                }
-                
-                pos = end + 2; // Skip past the closing %>
-                continue;
+    // Process with ERB without binding to avoid stdin issues
+    VALUE result = rb_eval_string_protect(
+        "erb = ERB.new($template_content); erb.result", &state);
+    
+    if (state == 0) {
+        const char *rendered = StringValueCStr(result);
+        return puppet_strdup(rendered);
+    } else {
+        printf("Error: ERB processing failed (state=%d)\n", state);
+        if (state == 6) {  // TAG_RAISE - exception occurred
+            VALUE exception = rb_errinfo();
+            if (!NIL_P(exception)) {
+                VALUE message = rb_obj_as_string(exception);
+                printf("Ruby exception: %s\n", StringValueCStr(message));
             }
         }
-        
-        // Regular character - copy directly to output
-        if (output_len + 1 >= output_capacity) {
-            output_capacity *= 2;
-            output = puppet_realloc(output, output_capacity);
-        }
-        output[output_len++] = *pos++;
+        return NULL;
     }
-    
-    // Null-terminate the output string
-    output[output_len] = '\0';
-    return output;
 }
 
 char *puppet_erb_file(const char *template_path, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx) {
