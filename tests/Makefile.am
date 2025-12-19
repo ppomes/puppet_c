@@ -35,7 +35,7 @@ EXTRA_DIST = \
     facts/simple_test.pp
 
 # Test output directory
-check-local: check-parser check-facts
+check-local: check-parser check-facts check-core-functions
 	@echo "All tests completed."
 
 check-parser:
@@ -116,6 +116,57 @@ check-facts:
 		exit 1; \
 	fi
 
+check-core-functions:
+	@echo "Running core function tests..."
+	@$(MKDIR_P) output
+	@echo "  Testing logging functions (notice, info, warning, debug)..."
+	@if $(top_builddir)/src/puppetc --eval $(srcdir)/puppet/simple_core_test.pp > output/core_functions.out 2>&1; then \
+		if grep -q "Notice: Test message" output/core_functions.out && \
+		   grep -q "Info: Info test" output/core_functions.out && \
+		   grep -q "Warning: Warning test" output/core_functions.out && \
+		   grep -q "Debug: Debug test" output/core_functions.out; then \
+			echo "    ✓ Logging functions test passed"; \
+		else \
+			echo "    ✗ Logging functions test failed - missing expected output"; \
+			sed 's/^/      /' output/core_functions.out; \
+			exit 1; \
+		fi; \
+	else \
+		echo "    ✗ Core functions test failed - execution error"; \
+		sed 's/^/      /' output/core_functions.out; \
+		exit 1; \
+	fi
+	@echo "  Testing fail() function..."
+	@echo 'fail("Test failure message")' > output/fail_test.pp
+	@if $(top_builddir)/src/puppetc --eval output/fail_test.pp > output/fail_test.out 2>&1; then \
+		echo "    ✗ fail() function should have caused failure but didn't"; \
+		cat output/fail_test.out; \
+		exit 1; \
+	else \
+		if grep -q "Critical: Test failure message" output/fail_test.out; then \
+			echo "    ✓ fail() function test passed"; \
+		else \
+			echo "    ✗ fail() function test failed - no critical message"; \
+			sed 's/^/      /' output/fail_test.out; \
+			exit 1; \
+		fi; \
+	fi
+	@echo "  Testing function call statements..."
+	@if $(top_builddir)/src/puppetc --eval $(srcdir)/puppet/notice_statement_test.pp > output/statement_test.out 2>&1; then \
+		if grep -q "Notice: This should appear during execution" output/statement_test.out; then \
+			echo "    ✓ Function call statements test passed"; \
+		else \
+			echo "    ✗ Function call statements test failed"; \
+			sed 's/^/      /' output/statement_test.out; \
+			exit 1; \
+		fi; \
+	else \
+		echo "    ✗ Function call statements test failed"; \
+		sed 's/^/      /' output/statement_test.out; \
+		exit 1; \
+	fi
+	@echo "✅ All core function tests passed!"
+
 # Memory leak testing with Valgrind
 check-memory: $(top_builddir)/src/puppetc
 	@echo "Running memory leak tests with Valgrind..."
@@ -159,4 +210,4 @@ clean-local:
 $(builddir)/output:
 	$(MKDIR_P) $@
 
-.PHONY: check-parser check-facts check-memory check-asan
+.PHONY: check-parser check-facts check-core-functions check-memory check-asan

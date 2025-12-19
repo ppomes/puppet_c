@@ -13,6 +13,7 @@ puppetc_SOURCES = \
     puppet_json_parser.c \
     puppet_loader.c \
     puppet_memory.c \
+    puppet_stdlib.c \
     $(BUILT_SOURCES)
 
 # Conditionally add ERB support
@@ -42,7 +43,8 @@ include_HEADERS = \
     $(top_srcdir)/include/puppet_json.h \
     $(top_srcdir)/include/puppet_json_parser.h \
     $(top_srcdir)/include/puppet_loader.h \
-    $(top_srcdir)/include/puppet_memory.h
+    $(top_srcdir)/include/puppet_memory.h \
+    $(top_srcdir)/include/puppet_stdlib.h
 
 if HAVE_RUBY
 include_HEADERS += $(top_srcdir)/include/puppet_erb.h
@@ -61,6 +63,7 @@ puppet_ast.$(OBJEXT): puppet.tab.h
 puppet_interpreter.$(OBJEXT): puppet.tab.h
 puppet_json.$(OBJEXT): puppet.tab.h
 puppet_loader.$(OBJEXT): puppet.tab.h
+puppet_stdlib.$(OBJEXT): puppet.tab.h
 main.$(OBJEXT): puppet.tab.h
 if HAVE_RUBY
 puppet_erb.$(OBJEXT): puppet.tab.h

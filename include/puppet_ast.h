@@ -475,6 +475,7 @@ puppet_value_t *puppet_value_create_string(const char *str, size_t len);
 puppet_value_t *puppet_value_create_number(double value);
 puppet_value_t *puppet_value_create_array(void);
 puppet_value_t *puppet_value_create_hash(void);
+puppet_value_t *puppet_value_copy(puppet_value_t *value);
 void puppet_value_destroy(puppet_value_t *value);
 
 /* Collection manipulation */

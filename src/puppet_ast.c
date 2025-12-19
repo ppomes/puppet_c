@@ -205,6 +205,41 @@ void puppet_value_destroy(puppet_value_t *value) {
     puppet_free(value);
 }
 
+puppet_value_t *puppet_value_copy(puppet_value_t *value) {
+    if (!value) return NULL;
+    
+    switch (value->type) {
+        case PUPPET_VALUE_UNDEF:
+            return puppet_value_create_undef();
+            
+        case PUPPET_VALUE_BOOL:
+            return puppet_value_create_bool(value->data.boolean);
+            
+        case PUPPET_VALUE_STRING:
+            return puppet_value_create_string(value->data.string.data, value->data.string.len);
+            
+        case PUPPET_VALUE_NUMBER:
+            return puppet_value_create_number(value->data.number);
+            
+        case PUPPET_VALUE_ARRAY: {
+            puppet_value_t *new_array = puppet_value_create_array();
+            for (size_t i = 0; i < value->data.array->count; i++) {
+                puppet_array_append(new_array->data.array, puppet_value_copy(value->data.array->items[i]));
+            }
+            return new_array;
+        }
+            
+        case PUPPET_VALUE_HASH: {
+            puppet_value_t *new_hash = puppet_value_create_hash();
+            // TODO: Implement hash copying when hash iteration is available
+            return new_hash;
+        }
+            
+        default:
+            return NULL;
+    }
+}
+
 puppet_expr_t *puppet_expr_create_value(puppet_value_t *value) {
     puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
     expr->type = PUPPET_EXPR_VALUE;

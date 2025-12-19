@@ -281,6 +281,18 @@ int main(int argc, char *argv[]) {
             
             puppet_exec_program(program, env);
             printf("Evaluation complete.\n");
+            
+            // Check if compilation failed due to fail() function
+            if (env->compilation_failed) {
+                if (env->failure_message) {
+                    fprintf(stderr, "Catalog compilation failed: %s\n", env->failure_message);
+                } else {
+                    fprintf(stderr, "Catalog compilation failed\n");
+                }
+                puppet_env_destroy(env);
+                return 1;  // Exit with failure
+            }
+            
             puppet_env_destroy(env);
         } else {
             printf("Parse successful!\n");

@@ -1,5 +1,6 @@
 #include "puppet_interpreter.h"
 #include "puppet_erb.h"
+#include "puppet_stdlib.h"
 #include "puppet_loader.h"
 #include "puppet_memory.h"
 #include <stdlib.h>
@@ -61,6 +62,14 @@ puppet_env_t *puppet_env_create(void) {
     /* Initialize template output */
     env->template_output_target = NULL;
     
+    /* Initialize core function support */
+    env->defined_resources = puppet_calloc(1, sizeof(puppet_hash_t));
+    env->defined_resources->bucket_count = 64;
+    env->defined_resources->buckets = puppet_calloc(env->defined_resources->bucket_count, sizeof(puppet_hash_entry_t*));
+    env->current_tags = NULL;  /* Initialized when first tag is added */
+    env->compilation_failed = false;
+    env->failure_message = NULL;
+    
     return env;
 }
 
@@ -116,6 +125,31 @@ void puppet_env_destroy(puppet_env_t *env) {
     puppet_free(env->scope_stack);
     puppet_free(env->node_name);
     puppet_free(env->template_output_target);
+    
+    /* Clean up defined resources hash */
+    if (env->defined_resources) {
+        for (size_t i = 0; i < env->defined_resources->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->defined_resources->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                puppet_value_destroy(entry->value);
+                puppet_free(entry);
+                entry = next;
+            }
+        }
+        puppet_free(env->defined_resources->buckets);
+        puppet_free(env->defined_resources);
+    }
+    
+    /* Clean up tags */
+    if (env->current_tags) {
+        puppet_value_destroy(env->current_tags);
+    }
+    
+    /* Clean up failure message */
+    puppet_free(env->failure_message);
+    
     puppet_free(env);
 }
 
@@ -236,9 +270,43 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             // Handle built-in functions
             const char *func_name = expr->data.funcall.name.data;
             
+            // Template function
             if (strcmp(func_name, "template") == 0) {
                 return puppet_func_template(&expr->data.funcall.args, env);
-            } else {
+            }
+            // Core logging functions
+            else if (strcmp(func_name, "fail") == 0) {
+                return puppet_func_fail(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "notice") == 0) {
+                return puppet_func_notice(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "info") == 0) {
+                return puppet_func_info(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "warning") == 0) {
+                return puppet_func_warning(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "err") == 0) {
+                return puppet_func_err(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "debug") == 0) {
+                return puppet_func_debug(&expr->data.funcall.args, env);
+            }
+            // Resource functions
+            else if (strcmp(func_name, "defined") == 0) {
+                return puppet_func_defined(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "realize") == 0) {
+                return puppet_func_realize(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "tag") == 0) {
+                return puppet_func_tag(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "tagged") == 0) {
+                return puppet_func_tagged(&expr->data.funcall.args, env);
+            }
+            else {
                 printf("Error: Unknown function: %s\n", func_name);
                 return puppet_value_create_undef();
             }
@@ -462,6 +530,14 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
             
         case PUPPET_STMT_INCLUDE:
             puppet_exec_include(stmt, env);
+            break;
+            
+        case PUPPET_STMT_FUNCTION_CALL:
+            // Execute function call statement (stored as expression)
+            if (stmt->data.expr) {
+                puppet_value_t *result = puppet_eval_expr(stmt->data.expr, env);
+                puppet_value_destroy(result);
+            }
             break;
             
         case PUPPET_STMT_RESOURCE:
