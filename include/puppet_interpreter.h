@@ -144,7 +144,13 @@ typedef struct puppet_env {
     puppet_value_t *current_tags;             /**< Current tags for tag()/tagged() functions */
     bool compilation_failed;                  /**< Flag for fail() function */
     char *failure_message;                    /**< Error message from fail() function */
+
+    /* Output control */
+    bool verbose;                             /**< Enable verbose/debug output */
 } puppet_env_t;
+
+/* Global verbose flag for use before environment is created */
+extern bool puppet_verbose;
 
 /*
  * ===========================================================================
@@ -155,6 +161,20 @@ typedef struct puppet_env {
 /* Environment management */
 puppet_env_t *puppet_env_create(void);
 void puppet_env_destroy(puppet_env_t *env);
+void puppet_env_set_verbose(puppet_env_t *env, bool verbose);
+
+/* Debug output macros - only output when verbose mode is enabled */
+#define puppet_debug(fmt, ...) do { \
+    if (puppet_verbose) fprintf(stderr, "[DEBUG] " fmt "\n", ##__VA_ARGS__); \
+} while(0)
+
+#define puppet_warn(fmt, ...) do { \
+    fprintf(stderr, "[WARN] " fmt "\n", ##__VA_ARGS__); \
+} while(0)
+
+#define puppet_error(fmt, ...) do { \
+    fprintf(stderr, "[ERROR] " fmt "\n", ##__VA_ARGS__); \
+} while(0)
 
 /* Scope management */
 puppet_scope_t *puppet_scope_create(puppet_scope_t *parent, const char *name);

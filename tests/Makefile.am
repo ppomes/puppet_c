@@ -172,7 +172,7 @@ check-core-functions:
 		exit 1; \
 	fi
 	@echo "  Testing split() function..."
-	@if $(top_builddir)/src/puppetc --eval $(srcdir)/puppet/split_test.pp > output/split_test.out 2>&1; then \
+	@if $(top_builddir)/src/puppetc --eval --verbose $(srcdir)/puppet/split_test.pp > output/split_test.out 2>&1; then \
 		if grep -q "split() function tests completed" output/split_test.out && \
 		   grep -q 'Set \$$parts = (complex value)' output/split_test.out && \
 		   grep -q 'Set \$$path = (complex value)' output/split_test.out && \
@@ -189,7 +189,7 @@ check-core-functions:
 		exit 1; \
 	fi
 	@echo "  Testing join() function..."
-	@if $(top_builddir)/src/puppetc --eval $(srcdir)/puppet/join_test.pp > output/join_test.out 2>&1; then \
+	@if $(top_builddir)/src/puppetc --eval --verbose $(srcdir)/puppet/join_test.pp > output/join_test.out 2>&1; then \
 		if grep -q "join() function tests completed" output/join_test.out && \
 		   grep -q 'Joined with colon: a:b:c' output/join_test.out && \
 		   grep -q 'Joined with dash: one - two - three' output/join_test.out && \

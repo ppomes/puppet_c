@@ -8,6 +8,9 @@
 #include <string.h>
 #include <stdio.h>
 
+/* Global verbose flag */
+bool puppet_verbose = false;
+
 // Helper function to convert value to string
 static const char *puppet_value_to_string(puppet_value_t *value) {
     if (!value) return "";
@@ -70,11 +73,21 @@ puppet_env_t *puppet_env_create(void) {
     env->current_tags = NULL;  /* Initialized when first tag is added */
     env->compilation_failed = false;
     env->failure_message = NULL;
-    
+
+    /* Initialize output control */
+    env->verbose = puppet_verbose;  /* Inherit from global flag */
+
     /* Register Hiera data provider */
     puppet_hiera_register_provider(env, "data");
-    
+
     return env;
+}
+
+void puppet_env_set_verbose(puppet_env_t *env, bool verbose) {
+    if (env) {
+        env->verbose = verbose;
+    }
+    puppet_verbose = verbose;  /* Also set global flag */
 }
 
 void puppet_env_destroy(puppet_env_t *env) {
@@ -322,7 +335,7 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
                 return puppet_func_join(&expr->data.funcall.args, env);
             }
             else {
-                printf("Error: Unknown function: %s\n", func_name);
+                puppet_error("Unknown function: %s", func_name);
                 return puppet_value_create_undef();
             }
         }
@@ -378,7 +391,7 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
         }
             
         default:
-            printf("Unimplemented expression type: %d\n", expr->type);
+            puppet_warn("Unimplemented expression type: %d", expr->type);
             return puppet_value_create_undef();
     }
 }
@@ -388,7 +401,7 @@ puppet_value_t *puppet_eval_variable(const char *name, puppet_env_t *env) {
     puppet_value_t *value = puppet_variable_lookup_chain(env, name);
 
     if (!value) {
-        printf("Warning: Undefined variable: %s\n", name);
+        puppet_warn("Undefined variable: %s", name);
         return puppet_value_create_undef();
     }
 
@@ -476,7 +489,7 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
             break;
     }
     
-    printf("Warning: Unsupported binary operation\n");
+    puppet_warn("Unsupported binary operation");
     return puppet_value_create_undef();
 }
 
@@ -506,8 +519,8 @@ puppet_value_t *puppet_eval_unop(puppet_unop_t op, puppet_value_t *operand) {
         default:
             break;
     }
-    
-    printf("Warning: Unsupported unary operation\n");
+
+    puppet_warn("Unsupported unary operation");
     return puppet_value_create_undef();
 }
 
@@ -545,7 +558,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
             break;
             
         case PUPPET_STMT_RESOURCE:
-            printf("Executing resource: %s\n", stmt->data.resource.type.data);
+            puppet_debug("Executing resource: %s", stmt->data.resource.type.data);
             
             // Evaluate resource titles and check for duplicates
             for (size_t i = 0; i < stmt->data.resource.instance_count; i++) {
@@ -573,8 +586,8 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                     // Add to catalog
                     puppet_value_t *marker = puppet_value_create_bool(true);
                     puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);
-                    
-                    printf("  Title: %s\n", title_str);
+
+                    puppet_debug("  Title: %s", title_str);
                     
                     // Check if this is the template target for output
                     bool is_template_target = (env->template_output_target && 
@@ -583,10 +596,9 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                     
                     // Show attributes for this instance
                     for (size_t j = 0; j < instance->attr_count; j++) {
-                        printf("    %s => ", instance->attributes[j].name.data);
                         puppet_value_t *attr_val = puppet_eval_expr(instance->attributes[j].value, env);
                         const char *attr_str = puppet_value_to_string(attr_val);
-                        printf("%s\n", attr_str);
+                        puppet_debug("    %s => %s", instance->attributes[j].name.data, attr_str);
                         
                         // If this is template output mode and we found the content attribute
                         if (is_template_target && strcmp(instance->attributes[j].name.data, "content") == 0) {
@@ -615,9 +627,9 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                 }
             }
             break;
-            
+
         default:
-            printf("Unimplemented statement type: %d\n", stmt->type);
+            puppet_warn("Unimplemented statement type: %d", stmt->type);
             break;
     }
 }
@@ -630,35 +642,39 @@ void puppet_exec_stmt_list(puppet_stmt_list_t *stmts, puppet_env_t *env) {
 
 void puppet_exec_assignment(const char *var, puppet_expr_t *value, puppet_env_t *env) {
     puppet_value_t *val = puppet_eval_expr(value, env);
-    
+
     // Use scoped variable assignment (defaults to local scope)
     puppet_env_set_scoped_var(env, var, val, PUPPET_VAR_LOCAL);
-    
+
     // Debug output
-    printf("Set $%s = ", var);
-    switch (val->type) {
-        case PUPPET_VALUE_UNDEF:
-            printf("undef");
-            break;
-        case PUPPET_VALUE_BOOL:
-            printf("%s", val->data.boolean ? "true" : "false");
-            break;
-        case PUPPET_VALUE_STRING:
-            printf("\"%s\"", val->data.string.data);
-            break;
-        case PUPPET_VALUE_NUMBER:
-            printf("%.6g", val->data.number);
-            break;
-        default:
-            printf("(complex value)");
-            break;
+    if (puppet_verbose) {
+        const char *val_str;
+        char num_buf[64];
+        switch (val->type) {
+            case PUPPET_VALUE_UNDEF:
+                val_str = "undef";
+                break;
+            case PUPPET_VALUE_BOOL:
+                val_str = val->data.boolean ? "true" : "false";
+                break;
+            case PUPPET_VALUE_STRING:
+                val_str = val->data.string.data;
+                break;
+            case PUPPET_VALUE_NUMBER:
+                snprintf(num_buf, sizeof(num_buf), "%.6g", val->data.number);
+                val_str = num_buf;
+                break;
+            default:
+                val_str = "(complex value)";
+                break;
+        }
+        puppet_debug("Set $%s = %s", var, val_str);
     }
-    printf("\n");
 }
 
 void puppet_exec_class_def(puppet_stmt_t *class_stmt, puppet_env_t *env) {
     const char *class_name = class_stmt->data.class_def.name.data;
-    printf("Defining class: %s\n", class_name);
+    puppet_debug("Defining class: %s", class_name);
     
     // Register this class definition for later instantiation
     puppet_register_class_def(env, class_stmt);
@@ -675,32 +691,36 @@ void puppet_exec_class_def(puppet_stmt_t *class_stmt, puppet_env_t *env) {
     for (size_t i = 0; i < class_stmt->data.class_def.params.count; i++) {
         puppet_param_t *param = &class_stmt->data.class_def.params.params[i];
         const char *param_name = param->name.data;
-        
+
         if (param->default_value) {
             // Evaluate default value and set in class scope
             puppet_value_t *default_val = puppet_eval_expr(param->default_value, env);
             puppet_scope_set_var(class_scope, param_name, default_val);
-            printf("Set class parameter $%s = ", param_name);
-            switch (default_val->type) {
-                case PUPPET_VALUE_BOOL:
-                    printf("%s", default_val->data.boolean ? "true" : "false");
-                    break;
-                case PUPPET_VALUE_NUMBER:
-                    printf("%.6g", default_val->data.number);
-                    break;
-                case PUPPET_VALUE_STRING:
-                    printf("\"%s\"", default_val->data.string.data);
-                    break;
-                default:
-                    printf("(complex value)");
-                    break;
+            if (puppet_verbose) {
+                const char *val_str;
+                char num_buf[64];
+                switch (default_val->type) {
+                    case PUPPET_VALUE_BOOL:
+                        val_str = default_val->data.boolean ? "true" : "false";
+                        break;
+                    case PUPPET_VALUE_NUMBER:
+                        snprintf(num_buf, sizeof(num_buf), "%.6g", default_val->data.number);
+                        val_str = num_buf;
+                        break;
+                    case PUPPET_VALUE_STRING:
+                        val_str = default_val->data.string.data;
+                        break;
+                    default:
+                        val_str = "(complex value)";
+                        break;
+                }
+                puppet_debug("Set class parameter $%s = %s (default)", param_name, val_str);
             }
-            printf(" (default)\n");
         } else {
             // Set parameter to undef if no default provided
             puppet_value_t *undef_val = puppet_value_create_undef();
             puppet_scope_set_var(class_scope, param_name, undef_val);
-            printf("Set class parameter $%s = undef (no default)\n", param_name);
+            puppet_debug("Set class parameter $%s = undef (no default)", param_name);
         }
     }
     
@@ -724,7 +744,7 @@ void puppet_exec_include(puppet_stmt_t *include_stmt, puppet_env_t *env) {
     
     /* Check if loader is available */
     if (!env->loader) {
-        printf("Warning: Include statements require a module loader to be configured\n");
+        puppet_warn("Include statements require a module loader to be configured");
         return;
     }
     
@@ -740,7 +760,7 @@ void puppet_exec_include(puppet_stmt_t *include_stmt, puppet_env_t *env) {
             
             /* Include the class using the loader */
             if (!puppet_loader_include_class(env->loader, class_name, env)) {
-                printf("Warning: Failed to include class '%s'\n", class_name);
+                puppet_warn("Failed to include class '%s'", class_name);
             }
         }
     }
@@ -771,8 +791,8 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
     }
     
     if (should_execute) {
-        printf("Executing node: %s\n", node_name);
-        
+        puppet_debug("Executing node: %s", node_name);
+
         /* Clear resource catalog for this node (each node has its own catalog) */
         if (env->resource_catalog) {
             /* Clear existing entries but keep the hash table structure */
@@ -793,9 +813,9 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
         /* Switch to node-specific facts if available */
         if (env->facts_db) {
             if (puppet_facts_db_set_current_node(env->facts_db, node_name) == 0) {
-                printf("Using facts for node: %s\n", node_name);
+                puppet_debug("Using facts for node: %s", node_name);
             } else {
-                printf("No facts found for node %s, using default facts\n", node_name);
+                puppet_debug("No facts found for node %s, using default facts", node_name);
             }
         }
         
@@ -817,7 +837,7 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
         /* Skip this node */
         if (!env->execute_all_nodes && env->node_name) {
             /* Only report skipping when a specific node was requested */
-            printf("Skipping node: %s (looking for %s)\n", node_name, env->node_name);
+            puppet_debug("Skipping node: %s (looking for %s)", node_name, env->node_name);
         }
     }
 }
@@ -849,14 +869,14 @@ void puppet_env_set_template_output(puppet_env_t *env, const char *template_targ
 
 void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t *env) {
     if (!class_instance_stmt || class_instance_stmt->type != PUPPET_STMT_CLASS_INSTANCE) return;
-    
+
     const char *class_name = class_instance_stmt->data.class_instance.class_name.data;
-    printf("Instantiating class: %s\n", class_name);
-    
+    puppet_debug("Instantiating class: %s", class_name);
+
     // Find the class definition
     puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
     if (!class_def) {
-        printf("Error: Class '%s' not found\n", class_name);
+        puppet_error("Class '%s' not found", class_name);
         return;
     }
     
@@ -872,59 +892,67 @@ void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t
     for (size_t i = 0; i < class_def->data.class_def.params.count; i++) {
         puppet_param_t *param = &class_def->data.class_def.params.params[i];
         const char *param_name = param->name.data;
-        
+
         // Look for this parameter in provided arguments
         puppet_value_t *param_value = NULL;
         bool found_arg = false;
-        
+
         for (size_t j = 0; j < class_instance_stmt->data.class_instance.arg_count; j++) {
             puppet_attribute_t *arg = &class_instance_stmt->data.class_instance.arguments[j];
             if (strcmp(arg->name.data, param_name) == 0) {
                 param_value = puppet_eval_expr(arg->value, env);
                 found_arg = true;
-                printf("Set class parameter $%s = ", param_name);
                 break;
             }
         }
-        
+
         // If not provided, use default value
         if (!found_arg && param->default_value) {
             param_value = puppet_eval_expr(param->default_value, env);
-            printf("Set class parameter $%s = ", param_name);
         } else if (!found_arg) {
             param_value = puppet_value_create_undef();
-            printf("Set class parameter $%s = undef (no default)\n", param_name);
         }
-        
+
         // Set the parameter value in class scope
         if (param_value) {
             puppet_scope_set_var(class_scope, param_name, param_value);
-            
-            if (found_arg || param->default_value) {
-                switch (param_value->type) {
-                    case PUPPET_VALUE_BOOL:
-                        printf("%s", param_value->data.boolean ? "true" : "false");
-                        break;
-                    case PUPPET_VALUE_NUMBER:
-                        printf("%.6g", param_value->data.number);
-                        break;
-                    case PUPPET_VALUE_STRING:
-                        printf("\"%s\"", param_value->data.string.data);
-                        break;
-                    default:
-                        printf("(complex value)");
-                        break;
+
+            // Debug output
+            if (puppet_verbose) {
+                const char *val_str;
+                char num_buf[64];
+                const char *source;
+                if (!found_arg && !param->default_value) {
+                    val_str = "undef";
+                    source = " (no default)";
+                } else {
+                    source = found_arg ? " (provided)" : " (default)";
+                    switch (param_value->type) {
+                        case PUPPET_VALUE_BOOL:
+                            val_str = param_value->data.boolean ? "true" : "false";
+                            break;
+                        case PUPPET_VALUE_NUMBER:
+                            snprintf(num_buf, sizeof(num_buf), "%.6g", param_value->data.number);
+                            val_str = num_buf;
+                            break;
+                        case PUPPET_VALUE_STRING:
+                            val_str = param_value->data.string.data;
+                            break;
+                        default:
+                            val_str = "(complex value)";
+                            break;
+                    }
                 }
-                printf("%s\n", found_arg ? " (provided)" : " (default)");
+                puppet_debug("Set class parameter $%s = %s%s", param_name, val_str, source);
             }
         }
     }
-    
+
     // Execute the class body
-    printf("Executing class body for: %s\n", class_name);
+    puppet_debug("Executing class body for: %s", class_name);
     puppet_exec_stmt_list(&class_def->data.class_def.body, env);
-    
-    printf("Class %s instantiation complete\n", class_name);
+
+    puppet_debug("Class %s instantiation complete", class_name);
     
     // Restore old class scope
     env->class_scope = old_class_scope;
@@ -1424,7 +1452,7 @@ int puppet_facts_db_load_file(puppet_facts_db_t *facts_db, const char *filepath)
     
     json_value_t *root = json_parse_file(filepath);
     if (!root) {
-        printf("Error: Failed to parse facts file: %s\n", filepath);
+        puppet_error("Failed to parse facts file: %s", filepath);
         return -1;
     }
     
@@ -1436,7 +1464,7 @@ int puppet_facts_db_load_file(puppet_facts_db_t *facts_db, const char *filepath)
         // Facter format
         result = puppet_facts_load_facter_format(facts_db, root);
     } else {
-        printf("Error: Unsupported facts file format\n");
+        puppet_error("Unsupported facts file format");
         result = -1;
     }
     
@@ -1450,13 +1478,13 @@ int puppet_facts_db_set_current_node(puppet_facts_db_t *facts_db, const char *ce
     // Find node index
     puppet_value_t *index_value = puppet_hash_get(facts_db->node_index, certname, strlen(certname));
     if (!index_value || index_value->type != PUPPET_VALUE_NUMBER) {
-        printf("Warning: Node '%s' not found in facts database\n", certname);
+        puppet_debug("Node '%s' not found in facts database", certname);
         return -1;
     }
-    
+
     size_t index = (size_t)index_value->data.number;
     if (index >= facts_db->node_count) {
-        printf("Warning: Invalid node index for '%s'\n", certname);
+        puppet_warn("Invalid node index for '%s'", certname);
         return -1;
     }
     

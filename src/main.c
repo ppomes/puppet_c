@@ -49,6 +49,7 @@ static void print_usage(const char *program_name) {
     printf("  -f, --facts       Load facts from JSON file (facter or PuppetDB format)\n");
     printf("  -t, --template    Display template output for file resource with specified title\n");
     printf("  -D, --hiera-data  Path to Hiera data directory (default: ./data)\n");
+    printf("  -v, --verbose     Enable verbose/debug output\n");
     printf("  -h, --help        Show this help message\n");
     printf("\nWhen a directory is provided, site.pp will be loaded from manifests/\n");
     printf("and modules will be loaded from modules/ subdirectory.\n");
@@ -71,6 +72,7 @@ int main(int argc, char *argv[]) {
     char *facts_file = NULL;
     char *template_output = NULL;
     char *hiera_datadir = NULL;
+    int verbose = 0;
     int opt;
     
     static struct option long_options[] = {
@@ -83,11 +85,12 @@ int main(int argc, char *argv[]) {
         {"facts", required_argument, 0, 'f'},
         {"template", required_argument, 0, 't'},
         {"hiera-data", required_argument, 0, 'D'},
+        {"verbose", no_argument, 0, 'v'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
-    
-    while ((opt = getopt_long(argc, argv, "jeo:m:n:af:t:D:hd", long_options, NULL)) != -1) {
+
+    while ((opt = getopt_long(argc, argv, "jeo:m:n:af:t:D:vh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'j':
                 json_output = 1;
@@ -115,6 +118,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'D':
                 hiera_datadir = optarg;
+                break;
+            case 'v':
+                verbose = 1;
                 break;
             case 'h':
                 print_usage(argv[0]);
@@ -154,8 +160,11 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
+    /* Set global verbose flag early for pre-environment debug output */
+    puppet_verbose = verbose;
+
     char *input_path = argv[optind];
-    
+
     /* Check if input is a directory */
     struct stat path_stat;
     if (stat(input_path, &path_stat) != 0) {
@@ -169,8 +178,8 @@ int main(int argc, char *argv[]) {
     
     if (S_ISDIR(path_stat.st_mode)) {
         /* Directory mode - use module loader */
-        if (!json_output && !eval_mode) {
-            printf("Loading Puppet directory: %s\n", input_path);
+        if (!json_output && !eval_mode && verbose) {
+            fprintf(stderr, "Loading Puppet directory: %s\n", input_path);
         }
         
         /* Create module loader */
@@ -194,11 +203,11 @@ int main(int argc, char *argv[]) {
             program->statements.count = 0;
         }
         
-        if (!json_output && !eval_mode) {
+        if (!json_output && !eval_mode && verbose) {
             if (program && program->statements.count > 0) {
-                printf("Loaded site.pp with %zu statements\n", program->statements.count);
+                fprintf(stderr, "Loaded site.pp with %zu statements\n", program->statements.count);
             } else {
-                printf("No site.pp found or empty site.pp\n");
+                fprintf(stderr, "No site.pp found or empty site.pp\n");
             }
         }
     } else {
@@ -208,9 +217,9 @@ int main(int argc, char *argv[]) {
             perror("fopen");
             return 1;
         }
-        
-        if (!json_output && !eval_mode) {
-            printf("Parsing %s...\n", input_path);
+
+        if (!json_output && !eval_mode && verbose) {
+            fprintf(stderr, "Parsing %s...\n", input_path);
         }
         
         result = yyparse();
@@ -241,59 +250,62 @@ int main(int argc, char *argv[]) {
                 fclose(output);
             }
         } else if (eval_mode) {
-            printf("Evaluating manifest...\n");
+            if (verbose) fprintf(stderr, "Evaluating manifest...\n");
             puppet_env_t *env = puppet_env_create();
-            
+
+            /* Set verbose mode */
+            puppet_env_set_verbose(env, verbose);
+
             /* Set loader if in directory mode */
             if (loader) {
                 puppet_env_set_loader(env, loader);
             }
-            
+
             /* Configure Hiera data provider */
             if (hiera_datadir) {
                 puppet_hiera_register_provider(env, hiera_datadir);
-                printf("Using Hiera data directory: %s\n", hiera_datadir);
+                if (verbose) fprintf(stderr, "Using Hiera data directory: %s\n", hiera_datadir);
             }
-            
+
             /* Configure node execution */
             if (all_nodes) {
                 puppet_env_set_execute_all_nodes(env, true);
-                printf("Executing all nodes.\n");
+                if (verbose) fprintf(stderr, "Executing all nodes.\n");
             } else if (node_name) {
                 puppet_env_set_node(env, node_name);
-                printf("Executing node: %s\n", node_name);
+                if (verbose) fprintf(stderr, "Executing node: %s\n", node_name);
             } else {
-                printf("Executing default node only.\n");
+                if (verbose) fprintf(stderr, "Executing default node only.\n");
             }
-            
+
             /* Set template output target if specified */
             if (template_output) {
                 puppet_env_set_template_output(env, template_output);
-                printf("Template output mode for resource title: %s\n", template_output);
+                if (verbose) fprintf(stderr, "Template output mode for resource title: %s\n", template_output);
             }
-            
+
             /* Load facts if specified */
             if (facts_file) {
-                printf("Loading facts from: %s\n", facts_file);
+                if (verbose) fprintf(stderr, "Loading facts from: %s\n", facts_file);
                 puppet_facts_db_t *facts_db = puppet_facts_db_create();
                 if (puppet_facts_db_load_file(facts_db, facts_file) == 0) {
                     puppet_env_set_facts_db(env, facts_db);
-                    printf("Facts loaded successfully.\n");
-                    
+                    if (verbose) fprintf(stderr, "Facts loaded successfully.\n");
+
                     /* If node is specified, set it as current in facts */
                     if (node_name) {
                         if (puppet_facts_db_set_current_node(facts_db, node_name) == 0) {
-                            printf("Using facts for node: %s\n", node_name);
+                            if (verbose) fprintf(stderr, "Using facts for node: %s\n", node_name);
                         }
                     }
                 } else {
-                    printf("Warning: Failed to load facts from %s\n", facts_file);
+                    fprintf(stderr, "Warning: Failed to load facts from %s\n", facts_file);
                     puppet_facts_db_destroy(facts_db);
                 }
             }
-            
+
             puppet_exec_program(program, env);
-            printf("Evaluation complete.\n");
+            if (verbose) fprintf(stderr, "Evaluation complete.\n");
             
             // Check if compilation failed due to fail() function
             if (env->compilation_failed) {
@@ -308,14 +320,16 @@ int main(int argc, char *argv[]) {
             
             puppet_env_destroy(env);
         } else {
-            printf("Parse successful!\n");
-            printf("Program has %zu top-level statements\n", program->statements.count);
+            if (verbose) {
+                fprintf(stderr, "Parse successful!\n");
+                fprintf(stderr, "Program has %zu top-level statements\n", program->statements.count);
+            }
         }
-        
+
         puppet_program_destroy(program);
     } else if (result != 0) {
         if (!json_output && !eval_mode) {
-            printf("Parse failed!\n");
+            fprintf(stderr, "Parse failed!\n");
         }
     }
     
