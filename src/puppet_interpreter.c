@@ -314,6 +314,10 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "lookup") == 0) {
                 return puppet_func_lookup(&expr->data.funcall.args, env);
             }
+            // String manipulation functions
+            else if (strcmp(func_name, "split") == 0) {
+                return puppet_func_split(&expr->data.funcall.args, env);
+            }
             else {
                 printf("Error: Unknown function: %s\n", func_name);
                 return puppet_value_create_undef();

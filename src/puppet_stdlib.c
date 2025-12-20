@@ -445,6 +445,82 @@ puppet_value_t *puppet_func_lookup(puppet_expr_list_t *args, puppet_env_t *env) 
     
     puppet_value_destroy(first_arg);
     if (default_value) puppet_value_destroy(default_value);
-    
+
     return result ? result : puppet_value_create_undef();
+}
+
+/**
+ * @brief Puppet split() function - split a string into an array
+ *
+ * Usage: split(string, pattern)
+ * Returns an array of strings split by the pattern
+ *
+ * Examples:
+ *   split('a,b,c', ',')       => ['a', 'b', 'c']
+ *   split('one:two:three', ':') => ['one', 'two', 'three']
+ *   split('hello', '')        => ['h', 'e', 'l', 'l', 'o']
+ */
+puppet_value_t *puppet_func_split(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log(PUPPET_LOG_ERROR, "split() requires 2 arguments: string and pattern");
+        return puppet_value_create_undef();
+    }
+
+    /* Evaluate arguments */
+    puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *pattern_val = puppet_eval_expr(args->exprs[1], env);
+
+    if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "split() first argument must be a string");
+        if (str_val) puppet_value_destroy(str_val);
+        if (pattern_val) puppet_value_destroy(pattern_val);
+        return puppet_value_create_undef();
+    }
+
+    if (!pattern_val || pattern_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "split() second argument must be a string pattern");
+        puppet_value_destroy(str_val);
+        if (pattern_val) puppet_value_destroy(pattern_val);
+        return puppet_value_create_undef();
+    }
+
+    const char *str = str_val->data.string.data;
+    const char *pattern = pattern_val->data.string.data;
+    size_t pattern_len = strlen(pattern);
+
+    /* Create result array */
+    puppet_value_t *result = puppet_value_create_array();
+
+    /* Handle empty pattern - split into individual characters */
+    if (pattern_len == 0) {
+        for (size_t i = 0; str[i] != '\0'; i++) {
+            char single[2] = { str[i], '\0' };
+            puppet_array_append(result->data.array, puppet_value_create_string(single, 1));
+        }
+    } else {
+        /* Split by pattern */
+        const char *start = str;
+        const char *found;
+
+        while ((found = strstr(start, pattern)) != NULL) {
+            /* Create substring from start to found */
+            size_t len = found - start;
+            char *part = puppet_malloc(len + 1);
+            strncpy(part, start, len);
+            part[len] = '\0';
+            puppet_array_append(result->data.array, puppet_value_create_string(part, len));
+            puppet_free(part);
+
+            start = found + pattern_len;
+        }
+
+        /* Add remaining part */
+        size_t remaining_len = strlen(start);
+        puppet_array_append(result->data.array, puppet_value_create_string(start, remaining_len));
+    }
+
+    puppet_value_destroy(str_val);
+    puppet_value_destroy(pattern_val);
+
+    return result;
 }
