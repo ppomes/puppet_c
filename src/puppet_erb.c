@@ -63,7 +63,7 @@ puppet_ruby_context_t *puppet_ruby_init(void) {
     
     // Load ERB library
     int state = 0;
-    VALUE result = rb_eval_string_protect("require 'erb'", &state);
+    (void)rb_eval_string_protect("require 'erb'", &state);
     if (state == 0) {
         ctx->initialized = 1;
     } else {
@@ -326,7 +326,8 @@ char *puppet_erb_file(const char *template_path, puppet_env_t *env, puppet_ruby_
     fseek(file, 0, SEEK_SET);
     
     char *content = puppet_malloc(file_size + 1);
-    fread(content, 1, file_size, file);
+    size_t bytes_read = fread(content, 1, file_size, file);
+    (void)bytes_read; /* Suppress warning - we trust file_size from ftell */
     content[file_size] = '\0';
     fclose(file);
     

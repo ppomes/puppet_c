@@ -375,7 +375,7 @@ puppet_value_t *puppet_func_lookup(puppet_expr_list_t *args, puppet_env_t *env) 
         // Extract options from hash
         puppet_value_t *key_val = puppet_hash_get(first_arg->data.hash, "key", strlen("key"));
         puppet_value_t *default_val = puppet_hash_get(first_arg->data.hash, "default", strlen("default"));
-        puppet_value_t *merge_val = puppet_hash_get(first_arg->data.hash, "merge", strlen("merge"));
+        /* puppet_value_t *merge_val = puppet_hash_get(first_arg->data.hash, "merge", strlen("merge")); */ /* Currently unused */
         
         if (!key_val || key_val->type != PUPPET_VALUE_STRING) {
             puppet_log(PUPPET_LOG_ERROR, "lookup() options hash must contain 'key' string");

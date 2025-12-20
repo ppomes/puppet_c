@@ -39,13 +39,6 @@ void puppet_string_free(puppet_string_t str) {
     puppet_free(str.data);
 }
 
-static puppet_string_t puppet_string_dup(puppet_string_t str) {
-    puppet_string_t result;
-    result.len = str.len;
-    result.data = puppet_malloc(str.len + 1);
-    memcpy(result.data, str.data, str.len + 1);
-    return result;
-}
 
 puppet_value_t *puppet_value_create_undef(void) {
     puppet_value_t *value = puppet_calloc(1, sizeof(puppet_value_t));

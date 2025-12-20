@@ -138,7 +138,7 @@ puppet_stmt_t *puppet_loader_load_class(puppet_loader_t *loader,
         if (stmt && stmt->type == PUPPET_STMT_CLASS_DEF) {
             /* Check if this is the class we're looking for */
             /* Note: We might need to handle namespaced classes differently */
-            const char *def_name = stmt->data.class_def.name.data;
+            /* const char *def_name = stmt->data.class_def.name.data; */ /* Currently unused */
             
             /* For namespaced classes, we might have a mismatch between
              * the requested name (apache::vhost) and the defined name (vhost)
@@ -172,6 +172,7 @@ puppet_stmt_t *puppet_loader_load_class(puppet_loader_t *loader,
 
 puppet_program_t *puppet_loader_load_manifest(puppet_loader_t *loader,
                                               const char *file_path) {
+    (void)loader; /* Currently unused */
     if (!file_path) return NULL;
     
     /* Open the file */

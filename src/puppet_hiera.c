@@ -269,6 +269,7 @@ puppet_value_t *puppet_hiera_lookup(
     puppet_value_t *default_value,
     puppet_hiera_merge_t merge_strategy
 ) {
+    (void)merge_strategy; /* Currently unused - TODO: implement merging */
     if (!context || !key) return default_value;
     
     // Check cache first
@@ -321,7 +322,7 @@ puppet_value_t *puppet_hiera_lookup(
  */
 puppet_value_t *puppet_hiera_data_provider_lookup(
     const char *key,
-    struct puppet_env *env,
+    puppet_env_t *env,
     void *provider_data
 ) {
     puppet_hiera_config_t *config = (puppet_hiera_config_t *)provider_data;

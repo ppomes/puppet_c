@@ -131,7 +131,7 @@ puppet_value_t *puppet_hiera_lookup(
  */
 puppet_value_t *puppet_hiera_data_provider_lookup(
     const char *key,
-    struct puppet_env *env,
+    puppet_env_t *env,
     void *provider_data
 );
 
