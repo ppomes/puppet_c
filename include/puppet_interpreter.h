@@ -138,6 +138,7 @@ typedef struct puppet_env {
     
     /* Template output mode */
     char *template_output_target;             /**< Resource title to output template for (NULL = disabled) */
+    bool template_output_found;               /**< Whether we found the template target */
     
     /* Core function support */
     puppet_hash_t *defined_resources;         /**< Track defined resources for defined() function */

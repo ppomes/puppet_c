@@ -306,7 +306,12 @@ int main(int argc, char *argv[]) {
 
             puppet_exec_program(program, env);
             if (verbose) fprintf(stderr, "Evaluation complete.\n");
-            
+
+            // Check if template target was found
+            if (template_output && !env->template_output_found) {
+                fprintf(stderr, "Warning: No file resource with title '%s' found\n", template_output);
+            }
+
             // Check if compilation failed due to fail() function
             if (env->compilation_failed) {
                 if (env->failure_message) {

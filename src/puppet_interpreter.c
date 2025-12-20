@@ -65,6 +65,7 @@ puppet_env_t *puppet_env_create(void) {
     
     /* Initialize template output */
     env->template_output_target = NULL;
+    env->template_output_found = false;
     
     /* Initialize core function support */
     env->defined_resources = puppet_calloc(1, sizeof(puppet_hash_t));
@@ -605,6 +606,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         if (is_template_target && strcmp(instance->attributes[j].name.data, "content") == 0) {
                             if (attr_val->type == PUPPET_VALUE_STRING) {
                                 printf("%s", attr_val->data.string.data);
+                                env->template_output_found = true;
                             }
                         }
                         
