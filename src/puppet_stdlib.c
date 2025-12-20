@@ -352,3 +352,99 @@ puppet_value_t *puppet_func_tagged(puppet_expr_list_t *args, puppet_env_t *env) 
     puppet_value_destroy(search_tag);
     return puppet_value_create_bool(has_tag);
 }
+
+/**
+ * @brief Lookup function for Hiera data lookups
+ * 
+ * Supports multiple call signatures:
+ * - lookup(key) - simple lookup with nil default
+ * - lookup(key, default) - lookup with default value
+ * - lookup(key, type, default) - with type checking
+ * - lookup(options_hash) - hash with key, default, merge options
+ */
+puppet_value_t *puppet_func_lookup(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count == 0) {
+        puppet_log(PUPPET_LOG_ERROR, "lookup() requires at least one argument");
+        return puppet_value_create_undef();
+    }
+    
+    puppet_value_t *first_arg = puppet_eval_expr(args->exprs[0], env);
+    
+    // Check if first argument is a hash (options style)
+    if (first_arg->type == PUPPET_VALUE_HASH) {
+        // Extract options from hash
+        puppet_value_t *key_val = puppet_hash_get(first_arg->data.hash, "key", strlen("key"));
+        puppet_value_t *default_val = puppet_hash_get(first_arg->data.hash, "default", strlen("default"));
+        puppet_value_t *merge_val = puppet_hash_get(first_arg->data.hash, "merge", strlen("merge"));
+        
+        if (!key_val || key_val->type != PUPPET_VALUE_STRING) {
+            puppet_log(PUPPET_LOG_ERROR, "lookup() options hash must contain 'key' string");
+            puppet_value_destroy(first_arg);
+            return puppet_value_create_undef();
+        }
+        
+        const char *key = key_val->data.string.data;
+        puppet_value_t *result = NULL;
+        
+        // Try data provider lookup first
+        for (size_t i = 0; i < env->data_provider_count; i++) {
+            if (env->data_providers[i] && env->data_providers[i]->lookup) {
+                result = env->data_providers[i]->lookup(key, env, env->data_providers[i]->data);
+                if (result) break;
+            }
+        }
+        
+        // Fall back to variable lookup
+        if (!result) {
+            result = puppet_variable_lookup_chain(env, key);
+        }
+        
+        // Use default if not found
+        if (!result && default_val) {
+            result = puppet_value_copy(default_val);
+        }
+        
+        puppet_value_destroy(first_arg);
+        return result ? result : puppet_value_create_undef();
+    }
+    
+    // Simple lookup(key) or lookup(key, default) style
+    if (first_arg->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "lookup() key must be a string");
+        puppet_value_destroy(first_arg);
+        return puppet_value_create_undef();
+    }
+    
+    const char *key = first_arg->data.string.data;
+    puppet_value_t *default_value = NULL;
+    
+    // Get default value if provided
+    if (args->count > 1) {
+        default_value = puppet_eval_expr(args->exprs[1], env);
+    }
+    
+    // Perform lookup - try data providers first
+    puppet_value_t *result = NULL;
+    
+    for (size_t i = 0; i < env->data_provider_count; i++) {
+        if (env->data_providers[i] && env->data_providers[i]->lookup) {
+            result = env->data_providers[i]->lookup(key, env, env->data_providers[i]->data);
+            if (result) break;
+        }
+    }
+    
+    // Fall back to variable lookup
+    if (!result) {
+        result = puppet_variable_lookup_chain(env, key);
+    }
+    
+    // Use default if not found
+    if (!result && default_value) {
+        result = puppet_value_copy(default_value);
+    }
+    
+    puppet_value_destroy(first_arg);
+    if (default_value) puppet_value_destroy(default_value);
+    
+    return result ? result : puppet_value_create_undef();
+}

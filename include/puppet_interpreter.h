@@ -47,12 +47,12 @@ typedef struct puppet_data_provider {
     /** Core lookup function */
     puppet_value_t *(*lookup)(
         const char *key,           /**< Variable name to look up */
-        struct puppet_env_t *env,  /**< Current environment/scope */
+        struct puppet_env *env,    /**< Current environment/scope */
         void *provider_data        /**< Provider-specific data */
     );
     
     /** Check if key exists (optional optimization) */
-    bool (*has_key)(const char *key, struct puppet_env_t *env, void *data);
+    bool (*has_key)(const char *key, struct puppet_env *env, void *data);
     
     /** Initialize provider (load config, connect, etc.) */
     int (*init)(void **provider_data, const char *config);

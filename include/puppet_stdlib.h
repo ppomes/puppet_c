@@ -18,6 +18,9 @@ puppet_value_t *puppet_func_realize(puppet_expr_list_t *args, puppet_env_t *env)
 puppet_value_t *puppet_func_tag(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_tagged(puppet_expr_list_t *args, puppet_env_t *env);
 
+// Data lookup functions
+puppet_value_t *puppet_func_lookup(puppet_expr_list_t *args, puppet_env_t *env);
+
 // Utility function to convert values to strings for logging
 char *puppet_value_to_display_string(puppet_value_t *value);
 

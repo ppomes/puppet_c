@@ -1,0 +1,28 @@
+---
+# Common Hiera data for testing
+
+# Simple key-value pairs
+test_message: "Hello from Hiera!"
+test_number: 42
+test_boolean: true
+
+# Array data
+test_array:
+  - item1
+  - item2
+  - item3
+
+# Hash data
+test_hash:
+  key1: value1
+  key2: value2
+  nested:
+    deep_key: deep_value
+
+# Application-specific data
+apache:
+  port: 8080
+  docroot: "/var/www/html"
+  modules:
+    - mod_ssl
+    - mod_rewrite

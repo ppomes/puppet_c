@@ -21,6 +21,11 @@ if HAVE_RUBY
 puppetc_SOURCES += puppet_erb.c
 endif
 
+# Conditionally add Hiera support
+if HAVE_HIERA
+puppetc_SOURCES += puppet_hiera.c
+endif
+
 # Include directories
 AM_CPPFLAGS = -I$(top_srcdir)/include
 
@@ -36,6 +41,12 @@ AM_CFLAGS += -DDISABLE_RUBY
 puppetc_LDADD = -lpthread
 endif
 
+# Conditional Hiera/YAML flags
+if HAVE_HIERA
+AM_CFLAGS += $(YAML_CFLAGS) -DHAVE_YAML
+puppetc_LDADD += $(YAML_LIBS)
+endif
+
 # Header files to install
 include_HEADERS = \
     $(top_srcdir)/include/puppet_ast.h \
@@ -48,6 +59,10 @@ include_HEADERS = \
 
 if HAVE_RUBY
 include_HEADERS += $(top_srcdir)/include/puppet_erb.h
+endif
+
+if HAVE_HIERA
+include_HEADERS += $(top_srcdir)/include/puppet_hiera.h
 endif
 
 # Flex/Bison rules
@@ -67,6 +82,9 @@ puppet_stdlib.$(OBJEXT): puppet.tab.h
 main.$(OBJEXT): puppet.tab.h
 if HAVE_RUBY
 puppet_erb.$(OBJEXT): puppet.tab.h
+endif
+if HAVE_HIERA
+puppet_hiera.$(OBJEXT): puppet.tab.h
 endif
 
 # Install additional files

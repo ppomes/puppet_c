@@ -1,0 +1,405 @@
+/**
+ * @file puppet_hiera_simple.c
+ * @brief Simplified Hiera implementation that compiles with current API
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include "puppet_hiera.h"
+#include "puppet_memory.h"
+#include "puppet_stdlib.h"
+
+#ifdef HAVE_YAML
+
+/* Forward declarations for YAML parsing */
+static puppet_value_t *yaml_node_to_puppet_value(yaml_node_t *node, yaml_document_t *document);
+
+/**
+ * @brief Convert YAML sequence to Puppet array
+ */
+static puppet_value_t *yaml_sequence_to_array(yaml_node_t *node, yaml_document_t *document) {
+    puppet_value_t *array = puppet_value_create_array();
+    
+    for (yaml_node_item_t *item = node->data.sequence.items.start;
+         item < node->data.sequence.items.top; item++) {
+        yaml_node_t *value_node = yaml_document_get_node(document, *item);
+        if (value_node) {
+            puppet_value_t *value = yaml_node_to_puppet_value(value_node, document);
+            if (value) {
+                puppet_array_append(array->data.array, value);
+            }
+        }
+    }
+    
+    return array;
+}
+
+/**
+ * @brief Convert YAML mapping to Puppet hash
+ */
+static puppet_value_t *yaml_mapping_to_hash(yaml_node_t *node, yaml_document_t *document) {
+    puppet_value_t *hash = puppet_value_create_hash();
+    
+    for (yaml_node_pair_t *pair = node->data.mapping.pairs.start;
+         pair < node->data.mapping.pairs.top; pair++) {
+        yaml_node_t *key_node = yaml_document_get_node(document, pair->key);
+        yaml_node_t *value_node = yaml_document_get_node(document, pair->value);
+        
+        if (key_node && value_node && key_node->type == YAML_SCALAR_NODE) {
+            char *key = (char *)key_node->data.scalar.value;
+            puppet_value_t *value = yaml_node_to_puppet_value(value_node, document);
+            if (value) {
+                puppet_hash_set(hash->data.hash, key, strlen(key), value);
+            }
+        }
+    }
+    
+    return hash;
+}
+
+/**
+ * @brief Convert YAML scalar to appropriate Puppet value type
+ */
+static puppet_value_t *yaml_scalar_to_value(yaml_node_t *node) {
+    char *scalar = (char *)node->data.scalar.value;
+    
+    /* Check for boolean values */
+    if (strcmp(scalar, "true") == 0 || strcmp(scalar, "yes") == 0 || 
+        strcmp(scalar, "on") == 0 || strcmp(scalar, "TRUE") == 0) {
+        return puppet_value_create_bool(1);
+    }
+    if (strcmp(scalar, "false") == 0 || strcmp(scalar, "no") == 0 || 
+        strcmp(scalar, "off") == 0 || strcmp(scalar, "FALSE") == 0) {
+        return puppet_value_create_bool(0);
+    }
+    
+    /* Check for null */
+    if (strcmp(scalar, "null") == 0 || strcmp(scalar, "~") == 0 || 
+        strcmp(scalar, "NULL") == 0 || strlen(scalar) == 0) {
+        return puppet_value_create_undef();
+    }
+    
+    /* Check for number */
+    char *endptr;
+    double num = strtod(scalar, &endptr);
+    if (*endptr == '\0') {
+        return puppet_value_create_number(num);
+    }
+    
+    /* Default to string */
+    return puppet_value_create_string(scalar, strlen(scalar));
+}
+
+/**
+ * @brief Convert YAML node to Puppet value
+ */
+static puppet_value_t *yaml_node_to_puppet_value(yaml_node_t *node, yaml_document_t *document) {
+    if (!node) return NULL;
+    
+    switch (node->type) {
+        case YAML_SCALAR_NODE:
+            return yaml_scalar_to_value(node);
+            
+        case YAML_SEQUENCE_NODE:
+            return yaml_sequence_to_array(node, document);
+            
+        case YAML_MAPPING_NODE:
+            return yaml_mapping_to_hash(node, document);
+            
+        default:
+            return NULL;
+    }
+}
+
+/**
+ * @brief Load and parse YAML file into Puppet value
+ */
+puppet_value_t *puppet_hiera_load_yaml(const char *filepath) {
+    FILE *file = fopen(filepath, "r");
+    if (!file) {
+        return NULL;
+    }
+    
+    yaml_parser_t parser;
+    yaml_document_t document;
+    puppet_value_t *result = NULL;
+    
+    if (!yaml_parser_initialize(&parser)) {
+        fclose(file);
+        return NULL;
+    }
+    
+    yaml_parser_set_input_file(&parser, file);
+    
+    if (yaml_parser_load(&parser, &document)) {
+        yaml_node_t *root = yaml_document_get_root_node(&document);
+        if (root) {
+            result = yaml_node_to_puppet_value(root, &document);
+        }
+        yaml_document_delete(&document);
+    }
+    
+    yaml_parser_delete(&parser);
+    fclose(file);
+    
+    return result;
+}
+
+#else /* !HAVE_YAML */
+
+puppet_value_t *puppet_hiera_load_yaml(const char *filepath) {
+    (void)filepath;
+    fprintf(stderr, "Error: YAML support not compiled in\n");
+    return NULL;
+}
+
+#endif /* HAVE_YAML */
+
+/**
+ * @brief Create default Hiera configuration
+ */
+puppet_hiera_config_t *puppet_hiera_config_create_default(const char *datadir) {
+    puppet_hiera_config_t *config = puppet_calloc(1, sizeof(puppet_hiera_config_t));
+    config->version = 5;
+    config->default_merge = HIERA_MERGE_FIRST;
+    config->datadir = puppet_strdup(datadir ? datadir : "data");
+    
+    // Create simple hierarchy
+    puppet_hiera_level_t *common = puppet_calloc(1, sizeof(puppet_hiera_level_t));
+    common->name = puppet_strdup("Common");
+    common->path_template = puppet_strdup("common.yaml");
+    common->datadir = puppet_strdup(config->datadir);
+    common->backend = HIERA_BACKEND_YAML;
+    config->hierarchy = common;
+    
+    // Initialize cache and defaults as empty hashes
+    config->cache = puppet_value_create_hash();
+    config->defaults = puppet_value_create_hash();
+    
+    return config;
+}
+
+/**
+ * @brief Create Hiera configuration from file
+ */
+puppet_hiera_config_t *puppet_hiera_config_create(const char *config_path) {
+    // For now, just return default config
+    (void)config_path;
+    return puppet_hiera_config_create_default("data");
+}
+
+/**
+ * @brief Destroy Hiera configuration
+ */
+void puppet_hiera_config_destroy(puppet_hiera_config_t *config) {
+    if (!config) return;
+    
+    puppet_hiera_level_t *level = config->hierarchy;
+    while (level) {
+        puppet_hiera_level_t *next = level->next;
+        puppet_free(level->name);
+        puppet_free(level->path_template);
+        puppet_free(level->datadir);
+        puppet_free(level);
+        level = next;
+    }
+    
+    puppet_free(config->datadir);
+    if (config->cache) puppet_value_destroy((puppet_value_t *)config->cache);
+    if (config->defaults) puppet_value_destroy((puppet_value_t *)config->defaults);
+    puppet_free(config);
+}
+
+/**
+ * @brief Create Hiera context
+ */
+puppet_hiera_context_t *puppet_hiera_context_create(
+    puppet_hiera_config_t *config,
+    puppet_env_t *env
+) {
+    puppet_hiera_context_t *context = puppet_calloc(1, sizeof(puppet_hiera_context_t));
+    context->config = config;
+    context->env = env;
+    context->variables = puppet_value_create_hash();
+    
+    // Set up basic variables
+    if (env && env->node_name) {
+        context->node = puppet_strdup(env->node_name);
+        puppet_hash_set(context->variables->data.hash, "::fqdn", strlen("::fqdn"),
+            puppet_value_create_string(env->node_name, strlen(env->node_name)));
+    }
+    
+    return context;
+}
+
+/**
+ * @brief Destroy Hiera context
+ */
+void puppet_hiera_context_destroy(puppet_hiera_context_t *context) {
+    if (!context) return;
+    
+    puppet_free(context->environment);
+    puppet_free(context->node);
+    if (context->variables) puppet_value_destroy((puppet_value_t *)context->variables);
+    puppet_free(context);
+}
+
+/**
+ * @brief Simple interpolation - just returns a copy for now
+ */
+char *puppet_hiera_interpolate(const char *template, puppet_hiera_context_t *context) {
+    (void)context;
+    return puppet_strdup(template);
+}
+
+/**
+ * @brief Simple merge - just returns first value
+ */
+puppet_value_t *puppet_hiera_merge_values(
+    puppet_value_t *existing,
+    puppet_value_t *new,
+    puppet_hiera_merge_t strategy
+) {
+    (void)strategy;
+    (void)new;
+    return existing;
+}
+
+/**
+ * @brief Perform Hiera lookup
+ */
+puppet_value_t *puppet_hiera_lookup(
+    puppet_hiera_context_t *context,
+    const char *key,
+    puppet_value_t *default_value,
+    puppet_hiera_merge_t merge_strategy
+) {
+    if (!context || !key) return default_value;
+    
+    // Check cache first
+    puppet_value_t *cached = puppet_hash_get(context->config->cache->data.hash, key, strlen(key));
+    if (cached) {
+        return cached;
+    }
+    
+    puppet_value_t *result = NULL;
+    
+    // Try to load common.yaml
+    for (puppet_hiera_level_t *level = context->config->hierarchy; level; level = level->next) {
+        char fullpath[1024];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", level->datadir, level->path_template);
+        
+        struct stat st;
+        if (stat(fullpath, &st) != 0 || !S_ISREG(st.st_mode)) {
+            continue;
+        }
+        
+        puppet_value_t *data = puppet_hiera_load_yaml(fullpath);
+        if (data && data->type == PUPPET_VALUE_HASH) {
+            puppet_value_t *value = puppet_hash_get(data->data.hash, key, strlen(key));
+            
+            if (value) {
+                result = puppet_value_copy(value);
+                puppet_value_destroy(data);
+                break;
+            }
+            
+            puppet_value_destroy(data);
+        }
+    }
+    
+    // Use default if nothing found
+    if (!result && default_value) {
+        result = puppet_value_copy(default_value);
+    }
+    
+    // Cache the result
+    if (result) {
+        puppet_hash_set(context->config->cache->data.hash, key, strlen(key), puppet_value_copy(result));
+    }
+    
+    return result;
+}
+
+/**
+ * @brief Data provider lookup function
+ */
+puppet_value_t *puppet_hiera_data_provider_lookup(
+    const char *key,
+    struct puppet_env *env,
+    void *provider_data
+) {
+    puppet_hiera_config_t *config = (puppet_hiera_config_t *)provider_data;
+    if (!config) return NULL;
+    
+    puppet_hiera_context_t *context = puppet_hiera_context_create(config, env);
+    puppet_value_t *result = puppet_hiera_lookup(context, key, NULL, config->default_merge);
+    
+    puppet_value_t *copy = result ? puppet_value_copy(result) : NULL;
+    puppet_hiera_context_destroy(context);
+    
+    return copy;
+}
+
+/**
+ * @brief Initialize Hiera data provider
+ */
+int puppet_hiera_data_provider_init(void **provider_data, const char *config) {
+    if (!provider_data) return -1;
+    
+    puppet_hiera_config_t *hiera_config = NULL;
+    
+    if (config) {
+        struct stat st;
+        if (stat(config, &st) == 0 && S_ISREG(st.st_mode)) {
+            hiera_config = puppet_hiera_config_create(config);
+        } else {
+            hiera_config = puppet_hiera_config_create_default(config);
+        }
+    } else {
+        hiera_config = puppet_hiera_config_create_default("data");
+    }
+    
+    if (!hiera_config) {
+        return -1;
+    }
+    
+    *provider_data = hiera_config;
+    return 0;
+}
+
+/**
+ * @brief Cleanup Hiera data provider
+ */
+void puppet_hiera_data_provider_cleanup(void *provider_data) {
+    if (provider_data) {
+        puppet_hiera_config_destroy((puppet_hiera_config_t *)provider_data);
+    }
+}
+
+/**
+ * @brief Register Hiera as a data provider
+ */
+int puppet_hiera_register_provider(puppet_env_t *env, const char *config_path) {
+    if (!env) return -1;
+    
+    puppet_data_provider_t *provider = puppet_calloc(1, sizeof(puppet_data_provider_t));
+    provider->name = puppet_strdup("hiera");
+    provider->lookup = puppet_hiera_data_provider_lookup;
+    provider->init = puppet_hiera_data_provider_init;
+    provider->cleanup = puppet_hiera_data_provider_cleanup;
+    
+    void *provider_data = NULL;
+    if (provider->init(&provider_data, config_path) != 0) {
+        puppet_free(provider->name);
+        puppet_free(provider);
+        return -1;
+    }
+    
+    provider->data = provider_data;
+    
+    // Register with environment
+    return puppet_register_data_provider(env, provider);
+}

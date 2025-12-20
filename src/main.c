@@ -26,6 +26,9 @@
 #include "puppet_loader.h"
 #include "puppet_memory.h"
 #include "puppet.tab.h"
+#ifdef HAVE_YAML
+#include "puppet_hiera.h"
+#endif
 
 /* External symbols from generated parser */
 extern int yyparse(void);
@@ -47,6 +50,7 @@ static void print_usage(const char *program_name) {
     printf("  -a, --all-nodes   Execute all nodes (default: only 'default' node)\n");
     printf("  -f, --facts       Load facts from JSON file (facter or PuppetDB format)\n");
     printf("  -t, --template    Display template output for file resource with specified title\n");
+    printf("  -D, --hiera-data  Path to Hiera data directory (default: ./data)\n");
     printf("  -h, --help        Show this help message\n");
     printf("\nWhen a directory is provided, site.pp will be loaded from manifests/\n");
     printf("and modules will be loaded from modules/ subdirectory.\n");
@@ -68,6 +72,7 @@ int main(int argc, char *argv[]) {
     int all_nodes = 0;
     char *facts_file = NULL;
     char *template_output = NULL;
+    char *hiera_datadir = NULL;
     int opt;
     
     static struct option long_options[] = {
@@ -79,11 +84,12 @@ int main(int argc, char *argv[]) {
         {"all-nodes", no_argument, 0, 'a'},
         {"facts", required_argument, 0, 'f'},
         {"template", required_argument, 0, 't'},
+        {"hiera-data", required_argument, 0, 'D'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
     
-    while ((opt = getopt_long(argc, argv, "jeo:m:n:af:t:hd", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "jeo:m:n:af:t:D:hd", long_options, NULL)) != -1) {
         switch (opt) {
             case 'j':
                 json_output = 1;
@@ -108,6 +114,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 't':
                 template_output = optarg;
+                break;
+            case 'D':
+                hiera_datadir = optarg;
                 break;
             case 'h':
                 print_usage(argv[0]);
@@ -241,6 +250,14 @@ int main(int argc, char *argv[]) {
             if (loader) {
                 puppet_env_set_loader(env, loader);
             }
+            
+            /* Configure Hiera data provider */
+            #ifdef HAVE_YAML
+            if (hiera_datadir) {
+                puppet_hiera_register_provider(env, hiera_datadir);
+                printf("Using Hiera data directory: %s\n", hiera_datadir);
+            }
+            #endif
             
             /* Configure node execution */
             if (all_nodes) {

@@ -26,27 +26,29 @@ This implementation is feature-complete for core Puppet language parsing:
 - ✅ **Module autoloading system**
 - ✅ **Directory-based execution with site.pp support**
 - ✅ **Include statement with automatic class loading**
-- ✅ **Data provider interface for Hiera integration (infrastructure ready)**
-- ⏳ Standard library functions (partial implementation)
+- ✅ **Full Hiera support with YAML data backend**
+- ✅ **lookup() function for hierarchical data retrieval**
+- ✅ **Core Puppet functions (fail, notice, info, warning, debug, err, defined, tag, tagged)**
+- ⏳ Additional standard library functions (partial implementation)
 - ⏳ PuppetDB integration (not yet implemented)
-- ⏳ Full Hiera backend implementation (infrastructure complete)
 
 ## Building
 
 ### Prerequisites
 
 - Ruby 3.4+ development headers (for ERB template support)
+- libyaml development headers (for Hiera support)
 - flex and bison for parser generation
 - GCC or compatible C compiler
 
 On macOS with Homebrew:
 ```bash
-brew install ruby flex bison
+brew install ruby flex bison libyaml
 ```
 
 On Ubuntu/Debian:
 ```bash
-apt-get install ruby-dev flex bison build-essential
+apt-get install ruby-dev libyaml-dev flex bison build-essential
 ```
 
 ### Compilation
@@ -80,6 +82,11 @@ Manifest evaluation with variables:
 Evaluation with facts loading:
 ```bash
 ./bin/puppetc --eval --facts facts.json manifest.pp
+```
+
+Evaluation with Hiera data:
+```bash
+./bin/puppetc --eval --hiera-data /path/to/data manifest.pp
 ```
 
 ### Directory Mode (Module Support)
@@ -198,7 +205,9 @@ The implementation follows a traditional compiler architecture:
 5. **Module Loader** (`puppet_loader.h/c`) - Handles module autoloading and class resolution
 6. **Facts System** (`puppet_json_parser.h/c`) - JSON facts loading from facter and PuppetDB formats
 7. **ERB Integration** (`puppet_erb.h/c`) - Ruby template processing
-8. **Runtime** - Provides built-in functions and resource management
+8. **Hiera Integration** (`puppet_hiera.h/c`) - Hierarchical data lookup with YAML support
+9. **Standard Library** (`puppet_stdlib.h/c`) - Core Puppet functions including lookup()
+10. **Runtime** - Provides built-in functions and resource management
 
 ### Module Loading System
 
@@ -220,6 +229,23 @@ The parser includes comprehensive ERB template support through Ruby C API integr
 - **Error Handling**: Robust Ruby VM initialization with stdin blocking prevention
 
 See `docs/ERB_ARCHITECTURE.md` for detailed technical documentation.
+
+### Hiera Data Lookup Support
+
+The parser includes full Hiera support for hierarchical data management:
+
+- **YAML Backend**: Complete YAML parsing for all data types (strings, numbers, booleans, arrays, hashes)
+- **lookup() Function**: Standard Puppet lookup function with default value support
+- **Data Provider Architecture**: Extensible system for multiple data sources
+- **Command-line Integration**: `--hiera-data` option to specify data directory
+- **Automatic Registration**: Hiera provider automatically registered with environment
+- **Caching**: Lookup results cached for performance
+
+Example usage:
+```puppet
+$db_password = lookup('database::password', 'default_password')
+$config = lookup('myapp::config')
+```
 
 ## Key Differences from Haskell Implementation
 

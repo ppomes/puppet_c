@@ -3,6 +3,9 @@
 #include "puppet_stdlib.h"
 #include "puppet_loader.h"
 #include "puppet_memory.h"
+#ifdef HAVE_YAML
+#include "puppet_hiera.h"
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -69,6 +72,11 @@ puppet_env_t *puppet_env_create(void) {
     env->current_tags = NULL;  /* Initialized when first tag is added */
     env->compilation_failed = false;
     env->failure_message = NULL;
+    
+    /* Register Hiera data provider */
+    #ifdef HAVE_YAML
+    puppet_hiera_register_provider(env, "data");
+    #endif
     
     return env;
 }
@@ -305,6 +313,10 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             }
             else if (strcmp(func_name, "tagged") == 0) {
                 return puppet_func_tagged(&expr->data.funcall.args, env);
+            }
+            // Data lookup functions
+            else if (strcmp(func_name, "lookup") == 0) {
+                return puppet_func_lookup(&expr->data.funcall.args, env);
             }
             else {
                 printf("Error: Unknown function: %s\n", func_name);
