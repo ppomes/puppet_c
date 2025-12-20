@@ -601,20 +601,10 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         puppet_debug("    %s => %s", instance->attributes[j].name.data, attr_str);
                         
                         // If this is template output mode and we found the content attribute
+                        // Output goes to stdout (clean, for piping) - no markers
                         if (is_template_target && strcmp(instance->attributes[j].name.data, "content") == 0) {
-                            // Check if the expression is a template() function call
-                            puppet_expr_t *content_expr = instance->attributes[j].value;
-                            if (content_expr->type == PUPPET_EXPR_FUNCALL && 
-                                strcmp(content_expr->data.funcall.name.data, "template") == 0) {
-                                
-                                printf("\n=== ERB TEMPLATE OUTPUT ===\n");
+                            if (attr_val->type == PUPPET_VALUE_STRING) {
                                 printf("%s", attr_val->data.string.data);
-                                printf("\n=== END ERB TEMPLATE OUTPUT ===\n");
-                                
-                            } else if (attr_val->type == PUPPET_VALUE_STRING) {
-                                printf("\n=== STRING CONTENT OUTPUT ===\n");
-                                printf("%s", attr_val->data.string.data);
-                                printf("\n=== END STRING CONTENT OUTPUT ===\n");
                             }
                         }
                         
