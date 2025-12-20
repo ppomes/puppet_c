@@ -524,3 +524,85 @@ puppet_value_t *puppet_func_split(puppet_expr_list_t *args, puppet_env_t *env) {
 
     return result;
 }
+
+/**
+ * @brief Puppet join() function - join array elements into a string
+ *
+ * Usage: join(array, separator)
+ * Returns a string with array elements joined by separator
+ *
+ * Examples:
+ *   join(['a', 'b', 'c'], ',')     => 'a,b,c'
+ *   join(['one', 'two'], ' - ')   => 'one - two'
+ *   join([1, 2, 3], ':')          => '1:2:3'
+ */
+puppet_value_t *puppet_func_join(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log(PUPPET_LOG_ERROR, "join() requires 2 arguments: array and separator");
+        return puppet_value_create_undef();
+    }
+
+    /* Evaluate arguments */
+    puppet_value_t *array_val = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *sep_val = puppet_eval_expr(args->exprs[1], env);
+
+    if (!array_val || array_val->type != PUPPET_VALUE_ARRAY) {
+        puppet_log(PUPPET_LOG_ERROR, "join() first argument must be an array");
+        if (array_val) puppet_value_destroy(array_val);
+        if (sep_val) puppet_value_destroy(sep_val);
+        return puppet_value_create_undef();
+    }
+
+    if (!sep_val || sep_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "join() second argument must be a string separator");
+        puppet_value_destroy(array_val);
+        if (sep_val) puppet_value_destroy(sep_val);
+        return puppet_value_create_undef();
+    }
+
+    const char *separator = sep_val->data.string.data;
+    size_t sep_len = strlen(separator);
+    puppet_array_t *array = array_val->data.array;
+
+    /* Handle empty array */
+    if (array->count == 0) {
+        puppet_value_destroy(array_val);
+        puppet_value_destroy(sep_val);
+        return puppet_value_create_string("", 0);
+    }
+
+    /* Calculate total length needed */
+    size_t total_len = 0;
+    char **parts = puppet_calloc(array->count, sizeof(char*));
+
+    for (size_t i = 0; i < array->count; i++) {
+        parts[i] = puppet_value_to_display_string(array->items[i]);
+        total_len += strlen(parts[i]);
+        if (i > 0) total_len += sep_len;
+    }
+
+    /* Build result string */
+    char *result_str = puppet_malloc(total_len + 1);
+    size_t offset = 0;
+
+    for (size_t i = 0; i < array->count; i++) {
+        if (i > 0) {
+            memcpy(result_str + offset, separator, sep_len);
+            offset += sep_len;
+        }
+        size_t part_len = strlen(parts[i]);
+        memcpy(result_str + offset, parts[i], part_len);
+        offset += part_len;
+        puppet_free(parts[i]);
+    }
+    result_str[total_len] = '\0';
+
+    puppet_free(parts);
+    puppet_value_destroy(array_val);
+    puppet_value_destroy(sep_val);
+
+    puppet_value_t *result = puppet_value_create_string(result_str, total_len);
+    puppet_free(result_str);
+
+    return result;
+}

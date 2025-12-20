@@ -37,6 +37,7 @@ EXTRA_DIST = \
     puppet/hiera_complex_test.pp \
     puppet/hiera_access_test.pp \
     puppet/split_test.pp \
+    puppet/join_test.pp \
     data/common.yaml
 
 # Test output directory
@@ -185,6 +186,23 @@ check-core-functions:
 	else \
 		echo "    ✗ split() function test failed - execution error"; \
 		sed 's/^/      /' output/split_test.out; \
+		exit 1; \
+	fi
+	@echo "  Testing join() function..."
+	@if $(top_builddir)/src/puppetc --eval $(srcdir)/puppet/join_test.pp > output/join_test.out 2>&1; then \
+		if grep -q "join() function tests completed" output/join_test.out && \
+		   grep -q 'Joined with colon: a:b:c' output/join_test.out && \
+		   grep -q 'Joined with dash: one - two - three' output/join_test.out && \
+		   grep -q 'Round-trip: x:y:z' output/join_test.out; then \
+			echo "    ✓ join() function test passed"; \
+		else \
+			echo "    ✗ join() function test failed - missing expected output"; \
+			sed 's/^/      /' output/join_test.out; \
+			exit 1; \
+		fi; \
+	else \
+		echo "    ✗ join() function test failed - execution error"; \
+		sed 's/^/      /' output/join_test.out; \
 		exit 1; \
 	fi
 	@echo "✅ All core function tests passed!"

@@ -318,6 +318,9 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "split") == 0) {
                 return puppet_func_split(&expr->data.funcall.args, env);
             }
+            else if (strcmp(func_name, "join") == 0) {
+                return puppet_func_join(&expr->data.funcall.args, env);
+            }
             else {
                 printf("Error: Unknown function: %s\n", func_name);
                 return puppet_value_create_undef();
@@ -383,25 +386,14 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
 puppet_value_t *puppet_eval_variable(const char *name, puppet_env_t *env) {
     // Use enhanced lookup chain instead of simple scope lookup
     puppet_value_t *value = puppet_variable_lookup_chain(env, name);
-    
+
     if (!value) {
         printf("Warning: Undefined variable: %s\n", name);
         return puppet_value_create_undef();
     }
-    
-    // Return a copy to avoid double-free
-    switch (value->type) {
-        case PUPPET_VALUE_UNDEF:
-            return puppet_value_create_undef();
-        case PUPPET_VALUE_BOOL:
-            return puppet_value_create_bool(value->data.boolean);
-        case PUPPET_VALUE_NUMBER:
-            return puppet_value_create_number(value->data.number);
-        case PUPPET_VALUE_STRING:
-            return puppet_value_create_string(value->data.string.data, value->data.string.len);
-        default:
-            return puppet_value_create_undef();
-    }
+
+    // Return a copy to avoid double-free (handles all types including arrays/hashes)
+    return puppet_value_copy(value);
 }
 
 puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppet_value_t *right) {
