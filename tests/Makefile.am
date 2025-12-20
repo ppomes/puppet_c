@@ -32,10 +32,14 @@ EXTRA_DIST = \
     facts/multi_node_facts.json \
     facts/test_facts_usage.pp \
     facts/test_single_quotes.pp \
-    facts/simple_test.pp
+    facts/simple_test.pp \
+    puppet/hiera_lookup_test.pp \
+    puppet/hiera_complex_test.pp \
+    puppet/hiera_access_test.pp \
+    data/common.yaml
 
 # Test output directory
-check-local: check-parser check-facts check-core-functions
+check-local: check-parser check-facts check-core-functions check-hiera
 	@echo "All tests completed."
 
 check-parser:
@@ -167,6 +171,70 @@ check-core-functions:
 	fi
 	@echo "✅ All core function tests passed!"
 
+check-hiera:
+	@echo "Running Hiera evaluation tests..."
+	@$(MKDIR_P) output
+	@total=0; passed=0; \
+	echo "  Testing basic Hiera lookup functionality..."; \
+	if $(top_builddir)/src/puppetc --eval --hiera-data $(srcdir)/data \
+	   $(srcdir)/puppet/hiera_lookup_test.pp > output/hiera_lookup.out 2>&1; then \
+		if grep -q "Hiera message:" output/hiera_lookup.out && \
+		   grep -q "Unknown key with default: default_value" output/hiera_lookup.out && \
+		   grep -q "Hiera number: 42" output/hiera_lookup.out && \
+		   grep -q "Hiera boolean: true" output/hiera_lookup.out; then \
+			echo "    ✓ Basic Hiera lookup test passed"; \
+			passed=$$((passed + 1)); \
+		else \
+			echo "    ✗ Basic Hiera lookup test failed - missing expected output"; \
+			sed 's/^/      /' output/hiera_lookup.out; \
+		fi; \
+	else \
+		echo "    ✗ Basic Hiera lookup test failed - execution error"; \
+		sed 's/^/      /' output/hiera_lookup.out; \
+	fi; \
+	total=$$((total + 1)); \
+	echo "  Testing complex Hiera data structures..."; \
+	if $(top_builddir)/src/puppetc --eval --hiera-data $(srcdir)/data \
+	   $(srcdir)/puppet/hiera_complex_test.pp > output/hiera_complex.out 2>&1; then \
+		if grep -q "Array from Hiera:" output/hiera_complex.out && \
+		   grep -q "Hash from Hiera:" output/hiera_complex.out && \
+		   grep -q "Apache config from Hiera:" output/hiera_complex.out; then \
+			echo "    ✓ Complex Hiera data test passed"; \
+			passed=$$((passed + 1)); \
+		else \
+			echo "    ✗ Complex Hiera data test failed - missing expected output"; \
+			sed 's/^/      /' output/hiera_complex.out; \
+		fi; \
+	else \
+		echo "    ✗ Complex Hiera data test failed - execution error"; \
+		sed 's/^/      /' output/hiera_complex.out; \
+	fi; \
+	total=$$((total + 1)); \
+	echo "  Testing Hiera data access..."; \
+	if $(top_builddir)/src/puppetc --eval --hiera-data $(srcdir)/data \
+	   $(srcdir)/puppet/hiera_access_test.pp > output/hiera_access.out 2>&1; then \
+		if grep -q "Apache data loaded successfully" output/hiera_access.out && \
+		   grep -q "Simple value still works:" output/hiera_access.out; then \
+			echo "    ✓ Hiera data access test passed"; \
+			passed=$$((passed + 1)); \
+		else \
+			echo "    ✗ Hiera data access test failed - missing expected output"; \
+			sed 's/^/      /' output/hiera_access.out; \
+		fi; \
+	else \
+		echo "    ✗ Hiera data access test failed - execution error"; \
+		sed 's/^/      /' output/hiera_access.out; \
+	fi; \
+	total=$$((total + 1)); \
+	echo; \
+	echo "Hiera Test Results: $$passed/$$total tests passed"; \
+	if [ $$passed -eq $$total ]; then \
+		echo "✅ All Hiera tests passed!"; \
+	else \
+		echo "❌ Some Hiera tests failed. Check output/ for details."; \
+		exit 1; \
+	fi
+
 # Memory leak testing with Valgrind
 check-memory: $(top_builddir)/src/puppetc
 	@echo "Running memory leak tests with Valgrind..."
@@ -210,4 +278,4 @@ clean-local:
 $(builddir)/output:
 	$(MKDIR_P) $@
 
-.PHONY: check-parser check-facts check-core-functions check-memory check-asan
+.PHONY: check-parser check-facts check-core-functions check-hiera check-memory check-asan

@@ -3,9 +3,7 @@
 #include "puppet_stdlib.h"
 #include "puppet_loader.h"
 #include "puppet_memory.h"
-#ifdef HAVE_YAML
 #include "puppet_hiera.h"
-#endif
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -74,9 +72,7 @@ puppet_env_t *puppet_env_create(void) {
     env->failure_message = NULL;
     
     /* Register Hiera data provider */
-    #ifdef HAVE_YAML
     puppet_hiera_register_provider(env, "data");
-    #endif
     
     return env;
 }

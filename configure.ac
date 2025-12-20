@@ -101,29 +101,13 @@ fi
 
 AM_CONDITIONAL([HAVE_RUBY], [test "x$ruby_support" = "xyes"])
 
-# Check for libyaml for Hiera support
-AC_ARG_ENABLE([hiera],
-    [AS_HELP_STRING([--enable-hiera], [Enable Hiera data lookup support])],
-    [enable_hiera=$enableval],
-    [enable_hiera=auto])
-
-if test "x$enable_hiera" != "xno"; then
-    PKG_CHECK_MODULES([YAML], [yaml-0.1], [
-        hiera_support=yes
-        AC_DEFINE([HAVE_YAML], [1], [Define if YAML support is available])
-        AC_SUBST([YAML_CFLAGS])
-        AC_SUBST([YAML_LIBS])
-    ], [
-        if test "x$enable_hiera" = "xyes"; then
-            AC_MSG_ERROR([libyaml not found. Install libyaml-dev or use --disable-hiera])
-        fi
-        hiera_support=no
-    ])
-else
-    hiera_support=no
-fi
-
-AM_CONDITIONAL([HAVE_HIERA], [test "x$hiera_support" = "xyes"])
+# Check for libyaml (required for Hiera support)
+PKG_CHECK_MODULES([YAML], [yaml-0.1], [
+    AC_SUBST([YAML_CFLAGS])
+    AC_SUBST([YAML_LIBS])
+], [
+    AC_MSG_ERROR([libyaml not found. Install libyaml-dev package.])
+])
 
 # Check for standard library functions
 AC_CHECK_FUNCS([malloc realloc free strdup strlen strcpy snprintf])
@@ -151,7 +135,6 @@ AC_OUTPUT
 echo ""
 echo "Configuration summary:"
 echo "  Ruby support:     $ruby_support"
-echo "  Hiera support:    $hiera_support"
 echo "  Debug mode:       $enable_debug"
 echo "  CC:               $CC"
 echo "  CFLAGS:           $CFLAGS"

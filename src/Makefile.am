@@ -21,10 +21,8 @@ if HAVE_RUBY
 puppetc_SOURCES += puppet_erb.c
 endif
 
-# Conditionally add Hiera support
-if HAVE_HIERA
+# Hiera support is always included
 puppetc_SOURCES += puppet_hiera.c
-endif
 
 # Include directories
 AM_CPPFLAGS = -I$(top_srcdir)/include
@@ -35,17 +33,14 @@ AM_CFLAGS = -Wall -Wextra -g
 # Conditional Ruby flags
 if HAVE_RUBY
 AM_CFLAGS += $(RUBY_CFLAGS) -DHAVE_RUBY
-puppetc_LDADD = $(RUBY_LIBS) -lm -lpthread
+puppetc_LDADD = $(RUBY_LIBS) -lm -lpthread $(YAML_LIBS)
 else
 AM_CFLAGS += -DDISABLE_RUBY
-puppetc_LDADD = -lpthread
+puppetc_LDADD = -lpthread $(YAML_LIBS)
 endif
 
-# Conditional Hiera/YAML flags
-if HAVE_HIERA
-AM_CFLAGS += $(YAML_CFLAGS) -DHAVE_YAML
-puppetc_LDADD += $(YAML_LIBS)
-endif
+# YAML/Hiera is always included
+AM_CFLAGS += $(YAML_CFLAGS)
 
 # Header files to install
 include_HEADERS = \
@@ -61,9 +56,8 @@ if HAVE_RUBY
 include_HEADERS += $(top_srcdir)/include/puppet_erb.h
 endif
 
-if HAVE_HIERA
+# Hiera header is always included
 include_HEADERS += $(top_srcdir)/include/puppet_hiera.h
-endif
 
 # Flex/Bison rules
 lex.yy.c: puppet.l puppet.tab.h
@@ -83,9 +77,7 @@ main.$(OBJEXT): puppet.tab.h
 if HAVE_RUBY
 puppet_erb.$(OBJEXT): puppet.tab.h
 endif
-if HAVE_HIERA
 puppet_hiera.$(OBJEXT): puppet.tab.h
-endif
 
 # Install additional files
 install-data-hook:

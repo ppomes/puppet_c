@@ -7,11 +7,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <yaml.h>
 #include "puppet_hiera.h"
 #include "puppet_memory.h"
 #include "puppet_stdlib.h"
 
-#ifdef HAVE_YAML
+/* YAML support is now mandatory */
 
 /* Forward declarations for YAML parsing */
 static puppet_value_t *yaml_node_to_puppet_value(yaml_node_t *node, yaml_document_t *document);
@@ -147,15 +148,7 @@ puppet_value_t *puppet_hiera_load_yaml(const char *filepath) {
     return result;
 }
 
-#else /* !HAVE_YAML */
-
-puppet_value_t *puppet_hiera_load_yaml(const char *filepath) {
-    (void)filepath;
-    fprintf(stderr, "Error: YAML support not compiled in\n");
-    return NULL;
-}
-
-#endif /* HAVE_YAML */
+/* YAML support is now mandatory - removed conditional compilation */
 
 /**
  * @brief Create default Hiera configuration

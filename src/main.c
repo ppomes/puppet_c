@@ -26,9 +26,7 @@
 #include "puppet_loader.h"
 #include "puppet_memory.h"
 #include "puppet.tab.h"
-#ifdef HAVE_YAML
 #include "puppet_hiera.h"
-#endif
 
 /* External symbols from generated parser */
 extern int yyparse(void);
@@ -252,12 +250,10 @@ int main(int argc, char *argv[]) {
             }
             
             /* Configure Hiera data provider */
-            #ifdef HAVE_YAML
             if (hiera_datadir) {
                 puppet_hiera_register_provider(env, hiera_datadir);
                 printf("Using Hiera data directory: %s\n", hiera_datadir);
             }
-            #endif
             
             /* Configure node execution */
             if (all_nodes) {

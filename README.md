@@ -37,7 +37,7 @@ This implementation is feature-complete for core Puppet language parsing:
 ### Prerequisites
 
 - Ruby 3.4+ development headers (for ERB template support)
-- libyaml development headers (for Hiera support)
+- libyaml development headers (required for Hiera support)
 - flex and bison for parser generation
 - GCC or compatible C compiler
 
