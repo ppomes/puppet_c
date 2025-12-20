@@ -89,6 +89,29 @@ Evaluation with Hiera data:
 ./bin/puppetc --eval --hiera-data /path/to/data manifest.pp
 ```
 
+### Template Output Mode
+
+Display the rendered ERB template content for a specific file resource:
+```bash
+./bin/puppetc --eval --node <node_name> --template '<resource_title>' manifest.pp
+```
+
+Example - if your manifest contains:
+```puppet
+node 'webserver' {
+  file { '/etc/apache2/sites-available/mysite.conf':
+    content => template('apache/vhost.erb'),
+  }
+}
+```
+
+You can view the rendered template with:
+```bash
+./bin/puppetc --eval --node webserver --template '/etc/apache2/sites-available/mysite.conf' site.pp
+```
+
+This will evaluate the manifest and output the rendered ERB template content for that file resource.
+
 ### Directory Mode (Module Support)
 
 Parse a Puppet directory structure:
