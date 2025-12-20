@@ -36,6 +36,7 @@ EXTRA_DIST = \
     puppet/hiera_lookup_test.pp \
     puppet/hiera_complex_test.pp \
     puppet/hiera_access_test.pp \
+    puppet/split_test.pp \
     data/common.yaml
 
 # Test output directory
@@ -167,6 +168,23 @@ check-core-functions:
 	else \
 		echo "    ✗ Function call statements test failed"; \
 		sed 's/^/      /' output/statement_test.out; \
+		exit 1; \
+	fi
+	@echo "  Testing split() function..."
+	@if $(top_builddir)/src/puppetc --eval $(srcdir)/puppet/split_test.pp > output/split_test.out 2>&1; then \
+		if grep -q "split() function tests completed" output/split_test.out && \
+		   grep -q 'Set \$$parts = (complex value)' output/split_test.out && \
+		   grep -q 'Set \$$path = (complex value)' output/split_test.out && \
+		   grep -q 'Set \$$words = (complex value)' output/split_test.out; then \
+			echo "    ✓ split() function test passed"; \
+		else \
+			echo "    ✗ split() function test failed - missing expected output"; \
+			sed 's/^/      /' output/split_test.out; \
+			exit 1; \
+		fi; \
+	else \
+		echo "    ✗ split() function test failed - execution error"; \
+		sed 's/^/      /' output/split_test.out; \
 		exit 1; \
 	fi
 	@echo "✅ All core function tests passed!"
