@@ -1045,3 +1045,107 @@ puppet_value_t *puppet_func_member(puppet_expr_list_t *args, puppet_env_t *env) 
 
     return puppet_value_create_bool(found);
 }
+
+/**
+ * @brief Puppet reverse() function - reverse array elements
+ *
+ * Usage: reverse(array)
+ * Returns a new array with elements in reverse order
+ *
+ * Examples:
+ *   reverse([1, 2, 3])     => [3, 2, 1]
+ *   reverse(['a', 'b'])    => ['b', 'a']
+ */
+puppet_value_t *puppet_func_reverse(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "reverse() requires 1 argument: array");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *array_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!array_val || array_val->type != PUPPET_VALUE_ARRAY) {
+        puppet_log(PUPPET_LOG_ERROR, "reverse() argument must be an array");
+        if (array_val) puppet_value_destroy(array_val);
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *result = puppet_value_create_array();
+    puppet_array_t *arr = array_val->data.array;
+
+    /* Add elements in reverse order */
+    for (size_t i = arr->count; i > 0; i--) {
+        puppet_array_append(result->data.array, puppet_value_copy(arr->items[i - 1]));
+    }
+
+    puppet_value_destroy(array_val);
+    return result;
+}
+
+/**
+ * @brief Puppet unique() function - remove duplicate elements from array
+ *
+ * Usage: unique(array)
+ * Returns a new array with duplicate elements removed (first occurrence kept)
+ *
+ * Examples:
+ *   unique([1, 2, 1, 3, 2])     => [1, 2, 3]
+ *   unique(['a', 'b', 'a'])     => ['a', 'b']
+ */
+puppet_value_t *puppet_func_unique(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "unique() requires 1 argument: array");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *array_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!array_val || array_val->type != PUPPET_VALUE_ARRAY) {
+        puppet_log(PUPPET_LOG_ERROR, "unique() argument must be an array");
+        if (array_val) puppet_value_destroy(array_val);
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *result = puppet_value_create_array();
+    puppet_array_t *arr = array_val->data.array;
+
+    for (size_t i = 0; i < arr->count; i++) {
+        puppet_value_t *item = arr->items[i];
+        bool is_duplicate = false;
+
+        /* Check if this item already exists in result */
+        for (size_t j = 0; j < result->data.array->count && !is_duplicate; j++) {
+            puppet_value_t *existing = result->data.array->items[j];
+
+            if (item->type == existing->type) {
+                switch (item->type) {
+                    case PUPPET_VALUE_STRING:
+                        if (item->data.string.len == existing->data.string.len &&
+                            strcmp(item->data.string.data, existing->data.string.data) == 0) {
+                            is_duplicate = true;
+                        }
+                        break;
+                    case PUPPET_VALUE_NUMBER:
+                        if (item->data.number == existing->data.number) {
+                            is_duplicate = true;
+                        }
+                        break;
+                    case PUPPET_VALUE_BOOL:
+                        if (item->data.boolean == existing->data.boolean) {
+                            is_duplicate = true;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+
+        if (!is_duplicate) {
+            puppet_array_append(result->data.array, puppet_value_copy(item));
+        }
+    }
+
+    puppet_value_destroy(array_val);
+    return result;
+}
