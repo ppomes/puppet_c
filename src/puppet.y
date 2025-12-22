@@ -807,9 +807,19 @@ value:
 
 array_value:
     '[' ']' { $$ = puppet_value_create_array(); }
-    | '[' expression_list ']' { 
+    | '[' expression_list ']' {
         $$ = puppet_value_create_array();
-        /* TODO: Add expressions to array */
+        /* Add literal values to array */
+        puppet_expr_list_t *list = $2;
+        for (size_t i = 0; i < list->count; i++) {
+            puppet_expr_t *expr = list->exprs[i];
+            if (expr->type == PUPPET_EXPR_VALUE) {
+                puppet_array_append($$->data.array, puppet_value_copy(expr->data.value));
+            }
+            /* Non-literal expressions are skipped for now */
+        }
+        puppet_free(list->exprs);
+        puppet_free(list);
     }
     ;
 

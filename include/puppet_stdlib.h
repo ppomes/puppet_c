@@ -28,6 +28,12 @@ puppet_value_t *puppet_func_downcase(puppet_expr_list_t *args, puppet_env_t *env
 puppet_value_t *puppet_func_upcase(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_strip(puppet_expr_list_t *args, puppet_env_t *env);
 
+// Inspection functions
+puppet_value_t *puppet_func_size(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_empty(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_keys(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_values(puppet_expr_list_t *args, puppet_env_t *env);
+
 // Utility function to convert values to strings for logging
 char *puppet_value_to_display_string(puppet_value_t *value);
 

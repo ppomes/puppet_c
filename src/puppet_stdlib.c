@@ -754,3 +754,185 @@ puppet_value_t *puppet_func_strip(puppet_expr_list_t *args, puppet_env_t *env) {
 
     return result;
 }
+
+/**
+ * @brief Puppet size() function - get length of string, array, or hash
+ *
+ * Usage: size(value)
+ * Returns the length/count of the value
+ *
+ * Examples:
+ *   size('hello')        => 5
+ *   size([1, 2, 3])      => 3
+ *   size({a => 1, b => 2}) => 2
+ */
+puppet_value_t *puppet_func_size(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "size() requires 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    double result = 0;
+
+    switch (val->type) {
+        case PUPPET_VALUE_STRING:
+            result = (double)val->data.string.len;
+            break;
+        case PUPPET_VALUE_ARRAY:
+            result = (double)val->data.array->count;
+            break;
+        case PUPPET_VALUE_HASH:
+            /* Count hash entries */
+            if (val->data.hash) {
+                for (size_t i = 0; i < val->data.hash->bucket_count; i++) {
+                    puppet_hash_entry_t *entry = val->data.hash->buckets[i];
+                    while (entry) {
+                        result++;
+                        entry = entry->next;
+                    }
+                }
+            }
+            break;
+        default:
+            puppet_log(PUPPET_LOG_ERROR, "size() argument must be a string, array, or hash");
+            puppet_value_destroy(val);
+            return puppet_value_create_undef();
+    }
+
+    puppet_value_destroy(val);
+    return puppet_value_create_number(result);
+}
+
+/**
+ * @brief Puppet empty() function - check if value is empty
+ *
+ * Usage: empty(value)
+ * Returns true if the value is empty
+ *
+ * Examples:
+ *   empty('')           => true
+ *   empty('hello')      => false
+ *   empty([])           => true
+ *   empty([1, 2])       => false
+ *   empty({})           => true
+ */
+puppet_value_t *puppet_func_empty(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "empty() requires 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    bool is_empty = false;
+
+    switch (val->type) {
+        case PUPPET_VALUE_UNDEF:
+            is_empty = true;
+            break;
+        case PUPPET_VALUE_STRING:
+            is_empty = (val->data.string.len == 0);
+            break;
+        case PUPPET_VALUE_ARRAY:
+            is_empty = (val->data.array->count == 0);
+            break;
+        case PUPPET_VALUE_HASH:
+            /* Check if hash has any entries */
+            is_empty = true;
+            if (val->data.hash) {
+                for (size_t i = 0; i < val->data.hash->bucket_count && is_empty; i++) {
+                    if (val->data.hash->buckets[i]) {
+                        is_empty = false;
+                    }
+                }
+            }
+            break;
+        default:
+            is_empty = false;
+            break;
+    }
+
+    puppet_value_destroy(val);
+    return puppet_value_create_bool(is_empty);
+}
+
+/**
+ * @brief Puppet keys() function - get array of hash keys
+ *
+ * Usage: keys(hash)
+ * Returns an array containing all keys from the hash
+ *
+ * Examples:
+ *   keys({a => 1, b => 2}) => ['a', 'b']
+ *   keys({})               => []
+ */
+puppet_value_t *puppet_func_keys(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "keys() requires 1 argument: hash");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *hash_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!hash_val || hash_val->type != PUPPET_VALUE_HASH) {
+        puppet_log(PUPPET_LOG_ERROR, "keys() argument must be a hash");
+        if (hash_val) puppet_value_destroy(hash_val);
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *result = puppet_value_create_array();
+
+    if (hash_val->data.hash) {
+        for (size_t i = 0; i < hash_val->data.hash->bucket_count; i++) {
+            puppet_hash_entry_t *entry = hash_val->data.hash->buckets[i];
+            while (entry) {
+                puppet_array_append(result->data.array,
+                    puppet_value_create_string(entry->key.data, entry->key.len));
+                entry = entry->next;
+            }
+        }
+    }
+
+    puppet_value_destroy(hash_val);
+    return result;
+}
+
+/**
+ * @brief Puppet values() function - get array of hash values
+ *
+ * Usage: values(hash)
+ * Returns an array containing all values from the hash
+ *
+ * Examples:
+ *   values({a => 1, b => 2}) => [1, 2]
+ *   values({})               => []
+ */
+puppet_value_t *puppet_func_values(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "values() requires 1 argument: hash");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *hash_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!hash_val || hash_val->type != PUPPET_VALUE_HASH) {
+        puppet_log(PUPPET_LOG_ERROR, "values() argument must be a hash");
+        if (hash_val) puppet_value_destroy(hash_val);
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *result = puppet_value_create_array();
+
+    if (hash_val->data.hash) {
+        for (size_t i = 0; i < hash_val->data.hash->bucket_count; i++) {
+            puppet_hash_entry_t *entry = hash_val->data.hash->buckets[i];
+            while (entry) {
+                puppet_array_append(result->data.array, puppet_value_copy(entry->value));
+                entry = entry->next;
+            }
+        }
+    }
+
+    puppet_value_destroy(hash_val);
+    return result;
+}

@@ -259,8 +259,11 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
                 case PUPPET_VALUE_NUMBER:
                     return puppet_value_create_number(expr->data.value->data.number);
                 case PUPPET_VALUE_STRING:
-                    return puppet_value_create_string(expr->data.value->data.string.data, 
+                    return puppet_value_create_string(expr->data.value->data.string.data,
                                                     expr->data.value->data.string.len);
+                case PUPPET_VALUE_ARRAY:
+                case PUPPET_VALUE_HASH:
+                    return puppet_value_copy(expr->data.value);
                 default:
                     return puppet_value_create_undef();
             }
@@ -343,6 +346,19 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             }
             else if (strcmp(func_name, "strip") == 0) {
                 return puppet_func_strip(&expr->data.funcall.args, env);
+            }
+            // Inspection functions
+            else if (strcmp(func_name, "size") == 0 || strcmp(func_name, "length") == 0) {
+                return puppet_func_size(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "empty") == 0) {
+                return puppet_func_empty(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "keys") == 0) {
+                return puppet_func_keys(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "values") == 0) {
+                return puppet_func_values(&expr->data.funcall.args, env);
             }
             else {
                 puppet_error("Unknown function: %s", func_name);
