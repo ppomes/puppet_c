@@ -360,6 +360,12 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "values") == 0) {
                 return puppet_func_values(&expr->data.funcall.args, env);
             }
+            else if (strcmp(func_name, "has_key") == 0) {
+                return puppet_func_has_key(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "member") == 0) {
+                return puppet_func_member(&expr->data.funcall.args, env);
+            }
             else {
                 puppet_error("Unknown function: %s", func_name);
                 return puppet_value_create_undef();

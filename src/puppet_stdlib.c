@@ -936,3 +936,112 @@ puppet_value_t *puppet_func_values(puppet_expr_list_t *args, puppet_env_t *env) 
     puppet_value_destroy(hash_val);
     return result;
 }
+
+/**
+ * @brief Puppet has_key() function - check if hash contains a key
+ *
+ * Usage: has_key(hash, key)
+ * Returns true if the hash contains the specified key
+ *
+ * Examples:
+ *   has_key({a => 1, b => 2}, 'a') => true
+ *   has_key({a => 1, b => 2}, 'c') => false
+ */
+puppet_value_t *puppet_func_has_key(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log(PUPPET_LOG_ERROR, "has_key() requires 2 arguments: hash and key");
+        return puppet_value_create_bool(false);
+    }
+
+    puppet_value_t *hash_val = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *key_val = puppet_eval_expr(args->exprs[1], env);
+
+    if (!hash_val || hash_val->type != PUPPET_VALUE_HASH) {
+        puppet_log(PUPPET_LOG_ERROR, "has_key() first argument must be a hash");
+        if (hash_val) puppet_value_destroy(hash_val);
+        if (key_val) puppet_value_destroy(key_val);
+        return puppet_value_create_bool(false);
+    }
+
+    if (!key_val || key_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "has_key() second argument must be a string");
+        puppet_value_destroy(hash_val);
+        if (key_val) puppet_value_destroy(key_val);
+        return puppet_value_create_bool(false);
+    }
+
+    const char *key = key_val->data.string.data;
+    size_t key_len = key_val->data.string.len;
+
+    puppet_value_t *found = puppet_hash_get(hash_val->data.hash, key, key_len);
+    bool has = (found != NULL);
+
+    puppet_value_destroy(hash_val);
+    puppet_value_destroy(key_val);
+
+    return puppet_value_create_bool(has);
+}
+
+/**
+ * @brief Puppet member() / contain() function - check if array contains a value
+ *
+ * Usage: member(array, value) or contain(array, value)
+ * Returns true if the array contains the specified value
+ *
+ * Examples:
+ *   member(['a', 'b', 'c'], 'b') => true
+ *   member(['a', 'b', 'c'], 'd') => false
+ *   contain([1, 2, 3], 2)        => true
+ */
+puppet_value_t *puppet_func_member(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log(PUPPET_LOG_ERROR, "member() requires 2 arguments: array and value");
+        return puppet_value_create_bool(false);
+    }
+
+    puppet_value_t *array_val = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *search_val = puppet_eval_expr(args->exprs[1], env);
+
+    if (!array_val || array_val->type != PUPPET_VALUE_ARRAY) {
+        puppet_log(PUPPET_LOG_ERROR, "member() first argument must be an array");
+        if (array_val) puppet_value_destroy(array_val);
+        if (search_val) puppet_value_destroy(search_val);
+        return puppet_value_create_bool(false);
+    }
+
+    bool found = false;
+    puppet_array_t *arr = array_val->data.array;
+
+    for (size_t i = 0; i < arr->count && !found; i++) {
+        puppet_value_t *item = arr->items[i];
+
+        /* Compare based on type */
+        if (item->type == search_val->type) {
+            switch (item->type) {
+                case PUPPET_VALUE_STRING:
+                    if (item->data.string.len == search_val->data.string.len &&
+                        strcmp(item->data.string.data, search_val->data.string.data) == 0) {
+                        found = true;
+                    }
+                    break;
+                case PUPPET_VALUE_NUMBER:
+                    if (item->data.number == search_val->data.number) {
+                        found = true;
+                    }
+                    break;
+                case PUPPET_VALUE_BOOL:
+                    if (item->data.boolean == search_val->data.boolean) {
+                        found = true;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    puppet_value_destroy(array_val);
+    puppet_value_destroy(search_val);
+
+    return puppet_value_create_bool(found);
+}
