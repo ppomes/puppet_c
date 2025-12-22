@@ -38,6 +38,7 @@ EXTRA_DIST = \
     puppet/hiera_access_test.pp \
     puppet/split_test.pp \
     puppet/join_test.pp \
+    puppet/string_functions_test.pp \
     data/common.yaml
 
 # Test output directory

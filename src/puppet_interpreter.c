@@ -335,6 +335,15 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "join") == 0) {
                 return puppet_func_join(&expr->data.funcall.args, env);
             }
+            else if (strcmp(func_name, "downcase") == 0) {
+                return puppet_func_downcase(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "upcase") == 0) {
+                return puppet_func_upcase(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "strip") == 0) {
+                return puppet_func_strip(&expr->data.funcall.args, env);
+            }
             else {
                 puppet_error("Unknown function: %s", func_name);
                 return puppet_value_create_undef();

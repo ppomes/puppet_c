@@ -606,3 +606,151 @@ puppet_value_t *puppet_func_join(puppet_expr_list_t *args, puppet_env_t *env) {
 
     return result;
 }
+
+/**
+ * @brief Puppet downcase() function - convert string to lowercase
+ *
+ * Usage: downcase(string)
+ * Returns the string with all characters converted to lowercase
+ *
+ * Examples:
+ *   downcase('HELLO')     => 'hello'
+ *   downcase('Hello')     => 'hello'
+ *   downcase('hello')     => 'hello'
+ */
+puppet_value_t *puppet_func_downcase(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "downcase() requires 1 argument: string");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "downcase() argument must be a string");
+        if (str_val) puppet_value_destroy(str_val);
+        return puppet_value_create_undef();
+    }
+
+    const char *src = str_val->data.string.data;
+    size_t len = str_val->data.string.len;
+    char *result_str = puppet_malloc(len + 1);
+
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = src[i];
+        if (c >= 'A' && c <= 'Z') {
+            result_str[i] = c + ('a' - 'A');
+        } else {
+            result_str[i] = c;
+        }
+    }
+    result_str[len] = '\0';
+
+    puppet_value_t *result = puppet_value_create_string(result_str, len);
+    puppet_free(result_str);
+    puppet_value_destroy(str_val);
+
+    return result;
+}
+
+/**
+ * @brief Puppet upcase() function - convert string to uppercase
+ *
+ * Usage: upcase(string)
+ * Returns the string with all characters converted to uppercase
+ *
+ * Examples:
+ *   upcase('hello')     => 'HELLO'
+ *   upcase('Hello')     => 'HELLO'
+ *   upcase('HELLO')     => 'HELLO'
+ */
+puppet_value_t *puppet_func_upcase(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "upcase() requires 1 argument: string");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "upcase() argument must be a string");
+        if (str_val) puppet_value_destroy(str_val);
+        return puppet_value_create_undef();
+    }
+
+    const char *src = str_val->data.string.data;
+    size_t len = str_val->data.string.len;
+    char *result_str = puppet_malloc(len + 1);
+
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = src[i];
+        if (c >= 'a' && c <= 'z') {
+            result_str[i] = c - ('a' - 'A');
+        } else {
+            result_str[i] = c;
+        }
+    }
+    result_str[len] = '\0';
+
+    puppet_value_t *result = puppet_value_create_string(result_str, len);
+    puppet_free(result_str);
+    puppet_value_destroy(str_val);
+
+    return result;
+}
+
+/**
+ * @brief Puppet strip() function - remove leading and trailing whitespace
+ *
+ * Usage: strip(string)
+ * Returns the string with leading and trailing whitespace removed
+ *
+ * Examples:
+ *   strip('  hello  ')     => 'hello'
+ *   strip('\thello\n')     => 'hello'
+ *   strip('hello')         => 'hello'
+ */
+puppet_value_t *puppet_func_strip(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "strip() requires 1 argument: string");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "strip() argument must be a string");
+        if (str_val) puppet_value_destroy(str_val);
+        return puppet_value_create_undef();
+    }
+
+    const char *src = str_val->data.string.data;
+    size_t len = str_val->data.string.len;
+
+    /* Find start (skip leading whitespace) */
+    size_t start = 0;
+    while (start < len && (src[start] == ' ' || src[start] == '\t' ||
+                           src[start] == '\n' || src[start] == '\r')) {
+        start++;
+    }
+
+    /* Find end (skip trailing whitespace) */
+    size_t end = len;
+    while (end > start && (src[end - 1] == ' ' || src[end - 1] == '\t' ||
+                           src[end - 1] == '\n' || src[end - 1] == '\r')) {
+        end--;
+    }
+
+    size_t new_len = end - start;
+    char *result_str = puppet_malloc(new_len + 1);
+    if (new_len > 0) {
+        memcpy(result_str, src + start, new_len);
+    }
+    result_str[new_len] = '\0';
+
+    puppet_value_t *result = puppet_value_create_string(result_str, new_len);
+    puppet_free(result_str);
+    puppet_value_destroy(str_val);
+
+    return result;
+}
