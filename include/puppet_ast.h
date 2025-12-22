@@ -354,6 +354,19 @@ typedef struct {
     size_t count;
 } puppet_attribute_list_t;
 
+/**
+ * @brief Hash pair for hash literal parsing
+ */
+typedef struct {
+    puppet_expr_t *key;
+    puppet_expr_t *value;
+} puppet_hash_pair_t;
+
+typedef struct {
+    puppet_hash_pair_t *pairs;
+    size_t count;
+} puppet_hash_pair_list_t;
+
 typedef struct {
     puppet_expr_t *title;
     puppet_attribute_t *attributes;

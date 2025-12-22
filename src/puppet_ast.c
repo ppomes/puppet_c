@@ -224,7 +224,17 @@ puppet_value_t *puppet_value_copy(puppet_value_t *value) {
             
         case PUPPET_VALUE_HASH: {
             puppet_value_t *new_hash = puppet_value_create_hash();
-            // TODO: Implement hash copying when hash iteration is available
+            if (value->data.hash) {
+                for (size_t i = 0; i < value->data.hash->bucket_count; i++) {
+                    puppet_hash_entry_t *entry = value->data.hash->buckets[i];
+                    while (entry) {
+                        puppet_hash_set(new_hash->data.hash,
+                                       entry->key.data, entry->key.len,
+                                       puppet_value_copy(entry->value));
+                        entry = entry->next;
+                    }
+                }
+            }
             return new_hash;
         }
             

@@ -146,6 +146,8 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
     puppet_if_branch_t *if_branch;
     puppet_binop_t binop;
     puppet_unop_t unop;
+    puppet_hash_pair_t *hash_pair;
+    puppet_hash_pair_list_t *hash_pair_list;
 }
 
 %token <string> NAME CLASSREF TYPE_NAME VARIABLE
@@ -212,6 +214,8 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 %type <if_branch> elsif_clauses
 
 %type <value> value hash_value array_value
+%type <hash_pair> hash_pair
+%type <hash_pair_list> hash_pairs
 
 %type <string> class_parent_opt
 %type <string> qualified_name
@@ -827,17 +831,51 @@ hash_value:
     '{' '}' { $$ = puppet_value_create_hash(); }
     | '{' hash_pairs '}' {
         $$ = puppet_value_create_hash();
-        /* TODO: Add pairs to hash */
+        /* Add pairs to hash */
+        puppet_hash_pair_list_t *pairs = $2;
+        for (size_t i = 0; i < pairs->count; i++) {
+            puppet_expr_t *key_expr = pairs->pairs[i].key;
+            puppet_expr_t *val_expr = pairs->pairs[i].value;
+            /* For literal keys, extract the string */
+            if (key_expr->type == PUPPET_EXPR_VALUE &&
+                key_expr->data.value->type == PUPPET_VALUE_STRING) {
+                const char *key = key_expr->data.value->data.string.data;
+                size_t key_len = key_expr->data.value->data.string.len;
+                /* For literal values, copy them */
+                if (val_expr->type == PUPPET_EXPR_VALUE) {
+                    puppet_hash_set($$->data.hash, key, key_len,
+                                   puppet_value_copy(val_expr->data.value));
+                }
+                /* Non-literal values are skipped for now */
+            }
+        }
+        puppet_free(pairs->pairs);
+        puppet_free(pairs);
     }
     ;
 
 hash_pairs:
-    hash_pair
-    | hash_pairs ',' hash_pair
+    hash_pair {
+        $$ = puppet_calloc(1, sizeof(puppet_hash_pair_list_t));
+        $$->pairs = puppet_malloc(sizeof(puppet_hash_pair_t));
+        $$->pairs[0] = *$1;
+        $$->count = 1;
+        puppet_free($1);
+    }
+    | hash_pairs ',' hash_pair {
+        $$ = $1;
+        $$->pairs = puppet_realloc($$->pairs, ($$->count + 1) * sizeof(puppet_hash_pair_t));
+        $$->pairs[$$->count++] = *$3;
+        puppet_free($3);
+    }
     ;
 
 hash_pair:
-    expression FARROW expression
+    expression FARROW expression {
+        $$ = puppet_calloc(1, sizeof(puppet_hash_pair_t));
+        $$->key = $1;
+        $$->value = $3;
+    }
     ;
 
 variable_expression:
