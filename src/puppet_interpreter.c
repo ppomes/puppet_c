@@ -372,6 +372,12 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "unique") == 0) {
                 return puppet_func_unique(&expr->data.funcall.args, env);
             }
+            else if (strcmp(func_name, "sort") == 0) {
+                return puppet_func_sort(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "flatten") == 0) {
+                return puppet_func_flatten(&expr->data.funcall.args, env);
+            }
             else {
                 puppet_error("Unknown function: %s", func_name);
                 return puppet_value_create_undef();

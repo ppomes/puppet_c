@@ -1149,3 +1149,118 @@ puppet_value_t *puppet_func_unique(puppet_expr_list_t *args, puppet_env_t *env) 
     puppet_value_destroy(array_val);
     return result;
 }
+
+/* Comparison function for sorting strings */
+static int compare_strings(const void *a, const void *b) {
+    puppet_value_t *va = *(puppet_value_t **)a;
+    puppet_value_t *vb = *(puppet_value_t **)b;
+    return strcmp(va->data.string.data, vb->data.string.data);
+}
+
+/* Comparison function for sorting numbers */
+static int compare_numbers(const void *a, const void *b) {
+    puppet_value_t *va = *(puppet_value_t **)a;
+    puppet_value_t *vb = *(puppet_value_t **)b;
+    if (va->data.number < vb->data.number) return -1;
+    if (va->data.number > vb->data.number) return 1;
+    return 0;
+}
+
+/**
+ * @brief Puppet sort() function - sort array elements
+ *
+ * Usage: sort(array)
+ * Returns a new array with elements sorted
+ *
+ * Examples:
+ *   sort([3, 1, 2])           => [1, 2, 3]
+ *   sort(['c', 'a', 'b'])     => ['a', 'b', 'c']
+ */
+puppet_value_t *puppet_func_sort(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "sort() requires 1 argument: array");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *array_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!array_val || array_val->type != PUPPET_VALUE_ARRAY) {
+        puppet_log(PUPPET_LOG_ERROR, "sort() argument must be an array");
+        if (array_val) puppet_value_destroy(array_val);
+        return puppet_value_create_undef();
+    }
+
+    puppet_array_t *arr = array_val->data.array;
+
+    if (arr->count == 0) {
+        puppet_value_destroy(array_val);
+        return puppet_value_create_array();
+    }
+
+    /* Create result array with copies of elements */
+    puppet_value_t *result = puppet_value_create_array();
+    for (size_t i = 0; i < arr->count; i++) {
+        puppet_array_append(result->data.array, puppet_value_copy(arr->items[i]));
+    }
+
+    /* Determine element type and sort accordingly */
+    puppet_value_type_t first_type = arr->items[0]->type;
+
+    if (first_type == PUPPET_VALUE_STRING) {
+        qsort(result->data.array->items, result->data.array->count,
+              sizeof(puppet_value_t *), compare_strings);
+    } else if (first_type == PUPPET_VALUE_NUMBER) {
+        qsort(result->data.array->items, result->data.array->count,
+              sizeof(puppet_value_t *), compare_numbers);
+    }
+    /* For mixed types or other types, leave unsorted */
+
+    puppet_value_destroy(array_val);
+    return result;
+}
+
+/* Helper function to recursively flatten arrays */
+static void flatten_recursive(puppet_value_t *item, puppet_array_t *result) {
+    if (item->type == PUPPET_VALUE_ARRAY) {
+        for (size_t i = 0; i < item->data.array->count; i++) {
+            flatten_recursive(item->data.array->items[i], result);
+        }
+    } else {
+        puppet_array_append(result, puppet_value_copy(item));
+    }
+}
+
+/**
+ * @brief Puppet flatten() function - flatten nested arrays
+ *
+ * Usage: flatten(array)
+ * Returns a new array with all nested arrays flattened to a single level
+ *
+ * Examples:
+ *   flatten([[1, 2], [3, 4]])     => [1, 2, 3, 4]
+ *   flatten([1, [2, [3, 4]], 5])  => [1, 2, 3, 4, 5]
+ */
+puppet_value_t *puppet_func_flatten(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "flatten() requires 1 argument: array");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *array_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!array_val || array_val->type != PUPPET_VALUE_ARRAY) {
+        puppet_log(PUPPET_LOG_ERROR, "flatten() argument must be an array");
+        if (array_val) puppet_value_destroy(array_val);
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *result = puppet_value_create_array();
+
+    /* Recursively flatten */
+    for (size_t i = 0; i < array_val->data.array->count; i++) {
+        flatten_recursive(array_val->data.array->items[i], result->data.array);
+    }
+
+    puppet_value_destroy(array_val);
+    return result;
+}
