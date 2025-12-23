@@ -22,16 +22,18 @@ make check
 
 ## Docker
 
-Build and run using Docker (no dependencies needed on host):
+Build and run using Docker (no dependencies needed on host).
+
+Sample manifests, modules, and hiera data are provided in `docker/`.
 
 ```bash
 # Build images
 docker build --target server -t puppetc-server .
 docker build --target agent -t puppetc-agent .
 
-# Run server
+# Run server with sample manifests
 docker run -d -p 8140:8140 \
-    -v ./manifests:/etc/puppet/manifests:ro \
+    -v ./docker/manifests:/etc/puppet/manifests:ro \
     puppetc-server
 
 # Run agent (noop mode)
@@ -41,7 +43,7 @@ docker run --rm --network host puppetc-agent -n
 docker run --rm --network host puppetc-agent -a
 ```
 
-Or use docker-compose:
+Or use docker-compose (uses `docker/` sample data):
 
 ```bash
 # Start server
