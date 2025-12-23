@@ -123,6 +123,15 @@ PKG_CHECK_MODULES([OPENSSL], [openssl], [
     AC_MSG_ERROR([OpenSSL not found. Install libssl-dev package.])
 ])
 
+# Check for libmicrohttpd (required for puppetc-server)
+PKG_CHECK_MODULES([MHD], [libmicrohttpd], [
+    AC_DEFINE([HAVE_MICROHTTPD], [1], [Define if libmicrohttpd is available])
+    AC_SUBST([MHD_CFLAGS])
+    AC_SUBST([MHD_LIBS])
+], [
+    AC_MSG_ERROR([libmicrohttpd not found. Install libmicrohttpd-dev package.])
+])
+
 # Check for standard library functions
 AC_CHECK_FUNCS([malloc realloc free strdup strlen strcpy snprintf])
 AC_CHECK_HEADERS([stdio.h stdlib.h string.h])
@@ -141,6 +150,7 @@ fi
 AC_CONFIG_FILES([
     Makefile
     src/Makefile
+    server/Makefile
     tests/Makefile
 ])
 

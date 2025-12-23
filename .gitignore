@@ -22,6 +22,8 @@ include/puppet.tab.h
 /Makefile.in
 /src/Makefile
 /src/Makefile.in
+/server/Makefile
+/server/Makefile.in
 /tests/Makefile
 /tests/Makefile.in
 
@@ -41,6 +43,10 @@ src/*.lo
 src/*.la
 src/lex.yy.o
 src/puppetc
+server/.deps/
+server/.libs/
+server/*.o
+server/puppetc-server
 tests/output/
 
 # Distribution tarballs

@@ -1,4 +1,4 @@
-SUBDIRS = src tests
+SUBDIRS = src server tests
 
 # Additional files to distribute
 EXTRA_DIST = README.md docs/ERB_ARCHITECTURE.md docs/CODE_DOCUMENTATION.md README_MODULES.md
