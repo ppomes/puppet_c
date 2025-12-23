@@ -15,10 +15,11 @@
 #include <curl/curl.h>
 
 #include "facter.h"
+#include "puppet_provider.h"
 
 #define DEFAULT_SERVER "http://localhost:8140"
 #define DEFAULT_ENVIRONMENT "production"
-#define AGENT_VERSION "0.1.0"
+#define AGENT_VERSION "0.2.0"
 
 /* Response buffer for curl */
 typedef struct {
@@ -33,6 +34,7 @@ typedef struct {
     char *environment;
     bool verbose;
     bool noop;           /* No-op mode - don't apply changes */
+    bool apply_catalog;  /* Actually apply resources */
     bool show_facts;     /* Just show facts, don't request catalog */
     bool show_catalog;   /* Show catalog JSON */
 } agent_config_t;
@@ -397,15 +399,42 @@ static int run_agent(agent_config_t *config) {
     display_catalog_summary(catalog_json);
     list_catalog_resources(catalog_json);
 
-    /* Apply catalog (future) */
-    if (config->noop) {
-        printf("Running in no-op mode - no changes will be made.\n");
-    } else {
-        printf("Note: Resource application not yet implemented.\n");
-        printf("      Run with --noop to simulate.\n");
-    }
+    /* Apply catalog */
+    if (config->apply_catalog || config->noop) {
+        /* Get OS family from facts */
+        const char *os_family_str = facter_get_string(facts, "osfamily");
+        os_family_t os_family = os_family_from_string(os_family_str);
 
-    result = 0;
+        printf("OS Family: %s\n", os_family_to_string(os_family));
+
+        if (config->noop) {
+            printf("Running in no-op mode - no changes will be made.\n");
+        }
+
+        /* Initialize providers */
+        providers_init(os_family);
+
+        /* Create apply context */
+        apply_context_t *apply_ctx = apply_context_create(os_family, config->noop, config->verbose);
+        if (apply_ctx) {
+            /* Apply the catalog */
+            int failures = catalog_apply(catalog_json, apply_ctx);
+
+            if (failures > 0) {
+                fprintf(stderr, "Warning: %d resource(s) failed to apply\n", failures);
+                result = 1;
+            } else {
+                result = 0;
+            }
+
+            apply_context_free(apply_ctx);
+        }
+
+        providers_shutdown();
+    } else {
+        printf("\nNote: Use --apply to apply resources or --noop to simulate.\n");
+        result = 0;
+    }
 
     free(catalog_json);
     facter_destroy(facts);
@@ -424,15 +453,17 @@ static void print_usage(const char *prog) {
     printf("  -s, --server URL      Server URL (default: %s)\n", DEFAULT_SERVER);
     printf("  -c, --certname NAME   Node certificate name (default: hostname)\n");
     printf("  -e, --environment ENV Environment (default: %s)\n", DEFAULT_ENVIRONMENT);
-    printf("  -n, --noop            No-op mode - don't apply changes\n");
+    printf("  -a, --apply           Apply catalog resources (requires root for some)\n");
+    printf("  -n, --noop            No-op mode - simulate but don't apply\n");
     printf("  -f, --facts           Just show collected facts\n");
     printf("  -C, --catalog         Show full catalog JSON\n");
     printf("  -v, --verbose         Verbose output\n");
     printf("  -h, --help            Show this help\n");
     printf("\nExamples:\n");
-    printf("  %s                                    # Run with defaults\n", prog);
-    printf("  %s -s http://puppet:8140              # Specify server\n", prog);
-    printf("  %s -c web01.example.com -n            # Specify node, noop mode\n", prog);
+    printf("  %s                                    # Get catalog, show summary\n", prog);
+    printf("  %s -n                                 # Noop mode, show what would change\n", prog);
+    printf("  %s -a                                 # Apply catalog resources\n", prog);
+    printf("  %s -s http://puppet:8140 -a           # Apply from remote server\n", prog);
     printf("  %s -f                                 # Just show facts\n", prog);
 }
 
@@ -443,6 +474,7 @@ int main(int argc, char *argv[]) {
         .environment = DEFAULT_ENVIRONMENT,
         .verbose = false,
         .noop = false,
+        .apply_catalog = false,
         .show_facts = false,
         .show_catalog = false
     };
@@ -451,6 +483,7 @@ int main(int argc, char *argv[]) {
         {"server", required_argument, 0, 's'},
         {"certname", required_argument, 0, 'c'},
         {"environment", required_argument, 0, 'e'},
+        {"apply", no_argument, 0, 'a'},
         {"noop", no_argument, 0, 'n'},
         {"facts", no_argument, 0, 'f'},
         {"catalog", no_argument, 0, 'C'},
@@ -460,7 +493,7 @@ int main(int argc, char *argv[]) {
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "s:c:e:nfCvh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "s:c:e:anfCvh", long_options, NULL)) != -1) {
         switch (opt) {
             case 's':
                 config.server_url = optarg;
@@ -470,6 +503,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'e':
                 config.environment = optarg;
+                break;
+            case 'a':
+                config.apply_catalog = true;
                 break;
             case 'n':
                 config.noop = true;
