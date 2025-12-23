@@ -186,12 +186,3 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 │   catalogs      │  │ - Apply catalog  │  │ - Template debug│
 └─────────────────┘  └──────────────────┘  └─────────────────┘
 ```
-
-### Phases
-
-- [x] **Phase 1**: Extract `libpuppetc.so` shared library from current code
-- [x] **Phase 2**: Define catalog JSON format, add catalog serialization
-- [x] **Phase 3**: `puppetc-server` - HTTP API for catalog compilation
-- [x] **Phase 4**: `libfacter_c` - Native fact collection library
-- [x] **Phase 5**: `puppetc-agent` - Client that collects facts, requests catalog
-- [x] **Phase 6**: Resource application (file, package, service...)
