@@ -1,2 +1,3 @@
 usr/lib/*/libpuppetc_common.so
 usr/include/puppetc/puppet_memory.h
+usr/include/puppetc/puppet_json_common.h

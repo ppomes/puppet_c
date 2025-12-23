@@ -18,6 +18,8 @@
  * - Proper JSON escaping for string literals
  * - Compact and human-readable output format
  * - Memory-efficient streaming output
+ *
+ * Note: Uses json_buffer_t from puppet_json_common.h (libpuppetc_common)
  */
 
 #include "puppet_json.h"
@@ -25,74 +27,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-json_buffer_t *json_buffer_create(void) {
-    json_buffer_t *buf = puppet_malloc(sizeof(json_buffer_t));
-    buf->capacity = 1024;
-    buf->size = 0;
-    buf->data = puppet_malloc(buf->capacity);
-    buf->data[0] = '\0';
-    return buf;
-}
-
-void json_buffer_destroy(json_buffer_t *buf) {
-    if (buf) {
-        puppet_free(buf->data);
-        puppet_free(buf);
-    }
-}
-
-void json_buffer_append(json_buffer_t *buf, const char *str) {
-    size_t len = strlen(str);
-    while (buf->size + len + 1 >= buf->capacity) {
-        buf->capacity *= 2;
-        buf->data = puppet_realloc(buf->data, buf->capacity);
-    }
-    strcpy(buf->data + buf->size, str);
-    buf->size += len;
-}
-
-void json_buffer_append_char(json_buffer_t *buf, char c) {
-    if (buf->size + 2 >= buf->capacity) {
-        buf->capacity *= 2;
-        buf->data = puppet_realloc(buf->data, buf->capacity);
-    }
-    buf->data[buf->size++] = c;
-    buf->data[buf->size] = '\0';
-}
-
-void json_buffer_append_escaped_string(json_buffer_t *buf, const char *str) {
-    json_buffer_append_char(buf, '"');
-    while (*str) {
-        switch (*str) {
-            case '"':
-                json_buffer_append(buf, "\\\"");
-                break;
-            case '\\':
-                json_buffer_append(buf, "\\\\");
-                break;
-            case '\n':
-                json_buffer_append(buf, "\\n");
-                break;
-            case '\r':
-                json_buffer_append(buf, "\\r");
-                break;
-            case '\t':
-                json_buffer_append(buf, "\\t");
-                break;
-            default:
-                json_buffer_append_char(buf, *str);
-                break;
-        }
-        str++;
-    }
-    json_buffer_append_char(buf, '"');
-}
-
-static void json_indent(json_buffer_t *buf, int level) {
-    for (int i = 0; i < level * 2; i++) {
-        json_buffer_append_char(buf, ' ');
-    }
-}
+/* Local alias for compatibility with existing code */
+#define json_indent(buf, level) json_buffer_indent(buf, level)
 
 void puppet_program_to_json(puppet_program_t *program, FILE *output) {
     json_buffer_t *buf = json_buffer_create();

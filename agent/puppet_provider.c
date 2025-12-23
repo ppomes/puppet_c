@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "puppet_memory.h"
+#include "puppet_json_common.h"
 #include <string.h>
 #include <stdarg.h>
 
@@ -241,152 +242,58 @@ apply_result_t resource_apply(const resource_t *resource, apply_context_t *ctx) 
  * Catalog Parsing and Application
  * ============================================================================ */
 
-/* Simple JSON string extraction helper */
-static char *json_extract_string(const char *json, const char *key) {
-    char search[128];
-    snprintf(search, sizeof(search), "\"%s\":", key);
+/**
+ * @brief Parse a resource from a json_value_t object
+ */
+static resource_t *parse_resource_from_json(json_value_t *res_obj) {
+    if (!res_obj || !json_is_object(res_obj)) return NULL;
 
-    const char *start = strstr(json, search);
-    if (!start) return NULL;
+    /* Get type and title */
+    json_value_t *type_val = json_object_get(res_obj, "type");
+    json_value_t *title_val = json_object_get(res_obj, "title");
 
-    start = strchr(start, ':');
-    if (!start) return NULL;
-    start++;
-
-    /* Skip whitespace */
-    while (*start == ' ' || *start == '\t' || *start == '\n') start++;
-
-    if (*start != '"') return NULL;
-    start++;  /* Skip opening quote */
-
-    const char *end = strchr(start, '"');
-    if (!end) return NULL;
-
-    size_t len = end - start;
-    char *result = puppet_malloc(len + 1);
-    if (!result) return NULL;
-
-    memcpy(result, start, len);
-    result[len] = '\0';
-
-    return result;
-}
-
-/* Parse a resource from JSON object (simplified) */
-static resource_t *parse_resource_json(const char *json_start, const char **json_end) {
-    /* Find type and title */
-    char *type = json_extract_string(json_start, "type");
-    char *title = json_extract_string(json_start, "title");
-
-    if (!type || !title) {
-        puppet_free(type);
-        puppet_free(title);
+    if (!type_val || !json_is_string(type_val) ||
+        !title_val || !json_is_string(title_val)) {
         return NULL;
     }
 
-    resource_t *resource = resource_create(type, title);
-    puppet_free(type);
-    puppet_free(title);
+    const char *type = json_get_string(type_val);
+    const char *title = json_get_string(title_val);
 
+    resource_t *resource = resource_create(type, title);
     if (!resource) return NULL;
 
-    /* Find parameters object */
-    const char *params_start = strstr(json_start, "\"parameters\":");
-    if (params_start) {
-        params_start = strchr(params_start, '{');
-        if (params_start) {
-            params_start++;
+    /* Parse parameters object */
+    json_value_t *params = json_object_get(res_obj, "parameters");
+    if (params && json_is_object(params)) {
+        for (size_t i = 0; i < params->data.object.count; i++) {
+            const char *key = params->data.object.keys[i];
+            json_value_t *val = params->data.object.values[i];
 
-            /* Parse key-value pairs until closing brace */
-            const char *p = params_start;
-            while (*p && *p != '}') {
-                /* Skip whitespace */
-                while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == ',')) p++;
-
-                if (*p == '}') break;
-                if (*p != '"') { p++; continue; }
-
-                /* Extract key */
-                p++;  /* Skip opening quote */
-                const char *key_start = p;
-                while (*p && *p != '"') p++;
-                if (!*p) break;
-
-                size_t key_len = p - key_start;
-                char *key = puppet_malloc(key_len + 1);
-                if (!key) break;
-                memcpy(key, key_start, key_len);
-                key[key_len] = '\0';
-
-                p++;  /* Skip closing quote */
-
-                /* Find colon */
-                while (*p && *p != ':') p++;
-                if (!*p) { puppet_free(key); break; }
-                p++;
-
-                /* Skip whitespace */
-                while (*p && (*p == ' ' || *p == '\t')) p++;
-
-                /* Extract value */
-                char *value = NULL;
-                if (*p == '"') {
-                    p++;
-                    const char *val_start = p;
-                    while (*p && *p != '"') {
-                        if (*p == '\\' && *(p+1)) p++;  /* Skip escaped chars */
-                        p++;
-                    }
-                    size_t val_len = p - val_start;
-                    value = puppet_malloc(val_len + 1);
-                    if (value) {
-                        memcpy(value, val_start, val_len);
-                        value[val_len] = '\0';
-                    }
-                    if (*p == '"') p++;
-                } else if (*p == 't' || *p == 'f') {
-                    /* Boolean */
-                    if (strncmp(p, "true", 4) == 0) {
-                        value = puppet_strdup("true");
-                        p += 4;
-                    } else if (strncmp(p, "false", 5) == 0) {
-                        value = puppet_strdup("false");
-                        p += 5;
-                    }
-                } else if (*p == '-' || (*p >= '0' && *p <= '9')) {
-                    /* Number */
-                    const char *num_start = p;
-                    while (*p && (*p == '-' || *p == '.' || (*p >= '0' && *p <= '9'))) p++;
-                    size_t num_len = p - num_start;
-                    value = puppet_malloc(num_len + 1);
-                    if (value) {
-                        memcpy(value, num_start, num_len);
-                        value[num_len] = '\0';
-                    }
+            /* Convert value to string representation */
+            char *value_str = NULL;
+            if (json_is_string(val)) {
+                value_str = puppet_strdup(json_get_string(val));
+            } else if (json_is_bool(val)) {
+                value_str = puppet_strdup(json_get_bool(val) ? "true" : "false");
+            } else if (json_is_number(val)) {
+                char buf[64];
+                double num = json_get_number(val);
+                if (num == (long)num) {
+                    snprintf(buf, sizeof(buf), "%ld", (long)num);
+                } else {
+                    snprintf(buf, sizeof(buf), "%g", num);
                 }
+                value_str = puppet_strdup(buf);
+            } else if (json_is_null(val)) {
+                value_str = puppet_strdup("");
+            }
 
-                if (value) {
-                    resource_add_param(resource, key, value);
-                    puppet_free(value);
-                }
-                puppet_free(key);
+            if (value_str) {
+                resource_add_param(resource, key, value_str);
+                puppet_free(value_str);
             }
         }
-    }
-
-    /* Find end of this resource object */
-    int brace_count = 1;
-    const char *p = strchr(json_start, '{');
-    if (p) {
-        p++;
-        while (*p && brace_count > 0) {
-            if (*p == '{') brace_count++;
-            else if (*p == '}') brace_count--;
-            p++;
-        }
-        *json_end = p;
-    } else {
-        *json_end = json_start + strlen(json_start);
     }
 
     return resource;
@@ -397,30 +304,34 @@ int catalog_apply(const char *catalog_json, apply_context_t *ctx) {
 
     printf("\n=== Applying Catalog ===\n");
 
+    /* Parse the catalog JSON */
+    json_value_t *catalog = json_parse(catalog_json);
+    if (!catalog) {
+        printf("Failed to parse catalog JSON.\n");
+        return -1;
+    }
+
+    if (!json_is_object(catalog)) {
+        printf("Catalog is not a JSON object.\n");
+        json_value_destroy(catalog);
+        return -1;
+    }
+
     /* Find resources array */
-    const char *resources_start = strstr(catalog_json, "\"resources\":");
-    if (!resources_start) {
+    json_value_t *resources = json_object_get(catalog, "resources");
+    if (!resources || !json_is_array(resources)) {
         printf("No resources in catalog.\n");
+        json_value_destroy(catalog);
         return 0;
     }
 
-    resources_start = strchr(resources_start, '[');
-    if (!resources_start) return 0;
-    resources_start++;
-
-    /* Parse and apply each resource */
-    const char *p = resources_start;
+    /* Apply each resource */
     int applied = 0;
+    size_t resource_count = json_array_size(resources);
 
-    while (*p) {
-        /* Skip whitespace */
-        while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == ',')) p++;
-
-        if (*p == ']') break;
-        if (*p != '{') { p++; continue; }
-
-        const char *end = p;
-        resource_t *resource = parse_resource_json(p, &end);
+    for (size_t i = 0; i < resource_count; i++) {
+        json_value_t *res_obj = json_array_get(resources, i);
+        resource_t *resource = parse_resource_from_json(res_obj);
 
         if (resource) {
             printf("\n%s[%s]:\n", resource->type, resource->title);
@@ -447,9 +358,9 @@ int catalog_apply(const char *catalog_json, apply_context_t *ctx) {
             resource_free(resource);
             applied++;
         }
-
-        p = end;
     }
+
+    json_value_destroy(catalog);
 
     printf("\n========================\n");
     printf("Applied: %d resources\n", applied);

@@ -15,26 +15,14 @@
 #define PUPPET_JSON_H
 
 #include "puppet_ast.h"
+#include "puppet_json_common.h"
 #include <stdio.h>
 
-/**
- * @brief Dynamic buffer for JSON output construction
- * 
- * Provides efficient string building for JSON serialization with
- * automatic memory management and capacity expansion.
+/*
+ * Compatibility: json_buffer_append_escaped_string writes "escaped" (with quotes)
+ * The common library has json_buffer_append_string which does the same.
  */
-typedef struct {
-    char *data;         /**< Buffer content */
-    size_t size;        /**< Current content size */
-    size_t capacity;    /**< Buffer capacity */
-} json_buffer_t;
-
-/* Buffer management */
-json_buffer_t *json_buffer_create(void);
-void json_buffer_destroy(json_buffer_t *buf);
-void json_buffer_append(json_buffer_t *buf, const char *str);
-void json_buffer_append_char(json_buffer_t *buf, char c);
-void json_buffer_append_escaped_string(json_buffer_t *buf, const char *str);
+#define json_buffer_append_escaped_string(buf, str) json_buffer_append_string(buf, str)
 
 /* AST to JSON serialization */
 void puppet_program_to_json(puppet_program_t *program, FILE *output);

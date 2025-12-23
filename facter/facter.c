@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "puppet_memory.h"
+#include "puppet_json_common.h"
 #include <string.h>
 #include <stdbool.h>
 #include <unistd.h>
@@ -1014,69 +1015,51 @@ const char **facter_list(facter_ctx_t *ctx, size_t *count) {
  * Output Formats
  * ============================================================================ */
 
-static void json_escape_string(char *dest, size_t dest_size, const char *src) {
-    size_t j = 0;
-    for (size_t i = 0; src[i] && j < dest_size - 1; i++) {
-        switch (src[i]) {
-            case '"':  if (j + 2 < dest_size) { dest[j++] = '\\'; dest[j++] = '"'; } break;
-            case '\\': if (j + 2 < dest_size) { dest[j++] = '\\'; dest[j++] = '\\'; } break;
-            case '\n': if (j + 2 < dest_size) { dest[j++] = '\\'; dest[j++] = 'n'; } break;
-            case '\r': if (j + 2 < dest_size) { dest[j++] = '\\'; dest[j++] = 'r'; } break;
-            case '\t': if (j + 2 < dest_size) { dest[j++] = '\\'; dest[j++] = 't'; } break;
-            default:   dest[j++] = src[i]; break;
-        }
-    }
-    dest[j] = '\0';
-}
-
 char *facter_to_json(facter_ctx_t *ctx) {
     if (!ctx) return NULL;
 
-    size_t buf_size = 16384;
-    char *buf = puppet_malloc(buf_size);
+    json_buffer_t *buf = json_buffer_create();
     if (!buf) return NULL;
 
-    size_t pos = 0;
-    pos += snprintf(buf + pos, buf_size - pos, "{\n");
+    json_buffer_append(buf, "{\n");
 
     for (size_t i = 0; i < ctx->fact_count; i++) {
         fact_entry_t *f = &ctx->facts[i];
-        char escaped_name[256];
-        json_escape_string(escaped_name, sizeof(escaped_name), f->name);
 
-        pos += snprintf(buf + pos, buf_size - pos, "  \"%s\": ", escaped_name);
+        json_buffer_append(buf, "  ");
+        json_buffer_append_string(buf, f->name);
+        json_buffer_append(buf, ": ");
 
         switch (f->value->type) {
-            case FACTER_VALUE_STRING: {
-                char escaped[1024];
-                json_escape_string(escaped, sizeof(escaped), f->value->data.string_val);
-                pos += snprintf(buf + pos, buf_size - pos, "\"%s\"", escaped);
+            case FACTER_VALUE_STRING:
+                json_buffer_append_string(buf, f->value->data.string_val);
                 break;
-            }
             case FACTER_VALUE_INTEGER:
-                pos += snprintf(buf + pos, buf_size - pos, "%ld", f->value->data.integer_val);
+                json_buffer_append_int(buf, f->value->data.integer_val);
                 break;
             case FACTER_VALUE_FLOAT:
-                pos += snprintf(buf + pos, buf_size - pos, "%g", f->value->data.float_val);
+                json_buffer_append_double(buf, f->value->data.float_val);
                 break;
             case FACTER_VALUE_BOOLEAN:
-                pos += snprintf(buf + pos, buf_size - pos, "%s",
-                               f->value->data.boolean_val ? "true" : "false");
+                json_buffer_append_bool(buf, f->value->data.boolean_val);
                 break;
             default:
-                pos += snprintf(buf + pos, buf_size - pos, "null");
+                json_buffer_append_null(buf);
                 break;
         }
 
         if (i < ctx->fact_count - 1) {
-            pos += snprintf(buf + pos, buf_size - pos, ",");
+            json_buffer_append(buf, ",");
         }
-        pos += snprintf(buf + pos, buf_size - pos, "\n");
+        json_buffer_append(buf, "\n");
     }
 
-    pos += snprintf(buf + pos, buf_size - pos, "}\n");
+    json_buffer_append(buf, "}\n");
 
-    return buf;
+    char *result = puppet_strdup(buf->data);
+    json_buffer_destroy(buf);
+
+    return result;
 }
 
 char *facter_to_yaml(facter_ctx_t *ctx) {

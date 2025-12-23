@@ -21,9 +21,9 @@ Package: libpuppetc-common0
 Section: libs
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
-Description: Puppet common library (memory management)
+Description: Puppet common library (memory management, JSON)
  Shared library with common utilities including memory
- management and tracking functions.
+ management, tracking functions, and JSON parsing/generation.
 
 Package: libpuppetc-common-dev
 Section: libdevel
