@@ -20,6 +20,40 @@ make
 make check
 ```
 
+## Docker
+
+Build and run using Docker (no dependencies needed on host):
+
+```bash
+# Build images
+docker build --target server -t puppetc-server .
+docker build --target agent -t puppetc-agent .
+
+# Run server
+docker run -d -p 8140:8140 \
+    -v ./manifests:/etc/puppet/manifests:ro \
+    puppetc-server
+
+# Run agent (noop mode)
+docker run --rm --network host puppetc-agent -n
+
+# Run agent (apply mode)
+docker run --rm --network host puppetc-agent -a
+```
+
+Or use docker-compose:
+
+```bash
+# Start server
+docker-compose up -d server
+
+# Run agent in noop mode
+docker-compose run agent
+
+# Run agent in apply mode
+docker-compose run agent -a
+```
+
 ## Usage
 
 ```bash
