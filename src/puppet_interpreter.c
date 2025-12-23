@@ -409,6 +409,9 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "last") == 0) {
                 return puppet_func_last(&expr->data.funcall.args, env);
             }
+            else if (strcmp(func_name, "range") == 0) {
+                return puppet_func_range(&expr->data.funcall.args, env);
+            }
             else if (strcmp(func_name, "abs") == 0) {
                 return puppet_func_abs(&expr->data.funcall.args, env);
             }

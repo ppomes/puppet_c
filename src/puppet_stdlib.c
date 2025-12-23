@@ -1747,6 +1747,108 @@ puppet_value_t *puppet_func_last(puppet_expr_list_t *args, puppet_env_t *env) {
 }
 
 /**
+ * @brief Puppet range() function - create array of sequential values
+ *
+ * Usage: range(start, end) or range(start, end, step)
+ * Returns an array of values from start to end (inclusive)
+ *
+ * Examples:
+ *   range(1, 5)        => [1, 2, 3, 4, 5]
+ *   range(1, 10, 2)    => [1, 3, 5, 7, 9]
+ *   range(5, 1)        => [5, 4, 3, 2, 1]
+ *   range('a', 'e')    => ['a', 'b', 'c', 'd', 'e']
+ */
+puppet_value_t *puppet_func_range(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log(PUPPET_LOG_ERROR, "range() requires at least 2 arguments: start, end");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *start_val = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *end_val = puppet_eval_expr(args->exprs[1], env);
+    puppet_value_t *step_val = NULL;
+
+    if (args->count >= 3) {
+        step_val = puppet_eval_expr(args->exprs[2], env);
+    }
+
+    puppet_value_t *result = puppet_value_create_array();
+
+    /* Handle numeric range */
+    if (start_val && start_val->type == PUPPET_VALUE_NUMBER &&
+        end_val && end_val->type == PUPPET_VALUE_NUMBER) {
+
+        int start = (int)start_val->data.number;
+        int end = (int)end_val->data.number;
+        int step = 1;
+
+        if (step_val && step_val->type == PUPPET_VALUE_NUMBER) {
+            step = (int)step_val->data.number;
+            if (step == 0) step = 1;
+        }
+
+        /* Auto-detect direction */
+        if (start > end && step > 0) {
+            step = -step;
+        } else if (start < end && step < 0) {
+            step = -step;
+        }
+
+        if (step > 0) {
+            for (int i = start; i <= end; i += step) {
+                puppet_array_append(result->data.array, puppet_value_create_number((double)i));
+            }
+        } else {
+            for (int i = start; i >= end; i += step) {
+                puppet_array_append(result->data.array, puppet_value_create_number((double)i));
+            }
+        }
+    }
+    /* Handle character range */
+    else if (start_val && start_val->type == PUPPET_VALUE_STRING &&
+             start_val->data.string.len == 1 &&
+             end_val && end_val->type == PUPPET_VALUE_STRING &&
+             end_val->data.string.len == 1) {
+
+        char start_char = start_val->data.string.data[0];
+        char end_char = end_val->data.string.data[0];
+        int step = 1;
+
+        if (step_val && step_val->type == PUPPET_VALUE_NUMBER) {
+            step = (int)step_val->data.number;
+            if (step == 0) step = 1;
+        }
+
+        if (start_char > end_char && step > 0) {
+            step = -step;
+        } else if (start_char < end_char && step < 0) {
+            step = -step;
+        }
+
+        char buf[2] = {0, 0};
+        if (step > 0) {
+            for (char c = start_char; c <= end_char; c += step) {
+                buf[0] = c;
+                puppet_array_append(result->data.array, puppet_value_create_string(buf, 1));
+            }
+        } else {
+            for (char c = start_char; c >= end_char; c += step) {
+                buf[0] = c;
+                puppet_array_append(result->data.array, puppet_value_create_string(buf, 1));
+            }
+        }
+    } else {
+        puppet_log(PUPPET_LOG_ERROR, "range() requires numeric or single-character string arguments");
+    }
+
+    puppet_value_destroy(start_val);
+    puppet_value_destroy(end_val);
+    if (step_val) puppet_value_destroy(step_val);
+
+    return result;
+}
+
+/**
  * @brief Puppet abs() function - get absolute value of a number
  *
  * Usage: abs(number)

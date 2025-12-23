@@ -51,6 +51,7 @@ puppet_value_t *puppet_func_delete(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_delete_at(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_first(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_last(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_range(puppet_expr_list_t *args, puppet_env_t *env);
 
 // Math functions
 puppet_value_t *puppet_func_abs(puppet_expr_list_t *args, puppet_env_t *env);
