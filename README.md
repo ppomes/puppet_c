@@ -166,7 +166,7 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      Libraries                               │
+│                      Libraries                              │
 ├─────────────────────┬───────────────────────────────────────┤
 │  libpuppetc         │  libfacter_c                          │
 │  - Parser/Lexer     │  - Native fact collection             │
@@ -178,13 +178,13 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 └─────────────────────┴───────────────────────────────────────┘
            │                        │
            ▼                        ▼
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│ puppetc-server  │  │ puppetc-agent   │  │ puppetc         │
-│                 │  │                 │  │ (debug tool)    │
-│ - REST API      │  │ - Collect facts │  │ - Parse/eval    │
-│ - Compile       │  │ - Request catalog│ │ - JSON output   │
-│   catalogs      │  │ - Apply catalog │  │ - Template debug│
-└─────────────────┘  └─────────────────┘  └─────────────────┘
+┌─────────────────┐  ┌──────────────────┐  ┌─────────────────┐
+│ puppetc-server  │  │ puppetc-agent    │  │ puppetc         │
+│                 │  │                  │  │ (debug tool)    │
+│ - REST API      │  │ - Collect facts  │  │ - Parse/eval    │
+│ - Compile       │  │ - Request catalog│  │ - JSON output   │
+│   catalogs      │  │ - Apply catalog  │  │ - Template debug│
+└─────────────────┘  └──────────────────┘  └─────────────────┘
 ```
 
 ### Phases
