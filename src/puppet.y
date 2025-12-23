@@ -820,6 +820,14 @@ array_value:
             if (expr->type == PUPPET_EXPR_VALUE) {
                 puppet_array_append($$->data.array, puppet_value_copy(expr->data.value));
             }
+            /* Handle unary minus on number literals: -3, -3.14 */
+            else if (expr->type == PUPPET_EXPR_UNOP &&
+                     expr->data.unop.op == PUPPET_UNOP_MINUS &&
+                     expr->data.unop.expr->type == PUPPET_EXPR_VALUE &&
+                     expr->data.unop.expr->data.value->type == PUPPET_VALUE_NUMBER) {
+                double val = -expr->data.unop.expr->data.value->data.number;
+                puppet_array_append($$->data.array, puppet_value_create_number(val));
+            }
             /* Non-literal expressions are skipped for now */
         }
         puppet_free(list->exprs);
