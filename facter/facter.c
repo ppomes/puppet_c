@@ -1,0 +1,1164 @@
+/**
+ * @file facter.c
+ * @brief Native fact collection implementation for Linux
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <unistd.h>
+#include <sys/utsname.h>
+#include <sys/sysinfo.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <net/if.h>
+#include <ifaddrs.h>
+#include <netdb.h>
+#include <dirent.h>
+#include <ctype.h>
+#include <errno.h>
+
+#include "facter.h"
+
+#define FACTER_VERSION "0.1.0"
+#define MAX_FACTS 256
+#define MAX_FACT_NAME 128
+#define MAX_INTERFACES 32
+
+/* ============================================================================
+ * Internal Structures
+ * ============================================================================ */
+
+typedef struct {
+    char name[MAX_FACT_NAME];
+    facter_value_t *value;
+} fact_entry_t;
+
+struct facter_ctx {
+    fact_entry_t facts[MAX_FACTS];
+    size_t fact_count;
+    const char *fact_names[MAX_FACTS];  /* For facter_list */
+    bool collected;
+};
+
+/* ============================================================================
+ * Helper Functions
+ * ============================================================================ */
+
+static char *safe_strdup(const char *s) {
+    return s ? strdup(s) : NULL;
+}
+
+static char *trim_string(char *str) {
+    if (!str) return NULL;
+
+    /* Trim leading whitespace */
+    while (isspace((unsigned char)*str)) str++;
+
+    if (*str == 0) return str;
+
+    /* Trim trailing whitespace */
+    char *end = str + strlen(str) - 1;
+    while (end > str && isspace((unsigned char)*end)) end--;
+    end[1] = '\0';
+
+    return str;
+}
+
+static char *read_file_line(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return NULL;
+
+    char *line = NULL;
+    size_t len = 0;
+    ssize_t read = getline(&line, &len, f);
+    fclose(f);
+
+    if (read <= 0) {
+        free(line);
+        return NULL;
+    }
+
+    /* Remove trailing newline */
+    if (read > 0 && line[read - 1] == '\n') {
+        line[read - 1] = '\0';
+    }
+
+    return line;
+}
+
+static char *read_file_contents(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return NULL;
+
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (size <= 0 || size > 1024 * 1024) {  /* Limit to 1MB */
+        fclose(f);
+        return NULL;
+    }
+
+    char *content = malloc(size + 1);
+    if (!content) {
+        fclose(f);
+        return NULL;
+    }
+
+    size_t read = fread(content, 1, size, f);
+    content[read] = '\0';
+    fclose(f);
+
+    return content;
+}
+
+/* ============================================================================
+ * Value Creation/Destruction
+ * ============================================================================ */
+
+facter_value_t *facter_value_string(const char *str) {
+    facter_value_t *v = calloc(1, sizeof(facter_value_t));
+    if (!v) return NULL;
+    v->type = FACTER_VALUE_STRING;
+    v->data.string_val = safe_strdup(str);
+    return v;
+}
+
+facter_value_t *facter_value_integer(long val) {
+    facter_value_t *v = calloc(1, sizeof(facter_value_t));
+    if (!v) return NULL;
+    v->type = FACTER_VALUE_INTEGER;
+    v->data.integer_val = val;
+    return v;
+}
+
+facter_value_t *facter_value_boolean(bool val) {
+    facter_value_t *v = calloc(1, sizeof(facter_value_t));
+    if (!v) return NULL;
+    v->type = FACTER_VALUE_BOOLEAN;
+    v->data.boolean_val = val;
+    return v;
+}
+
+static facter_value_t *facter_value_float(double val) {
+    facter_value_t *v = calloc(1, sizeof(facter_value_t));
+    if (!v) return NULL;
+    v->type = FACTER_VALUE_FLOAT;
+    v->data.float_val = val;
+    return v;
+}
+
+void facter_value_free(facter_value_t *value) {
+    if (!value) return;
+
+    switch (value->type) {
+        case FACTER_VALUE_STRING:
+            free(value->data.string_val);
+            break;
+        case FACTER_VALUE_ARRAY:
+            for (size_t i = 0; i < value->data.array_val.count; i++) {
+                facter_value_free(value->data.array_val.items[i]);
+            }
+            free(value->data.array_val.items);
+            break;
+        case FACTER_VALUE_HASH:
+            for (size_t i = 0; i < value->data.hash_val.count; i++) {
+                free(value->data.hash_val.keys[i]);
+                facter_value_free(value->data.hash_val.values[i]);
+            }
+            free(value->data.hash_val.keys);
+            free(value->data.hash_val.values);
+            break;
+        default:
+            break;
+    }
+    free(value);
+}
+
+/* ============================================================================
+ * Context Management
+ * ============================================================================ */
+
+facter_ctx_t *facter_create(void) {
+    facter_ctx_t *ctx = calloc(1, sizeof(facter_ctx_t));
+    return ctx;
+}
+
+void facter_destroy(facter_ctx_t *ctx) {
+    if (!ctx) return;
+
+    for (size_t i = 0; i < ctx->fact_count; i++) {
+        facter_value_free(ctx->facts[i].value);
+    }
+    free(ctx);
+}
+
+static int facter_set(facter_ctx_t *ctx, const char *name, facter_value_t *value) {
+    if (!ctx || !name || !value) return -1;
+    if (ctx->fact_count >= MAX_FACTS) return -1;
+
+    /* Check if fact already exists */
+    for (size_t i = 0; i < ctx->fact_count; i++) {
+        if (strcmp(ctx->facts[i].name, name) == 0) {
+            facter_value_free(ctx->facts[i].value);
+            ctx->facts[i].value = value;
+            return 0;
+        }
+    }
+
+    /* Add new fact */
+    strncpy(ctx->facts[ctx->fact_count].name, name, MAX_FACT_NAME - 1);
+    ctx->facts[ctx->fact_count].value = value;
+    ctx->fact_names[ctx->fact_count] = ctx->facts[ctx->fact_count].name;
+    ctx->fact_count++;
+
+    return 0;
+}
+
+static int facter_set_string(facter_ctx_t *ctx, const char *name, const char *value) {
+    if (!value) return -1;
+    return facter_set(ctx, name, facter_value_string(value));
+}
+
+static int facter_set_integer(facter_ctx_t *ctx, const char *name, long value) {
+    return facter_set(ctx, name, facter_value_integer(value));
+}
+
+static int facter_set_boolean(facter_ctx_t *ctx, const char *name, bool value) {
+    return facter_set(ctx, name, facter_value_boolean(value));
+}
+
+/* ============================================================================
+ * Direct Fact Collectors
+ * ============================================================================ */
+
+char *facter_hostname(void) {
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname)) == 0) {
+        /* Remove domain part if present */
+        char *dot = strchr(hostname, '.');
+        if (dot) *dot = '\0';
+        return strdup(hostname);
+    }
+    return NULL;
+}
+
+char *facter_fqdn(void) {
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname)) != 0) {
+        return NULL;
+    }
+
+    struct addrinfo hints, *info;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_CANONNAME;
+
+    if (getaddrinfo(hostname, NULL, &hints, &info) == 0 && info) {
+        char *fqdn = strdup(info->ai_canonname ? info->ai_canonname : hostname);
+        freeaddrinfo(info);
+        return fqdn;
+    }
+
+    return strdup(hostname);
+}
+
+char *facter_domain(void) {
+    char *fqdn = facter_fqdn();
+    if (!fqdn) return NULL;
+
+    char *dot = strchr(fqdn, '.');
+    if (dot && *(dot + 1)) {
+        char *domain = strdup(dot + 1);
+        free(fqdn);
+        return domain;
+    }
+
+    free(fqdn);
+    return NULL;
+}
+
+char *facter_kernel(void) {
+    struct utsname buf;
+    if (uname(&buf) == 0) {
+        return strdup(buf.sysname);
+    }
+    return NULL;
+}
+
+char *facter_kernelversion(void) {
+    struct utsname buf;
+    if (uname(&buf) == 0) {
+        /* Extract major.minor from release */
+        char *version = strdup(buf.release);
+        if (version) {
+            char *p = version;
+            int dots = 0;
+            while (*p) {
+                if (*p == '.') {
+                    dots++;
+                    if (dots == 2) {
+                        *p = '\0';
+                        break;
+                    }
+                }
+                p++;
+            }
+        }
+        return version;
+    }
+    return NULL;
+}
+
+char *facter_kernelrelease(void) {
+    struct utsname buf;
+    if (uname(&buf) == 0) {
+        return strdup(buf.release);
+    }
+    return NULL;
+}
+
+char *facter_architecture(void) {
+    struct utsname buf;
+    if (uname(&buf) == 0) {
+        return strdup(buf.machine);
+    }
+    return NULL;
+}
+
+char *facter_os_name(void) {
+    /* Try /etc/os-release first (modern distros) */
+    char *content = read_file_contents("/etc/os-release");
+    if (content) {
+        char *line = strtok(content, "\n");
+        while (line) {
+            if (strncmp(line, "NAME=", 5) == 0) {
+                char *name = line + 5;
+                /* Remove quotes */
+                if (*name == '"') name++;
+                char *end = name + strlen(name) - 1;
+                if (*end == '"') *end = '\0';
+                char *result = strdup(name);
+                free(content);
+                return result;
+            }
+            line = strtok(NULL, "\n");
+        }
+        free(content);
+    }
+
+    /* Fallback to uname */
+    struct utsname buf;
+    if (uname(&buf) == 0) {
+        return strdup(buf.sysname);
+    }
+
+    return strdup("Linux");
+}
+
+char *facter_os_family(void) {
+    char *content = read_file_contents("/etc/os-release");
+    if (content) {
+        char *id_like = NULL;
+        char *id = NULL;
+
+        char *line = strtok(content, "\n");
+        while (line) {
+            if (strncmp(line, "ID_LIKE=", 8) == 0) {
+                id_like = line + 8;
+                if (*id_like == '"') id_like++;
+            } else if (strncmp(line, "ID=", 3) == 0) {
+                id = line + 3;
+                if (*id == '"') id++;
+            }
+            line = strtok(NULL, "\n");
+        }
+
+        const char *family = id_like ? id_like : id;
+        if (family) {
+            /* Map to Puppet OS families */
+            if (strstr(family, "debian") || strstr(family, "ubuntu")) {
+                free(content);
+                return strdup("Debian");
+            } else if (strstr(family, "rhel") || strstr(family, "fedora") ||
+                       strstr(family, "centos") || strstr(family, "redhat")) {
+                free(content);
+                return strdup("RedHat");
+            } else if (strstr(family, "suse") || strstr(family, "opensuse")) {
+                free(content);
+                return strdup("Suse");
+            } else if (strstr(family, "arch")) {
+                free(content);
+                return strdup("Archlinux");
+            } else if (strstr(family, "gentoo")) {
+                free(content);
+                return strdup("Gentoo");
+            }
+        }
+        free(content);
+    }
+
+    /* Check for specific distro files */
+    if (access("/etc/debian_version", F_OK) == 0) {
+        return strdup("Debian");
+    } else if (access("/etc/redhat-release", F_OK) == 0) {
+        return strdup("RedHat");
+    } else if (access("/etc/SuSE-release", F_OK) == 0) {
+        return strdup("Suse");
+    }
+
+    return strdup("Linux");
+}
+
+char *facter_os_release(void) {
+    char *content = read_file_contents("/etc/os-release");
+    if (content) {
+        char *line = strtok(content, "\n");
+        while (line) {
+            if (strncmp(line, "VERSION_ID=", 11) == 0) {
+                char *version = line + 11;
+                if (*version == '"') version++;
+                char *end = version + strlen(version) - 1;
+                if (*end == '"') *end = '\0';
+                char *result = strdup(version);
+                free(content);
+                return result;
+            }
+            line = strtok(NULL, "\n");
+        }
+        free(content);
+    }
+
+    return NULL;
+}
+
+unsigned long facter_memory_total(void) {
+    struct sysinfo info;
+    if (sysinfo(&info) == 0) {
+        return info.totalram * info.mem_unit;
+    }
+    return 0;
+}
+
+unsigned long facter_memory_free(void) {
+    struct sysinfo info;
+    if (sysinfo(&info) == 0) {
+        return info.freeram * info.mem_unit;
+    }
+    return 0;
+}
+
+int facter_processor_count(void) {
+    long nprocs = sysconf(_SC_NPROCESSORS_ONLN);
+    return nprocs > 0 ? (int)nprocs : 1;
+}
+
+long facter_uptime_seconds(void) {
+    struct sysinfo info;
+    if (sysinfo(&info) == 0) {
+        return info.uptime;
+    }
+    return 0;
+}
+
+bool facter_is_virtual(void) {
+    /* Check various indicators of virtualization */
+
+    /* Check /sys/class/dmi/id/product_name */
+    char *product = read_file_line("/sys/class/dmi/id/product_name");
+    if (product) {
+        bool is_virtual = (strstr(product, "VirtualBox") != NULL ||
+                          strstr(product, "VMware") != NULL ||
+                          strstr(product, "QEMU") != NULL ||
+                          strstr(product, "KVM") != NULL ||
+                          strstr(product, "Bochs") != NULL ||
+                          strstr(product, "HVM") != NULL);
+        free(product);
+        if (is_virtual) return true;
+    }
+
+    /* Check /sys/hypervisor/type */
+    char *hypervisor = read_file_line("/sys/hypervisor/type");
+    if (hypervisor) {
+        free(hypervisor);
+        return true;
+    }
+
+    /* Check for Docker */
+    if (access("/.dockerenv", F_OK) == 0) {
+        return true;
+    }
+
+    /* Check cgroup for container indicators */
+    char *cgroup = read_file_contents("/proc/1/cgroup");
+    if (cgroup) {
+        bool is_container = (strstr(cgroup, "docker") != NULL ||
+                            strstr(cgroup, "lxc") != NULL ||
+                            strstr(cgroup, "kubepods") != NULL);
+        free(cgroup);
+        if (is_container) return true;
+    }
+
+    return false;
+}
+
+char *facter_virtual(void) {
+    /* Check /sys/class/dmi/id/product_name */
+    char *product = read_file_line("/sys/class/dmi/id/product_name");
+    if (product) {
+        if (strstr(product, "VirtualBox")) {
+            free(product);
+            return strdup("virtualbox");
+        } else if (strstr(product, "VMware")) {
+            free(product);
+            return strdup("vmware");
+        } else if (strstr(product, "QEMU") || strstr(product, "KVM")) {
+            free(product);
+            return strdup("kvm");
+        } else if (strstr(product, "Bochs")) {
+            free(product);
+            return strdup("bochs");
+        } else if (strstr(product, "Xen") || strstr(product, "HVM")) {
+            free(product);
+            return strdup("xen");
+        }
+        free(product);
+    }
+
+    /* Check /sys/hypervisor/type */
+    char *hypervisor = read_file_line("/sys/hypervisor/type");
+    if (hypervisor) {
+        char *result = strdup(trim_string(hypervisor));
+        free(hypervisor);
+        return result;
+    }
+
+    /* Check for Docker */
+    if (access("/.dockerenv", F_OK) == 0) {
+        return strdup("docker");
+    }
+
+    /* Check cgroup for container */
+    char *cgroup = read_file_contents("/proc/1/cgroup");
+    if (cgroup) {
+        if (strstr(cgroup, "docker")) {
+            free(cgroup);
+            return strdup("docker");
+        } else if (strstr(cgroup, "lxc")) {
+            free(cgroup);
+            return strdup("lxc");
+        } else if (strstr(cgroup, "kubepods")) {
+            free(cgroup);
+            return strdup("docker");
+        }
+        free(cgroup);
+    }
+
+    return strdup("physical");
+}
+
+char *facter_ipaddress(void) {
+    struct ifaddrs *ifaddr, *ifa;
+    char *result = NULL;
+
+    if (getifaddrs(&ifaddr) == -1) {
+        return NULL;
+    }
+
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL) continue;
+        if (ifa->ifa_addr->sa_family != AF_INET) continue;
+
+        /* Skip loopback */
+        if (strcmp(ifa->ifa_name, "lo") == 0) continue;
+
+        /* Skip down interfaces */
+        if (!(ifa->ifa_flags & IFF_UP)) continue;
+
+        struct sockaddr_in *addr = (struct sockaddr_in *)ifa->ifa_addr;
+        char ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &addr->sin_addr, ip, sizeof(ip));
+
+        /* Skip link-local addresses */
+        if (strncmp(ip, "169.254.", 8) == 0) continue;
+
+        result = strdup(ip);
+        break;
+    }
+
+    freeifaddrs(ifaddr);
+    return result;
+}
+
+char *facter_macaddress(void) {
+    struct ifaddrs *ifaddr, *ifa;
+    char *result = NULL;
+
+    if (getifaddrs(&ifaddr) == -1) {
+        return NULL;
+    }
+
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL) continue;
+
+        /* Skip loopback */
+        if (strcmp(ifa->ifa_name, "lo") == 0) continue;
+
+        /* Skip down interfaces */
+        if (!(ifa->ifa_flags & IFF_UP)) continue;
+
+        /* Read MAC from /sys */
+        char path[256];
+        snprintf(path, sizeof(path), "/sys/class/net/%s/address", ifa->ifa_name);
+        char *mac = read_file_line(path);
+        if (mac && strcmp(mac, "00:00:00:00:00:00") != 0) {
+            result = mac;
+            break;
+        }
+        free(mac);
+    }
+
+    freeifaddrs(ifaddr);
+    return result;
+}
+
+facter_interface_t *facter_interfaces(size_t *count) {
+    struct ifaddrs *ifaddr, *ifa;
+    facter_interface_t *interfaces = NULL;
+    size_t iface_count = 0;
+
+    *count = 0;
+
+    if (getifaddrs(&ifaddr) == -1) {
+        return NULL;
+    }
+
+    /* Count unique interfaces */
+    char seen[MAX_INTERFACES][IFNAMSIZ];
+    size_t seen_count = 0;
+
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_name) continue;
+
+        bool found = false;
+        for (size_t i = 0; i < seen_count; i++) {
+            if (strcmp(seen[i], ifa->ifa_name) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found && seen_count < MAX_INTERFACES) {
+            strncpy(seen[seen_count], ifa->ifa_name, IFNAMSIZ - 1);
+            seen_count++;
+        }
+    }
+
+    interfaces = calloc(seen_count, sizeof(facter_interface_t));
+    if (!interfaces) {
+        freeifaddrs(ifaddr);
+        return NULL;
+    }
+
+    /* Fill in interface details */
+    for (size_t i = 0; i < seen_count; i++) {
+        interfaces[iface_count].name = strdup(seen[i]);
+
+        /* Get MAC address */
+        char path[256];
+        snprintf(path, sizeof(path), "/sys/class/net/%s/address", seen[i]);
+        interfaces[iface_count].mac = read_file_line(path);
+
+        /* Get MTU */
+        snprintf(path, sizeof(path), "/sys/class/net/%s/mtu", seen[i]);
+        char *mtu_str = read_file_line(path);
+        if (mtu_str) {
+            interfaces[iface_count].mtu = atoi(mtu_str);
+            free(mtu_str);
+        }
+
+        /* Get UP status and addresses from ifaddrs */
+        for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+            if (strcmp(ifa->ifa_name, seen[i]) != 0) continue;
+
+            interfaces[iface_count].up = (ifa->ifa_flags & IFF_UP) != 0;
+
+            if (ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_INET) {
+                struct sockaddr_in *addr = (struct sockaddr_in *)ifa->ifa_addr;
+                char ip[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &addr->sin_addr, ip, sizeof(ip));
+                interfaces[iface_count].ip = strdup(ip);
+
+                if (ifa->ifa_netmask) {
+                    struct sockaddr_in *mask = (struct sockaddr_in *)ifa->ifa_netmask;
+                    char netmask[INET_ADDRSTRLEN];
+                    inet_ntop(AF_INET, &mask->sin_addr, netmask, sizeof(netmask));
+                    interfaces[iface_count].netmask = strdup(netmask);
+                }
+            } else if (ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_INET6) {
+                struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)ifa->ifa_addr;
+                char ip6[INET6_ADDRSTRLEN];
+                inet_ntop(AF_INET6, &addr6->sin6_addr, ip6, sizeof(ip6));
+                if (!interfaces[iface_count].ip6) {
+                    interfaces[iface_count].ip6 = strdup(ip6);
+                }
+            }
+        }
+
+        iface_count++;
+    }
+
+    freeifaddrs(ifaddr);
+    *count = iface_count;
+    return interfaces;
+}
+
+void facter_interfaces_free(facter_interface_t *interfaces, size_t count) {
+    if (!interfaces) return;
+
+    for (size_t i = 0; i < count; i++) {
+        free(interfaces[i].name);
+        free(interfaces[i].ip);
+        free(interfaces[i].ip6);
+        free(interfaces[i].mac);
+        free(interfaces[i].netmask);
+    }
+    free(interfaces);
+}
+
+/* ============================================================================
+ * Full Collection
+ * ============================================================================ */
+
+static void collect_system_facts(facter_ctx_t *ctx) {
+    char *hostname = facter_hostname();
+    if (hostname) {
+        facter_set_string(ctx, "hostname", hostname);
+        free(hostname);
+    }
+
+    char *fqdn = facter_fqdn();
+    if (fqdn) {
+        facter_set_string(ctx, "fqdn", fqdn);
+        free(fqdn);
+    }
+
+    char *domain = facter_domain();
+    if (domain) {
+        facter_set_string(ctx, "domain", domain);
+        free(domain);
+    }
+
+    facter_set_integer(ctx, "uptime_seconds", facter_uptime_seconds());
+
+    long uptime = facter_uptime_seconds();
+    facter_set_integer(ctx, "uptime_days", uptime / 86400);
+    facter_set_integer(ctx, "uptime_hours", uptime / 3600);
+}
+
+static void collect_kernel_facts(facter_ctx_t *ctx) {
+    char *kernel = facter_kernel();
+    if (kernel) {
+        facter_set_string(ctx, "kernel", kernel);
+        free(kernel);
+    }
+
+    char *kernelrelease = facter_kernelrelease();
+    if (kernelrelease) {
+        facter_set_string(ctx, "kernelrelease", kernelrelease);
+        free(kernelrelease);
+    }
+
+    char *kernelversion = facter_kernelversion();
+    if (kernelversion) {
+        facter_set_string(ctx, "kernelversion", kernelversion);
+        free(kernelversion);
+    }
+}
+
+static void collect_os_facts(facter_ctx_t *ctx) {
+    char *os_name = facter_os_name();
+    if (os_name) {
+        facter_set_string(ctx, "operatingsystem", os_name);
+        facter_set_string(ctx, "os.name", os_name);
+        free(os_name);
+    }
+
+    char *os_family = facter_os_family();
+    if (os_family) {
+        facter_set_string(ctx, "osfamily", os_family);
+        facter_set_string(ctx, "os.family", os_family);
+        free(os_family);
+    }
+
+    char *os_release = facter_os_release();
+    if (os_release) {
+        facter_set_string(ctx, "operatingsystemrelease", os_release);
+        facter_set_string(ctx, "os.release.full", os_release);
+
+        /* Extract major version */
+        char *major = strdup(os_release);
+        char *dot = strchr(major, '.');
+        if (dot) *dot = '\0';
+        facter_set_string(ctx, "os.release.major", major);
+        free(major);
+
+        free(os_release);
+    }
+
+    char *arch = facter_architecture();
+    if (arch) {
+        facter_set_string(ctx, "architecture", arch);
+        facter_set_string(ctx, "os.architecture", arch);
+
+        /* Hardware model */
+        facter_set_string(ctx, "hardwaremodel", arch);
+
+        free(arch);
+    }
+}
+
+static void collect_memory_facts(facter_ctx_t *ctx) {
+    unsigned long total = facter_memory_total();
+    unsigned long free_mem = facter_memory_free();
+
+    facter_set_integer(ctx, "memorysize_mb", total / (1024 * 1024));
+    facter_set_integer(ctx, "memoryfree_mb", free_mem / (1024 * 1024));
+    facter_set_integer(ctx, "memory.system.total_bytes", total);
+    facter_set_integer(ctx, "memory.system.available_bytes", free_mem);
+
+    /* Human-readable format */
+    char buf[32];
+    if (total >= 1024UL * 1024 * 1024) {
+        snprintf(buf, sizeof(buf), "%.2f GiB", (double)total / (1024.0 * 1024 * 1024));
+    } else {
+        snprintf(buf, sizeof(buf), "%.2f MiB", (double)total / (1024.0 * 1024));
+    }
+    facter_set_string(ctx, "memory.system.total", buf);
+}
+
+static void collect_processor_facts(facter_ctx_t *ctx) {
+    int count = facter_processor_count();
+    facter_set_integer(ctx, "processorcount", count);
+    facter_set_integer(ctx, "processors.count", count);
+
+    /* Get processor model from /proc/cpuinfo */
+    char *cpuinfo = read_file_contents("/proc/cpuinfo");
+    if (cpuinfo) {
+        char *line = strtok(cpuinfo, "\n");
+        while (line) {
+            if (strncmp(line, "model name", 10) == 0) {
+                char *colon = strchr(line, ':');
+                if (colon) {
+                    char *model = trim_string(colon + 1);
+                    facter_set_string(ctx, "processor0", model);
+                    facter_set_string(ctx, "processors.models.0", model);
+                    break;
+                }
+            }
+            line = strtok(NULL, "\n");
+        }
+        free(cpuinfo);
+    }
+}
+
+static void collect_network_facts(facter_ctx_t *ctx) {
+    char *ip = facter_ipaddress();
+    if (ip) {
+        facter_set_string(ctx, "ipaddress", ip);
+        facter_set_string(ctx, "networking.ip", ip);
+        free(ip);
+    }
+
+    char *mac = facter_macaddress();
+    if (mac) {
+        facter_set_string(ctx, "macaddress", mac);
+        facter_set_string(ctx, "networking.mac", mac);
+        free(mac);
+    }
+
+    /* Collect interface details */
+    size_t iface_count;
+    facter_interface_t *interfaces = facter_interfaces(&iface_count);
+    if (interfaces) {
+        for (size_t i = 0; i < iface_count; i++) {
+            char key[128];
+
+            if (interfaces[i].ip) {
+                snprintf(key, sizeof(key), "networking.interfaces.%s.ip", interfaces[i].name);
+                facter_set_string(ctx, key, interfaces[i].ip);
+            }
+            if (interfaces[i].mac) {
+                snprintf(key, sizeof(key), "networking.interfaces.%s.mac", interfaces[i].name);
+                facter_set_string(ctx, key, interfaces[i].mac);
+            }
+            if (interfaces[i].netmask) {
+                snprintf(key, sizeof(key), "networking.interfaces.%s.netmask", interfaces[i].name);
+                facter_set_string(ctx, key, interfaces[i].netmask);
+            }
+            snprintf(key, sizeof(key), "networking.interfaces.%s.mtu", interfaces[i].name);
+            facter_set_integer(ctx, key, interfaces[i].mtu);
+        }
+        facter_interfaces_free(interfaces, iface_count);
+    }
+}
+
+static void collect_virtual_facts(facter_ctx_t *ctx) {
+    bool is_virtual = facter_is_virtual();
+    facter_set_boolean(ctx, "is_virtual", is_virtual);
+
+    char *virtual = facter_virtual();
+    if (virtual) {
+        facter_set_string(ctx, "virtual", virtual);
+        free(virtual);
+    }
+}
+
+int facter_collect(facter_ctx_t *ctx) {
+    if (!ctx) return -1;
+
+    collect_system_facts(ctx);
+    collect_kernel_facts(ctx);
+    collect_os_facts(ctx);
+    collect_memory_facts(ctx);
+    collect_processor_facts(ctx);
+    collect_network_facts(ctx);
+    collect_virtual_facts(ctx);
+
+    ctx->collected = true;
+    return 0;
+}
+
+int facter_collect_category(facter_ctx_t *ctx, const char *category) {
+    if (!ctx || !category) return -1;
+
+    if (strcmp(category, "system") == 0) {
+        collect_system_facts(ctx);
+    } else if (strcmp(category, "kernel") == 0) {
+        collect_kernel_facts(ctx);
+    } else if (strcmp(category, "os") == 0) {
+        collect_os_facts(ctx);
+    } else if (strcmp(category, "memory") == 0) {
+        collect_memory_facts(ctx);
+    } else if (strcmp(category, "processor") == 0 || strcmp(category, "processors") == 0) {
+        collect_processor_facts(ctx);
+    } else if (strcmp(category, "networking") == 0 || strcmp(category, "network") == 0) {
+        collect_network_facts(ctx);
+    } else if (strcmp(category, "virtual") == 0) {
+        collect_virtual_facts(ctx);
+    } else {
+        return -1;
+    }
+
+    return 0;
+}
+
+/* ============================================================================
+ * Fact Access
+ * ============================================================================ */
+
+const facter_value_t *facter_get(facter_ctx_t *ctx, const char *name) {
+    if (!ctx || !name) return NULL;
+
+    for (size_t i = 0; i < ctx->fact_count; i++) {
+        if (strcmp(ctx->facts[i].name, name) == 0) {
+            return ctx->facts[i].value;
+        }
+    }
+    return NULL;
+}
+
+const char *facter_get_string(facter_ctx_t *ctx, const char *name) {
+    const facter_value_t *v = facter_get(ctx, name);
+    if (v && v->type == FACTER_VALUE_STRING) {
+        return v->data.string_val;
+    }
+    return NULL;
+}
+
+int facter_get_integer(facter_ctx_t *ctx, const char *name, long *value) {
+    const facter_value_t *v = facter_get(ctx, name);
+    if (v && v->type == FACTER_VALUE_INTEGER) {
+        *value = v->data.integer_val;
+        return 0;
+    }
+    return -1;
+}
+
+int facter_get_boolean(facter_ctx_t *ctx, const char *name, bool *value) {
+    const facter_value_t *v = facter_get(ctx, name);
+    if (v && v->type == FACTER_VALUE_BOOLEAN) {
+        *value = v->data.boolean_val;
+        return 0;
+    }
+    return -1;
+}
+
+bool facter_has(facter_ctx_t *ctx, const char *name) {
+    return facter_get(ctx, name) != NULL;
+}
+
+const char **facter_list(facter_ctx_t *ctx, size_t *count) {
+    if (!ctx || !count) return NULL;
+    *count = ctx->fact_count;
+    return ctx->fact_names;
+}
+
+/* ============================================================================
+ * Output Formats
+ * ============================================================================ */
+
+static void json_escape_string(char *dest, size_t dest_size, const char *src) {
+    size_t j = 0;
+    for (size_t i = 0; src[i] && j < dest_size - 1; i++) {
+        switch (src[i]) {
+            case '"':  if (j + 2 < dest_size) { dest[j++] = '\\'; dest[j++] = '"'; } break;
+            case '\\': if (j + 2 < dest_size) { dest[j++] = '\\'; dest[j++] = '\\'; } break;
+            case '\n': if (j + 2 < dest_size) { dest[j++] = '\\'; dest[j++] = 'n'; } break;
+            case '\r': if (j + 2 < dest_size) { dest[j++] = '\\'; dest[j++] = 'r'; } break;
+            case '\t': if (j + 2 < dest_size) { dest[j++] = '\\'; dest[j++] = 't'; } break;
+            default:   dest[j++] = src[i]; break;
+        }
+    }
+    dest[j] = '\0';
+}
+
+char *facter_to_json(facter_ctx_t *ctx) {
+    if (!ctx) return NULL;
+
+    size_t buf_size = 16384;
+    char *buf = malloc(buf_size);
+    if (!buf) return NULL;
+
+    size_t pos = 0;
+    pos += snprintf(buf + pos, buf_size - pos, "{\n");
+
+    for (size_t i = 0; i < ctx->fact_count; i++) {
+        fact_entry_t *f = &ctx->facts[i];
+        char escaped_name[256];
+        json_escape_string(escaped_name, sizeof(escaped_name), f->name);
+
+        pos += snprintf(buf + pos, buf_size - pos, "  \"%s\": ", escaped_name);
+
+        switch (f->value->type) {
+            case FACTER_VALUE_STRING: {
+                char escaped[1024];
+                json_escape_string(escaped, sizeof(escaped), f->value->data.string_val);
+                pos += snprintf(buf + pos, buf_size - pos, "\"%s\"", escaped);
+                break;
+            }
+            case FACTER_VALUE_INTEGER:
+                pos += snprintf(buf + pos, buf_size - pos, "%ld", f->value->data.integer_val);
+                break;
+            case FACTER_VALUE_FLOAT:
+                pos += snprintf(buf + pos, buf_size - pos, "%g", f->value->data.float_val);
+                break;
+            case FACTER_VALUE_BOOLEAN:
+                pos += snprintf(buf + pos, buf_size - pos, "%s",
+                               f->value->data.boolean_val ? "true" : "false");
+                break;
+            default:
+                pos += snprintf(buf + pos, buf_size - pos, "null");
+                break;
+        }
+
+        if (i < ctx->fact_count - 1) {
+            pos += snprintf(buf + pos, buf_size - pos, ",");
+        }
+        pos += snprintf(buf + pos, buf_size - pos, "\n");
+    }
+
+    pos += snprintf(buf + pos, buf_size - pos, "}\n");
+
+    return buf;
+}
+
+char *facter_to_yaml(facter_ctx_t *ctx) {
+    if (!ctx) return NULL;
+
+    size_t buf_size = 16384;
+    char *buf = malloc(buf_size);
+    if (!buf) return NULL;
+
+    size_t pos = 0;
+    pos += snprintf(buf + pos, buf_size - pos, "---\n");
+
+    for (size_t i = 0; i < ctx->fact_count; i++) {
+        fact_entry_t *f = &ctx->facts[i];
+
+        switch (f->value->type) {
+            case FACTER_VALUE_STRING:
+                pos += snprintf(buf + pos, buf_size - pos, "%s: \"%s\"\n",
+                               f->name, f->value->data.string_val);
+                break;
+            case FACTER_VALUE_INTEGER:
+                pos += snprintf(buf + pos, buf_size - pos, "%s: %ld\n",
+                               f->name, f->value->data.integer_val);
+                break;
+            case FACTER_VALUE_FLOAT:
+                pos += snprintf(buf + pos, buf_size - pos, "%s: %g\n",
+                               f->name, f->value->data.float_val);
+                break;
+            case FACTER_VALUE_BOOLEAN:
+                pos += snprintf(buf + pos, buf_size - pos, "%s: %s\n",
+                               f->name, f->value->data.boolean_val ? "true" : "false");
+                break;
+            default:
+                pos += snprintf(buf + pos, buf_size - pos, "%s: null\n", f->name);
+                break;
+        }
+    }
+
+    return buf;
+}
+
+char *facter_to_text(facter_ctx_t *ctx) {
+    if (!ctx) return NULL;
+
+    size_t buf_size = 16384;
+    char *buf = malloc(buf_size);
+    if (!buf) return NULL;
+
+    size_t pos = 0;
+
+    for (size_t i = 0; i < ctx->fact_count; i++) {
+        fact_entry_t *f = &ctx->facts[i];
+
+        switch (f->value->type) {
+            case FACTER_VALUE_STRING:
+                pos += snprintf(buf + pos, buf_size - pos, "%s => %s\n",
+                               f->name, f->value->data.string_val);
+                break;
+            case FACTER_VALUE_INTEGER:
+                pos += snprintf(buf + pos, buf_size - pos, "%s => %ld\n",
+                               f->name, f->value->data.integer_val);
+                break;
+            case FACTER_VALUE_FLOAT:
+                pos += snprintf(buf + pos, buf_size - pos, "%s => %g\n",
+                               f->name, f->value->data.float_val);
+                break;
+            case FACTER_VALUE_BOOLEAN:
+                pos += snprintf(buf + pos, buf_size - pos, "%s => %s\n",
+                               f->name, f->value->data.boolean_val ? "true" : "false");
+                break;
+            default:
+                pos += snprintf(buf + pos, buf_size - pos, "%s => \n", f->name);
+                break;
+        }
+    }
+
+    return buf;
+}
+
+/* ============================================================================
+ * Library Info
+ * ============================================================================ */
+
+const char *facter_version(void) {
+    return FACTER_VERSION;
+}

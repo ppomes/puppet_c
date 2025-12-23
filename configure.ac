@@ -150,6 +150,7 @@ fi
 AC_CONFIG_FILES([
     Makefile
     src/Makefile
+    facter/Makefile
     server/Makefile
     tests/Makefile
 ])
