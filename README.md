@@ -10,6 +10,7 @@ Prerequisites:
 - GCC, flex, bison
 - Ruby development headers (for ERB templates)
 - libyaml (for Hiera)
+- libmicrohttpd (for puppetc-server)
 
 ```bash
 autoreconf -i
@@ -35,6 +36,18 @@ make check
 ```
 
 Run `./src/puppetc --help` for all options.
+
+### Catalog Server
+
+```bash
+# Start server
+./server/puppetc-server -p 8140 /etc/puppet/manifests
+
+# Compile catalog via API
+curl -X POST http://localhost:8140/puppet/v4/catalog \
+     -H 'Content-Type: application/json' \
+     -d '{"certname": "node1.example.com"}'
+```
 
 ## What Works
 
@@ -109,7 +122,7 @@ Run `./src/puppetc --help` for all options.
 
 - [x] **Phase 1**: Extract `libpuppetc.so` shared library from current code
 - [x] **Phase 2**: Define catalog JSON format, add catalog serialization
-- [ ] **Phase 3**: `puppetc-server` - HTTP API for catalog compilation
+- [x] **Phase 3**: `puppetc-server` - HTTP API for catalog compilation
 - [ ] **Phase 4**: `libfacter_c` - Native fact collection library
 - [ ] **Phase 5**: `puppetc-agent` - Client that collects facts, requests catalog
 - [ ] **Phase 6**: Resource application (file, package, service...)
