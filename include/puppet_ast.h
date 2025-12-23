@@ -174,6 +174,7 @@ typedef enum {
     PUPPET_EXPR_INDEX,              /**< Array/hash indexing (obj[key]) */
     PUPPET_EXPR_DOT,                /**< Method call (obj.method) */
     PUPPET_EXPR_CONDITIONAL,        /**< Ternary conditional (a ? b : c) */
+    PUPPET_EXPR_SELECTOR,           /**< Selector expression ($x ? { ... }) */
     PUPPET_EXPR_LAMBDA,             /**< Lambda/closure definition */
     PUPPET_EXPR_RESOURCE_REF,       /**< Resource reference (File['name']) */
     PUPPET_EXPR_INTERPOLATED_STRING /**< String with embedded expressions */
@@ -282,6 +283,15 @@ struct puppet_expr {
             puppet_expr_t *then_expr;
             puppet_expr_t *else_expr;
         } conditional;
+        struct {
+            puppet_expr_t *control;           /**< Expression to match against */
+            struct {
+                puppet_expr_t *match;         /**< Match expression (NULL for default) */
+                puppet_expr_t *value;         /**< Result value */
+            } *cases;
+            size_t case_count;
+            puppet_expr_t *default_value;     /**< Default case value (optional) */
+        } selector;
         puppet_lambda_t *lambda;
         struct {
             puppet_string_t type;

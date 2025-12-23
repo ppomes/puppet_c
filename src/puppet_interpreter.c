@@ -559,6 +559,51 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             }
         }
 
+        case PUPPET_EXPR_SELECTOR: {
+            // Selector expression: control ? { match1 => val1, match2 => val2, default => valN }
+            puppet_value_t *control = puppet_eval_expr(expr->data.selector.control, env);
+            puppet_value_t *result = NULL;
+
+            // Check each case for a match
+            for (size_t i = 0; i < expr->data.selector.case_count && !result; i++) {
+                puppet_value_t *match = puppet_eval_expr(expr->data.selector.cases[i].match, env);
+
+                // Compare control value with match value
+                bool is_match = false;
+                if (control && match) {
+                    if (control->type == match->type) {
+                        switch (control->type) {
+                            case PUPPET_VALUE_STRING:
+                                is_match = (strcmp(control->data.string.data,
+                                                  match->data.string.data) == 0);
+                                break;
+                            case PUPPET_VALUE_NUMBER:
+                                is_match = (control->data.number == match->data.number);
+                                break;
+                            case PUPPET_VALUE_BOOL:
+                                is_match = (control->data.boolean == match->data.boolean);
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+                }
+                puppet_value_destroy(match);
+
+                if (is_match) {
+                    result = puppet_eval_expr(expr->data.selector.cases[i].value, env);
+                }
+            }
+
+            // If no match found, try default case
+            if (!result && expr->data.selector.default_value) {
+                result = puppet_eval_expr(expr->data.selector.default_value, env);
+            }
+
+            puppet_value_destroy(control);
+            return result ? result : puppet_value_create_undef();
+        }
+
         default:
             puppet_warn("Unimplemented expression type: %d", expr->type);
             return puppet_value_create_undef();

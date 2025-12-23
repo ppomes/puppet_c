@@ -42,20 +42,20 @@ class apache($port = 80) {
 
 # Environment-based class instantiation
 if $environment == "production" {
-  class { 'apache':
+  class { "apache":
     port => 443,
   }
-  
+
   # Production-specific settings
   $ssl_enabled = true
   $debug_mode = false
   $log_level = "warn"
 } else {
-  class { 'apache':
+  class { "apache":
     port => 8080,
   }
-  
-  # Development settings  
+
+  # Development settings
   $ssl_enabled = false
   $debug_mode = true
   $log_level = "debug"

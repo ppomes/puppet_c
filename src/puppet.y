@@ -127,6 +127,10 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 
 %}
 
+%glr-parser
+%expect 63
+%expect-rr 6
+
 %union {
     char *string;
     double number;
@@ -153,6 +157,18 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
     puppet_unop_t unop;
     puppet_hash_pair_t *hash_pair;
     puppet_hash_pair_list_t *hash_pair_list;
+    struct {
+        puppet_expr_t *match;
+        puppet_expr_t *value;
+    } selector_case;
+    struct {
+        struct {
+            puppet_expr_t *match;
+            puppet_expr_t *value;
+        } *cases;
+        size_t count;
+        puppet_expr_t *default_value;
+    } selector_cases;
 }
 
 %token <string> NAME CLASSREF TYPE_NAME VARIABLE
@@ -173,6 +189,7 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 %token DQSTRING_INTERP_START
 
 %nonassoc TERNARY
+%nonassoc CLASS_INSTANTIATION
 %right '?' ':'
 %left OR
 %left AND
@@ -187,7 +204,9 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 
 %type <expr> expression primary_expression
 %type <expr> unary_expression binary_expression conditional_expression
-%type <expr> selector_expression lambda_expression
+%type <expr> selector_expression lambda_expression selector_match
+%type <selector_case> selector_case
+%type <selector_cases> selector_cases
 %type <expr> funcall_expression index_expression dot_expression
 %type <expr> variable_expression literal_expression
 %type <expr> resource_reference type_expression
@@ -316,7 +335,7 @@ resource_declaration:
 resource_type:
     qualified_name { $$ = $1; }
     | CLASSREF { $$ = $1; }
-    | CLASS { $$ = puppet_strdup("class"); }
+    | CLASS %dprec 1 { $$ = puppet_strdup("class"); }
     | NOTIFY_KEYWORD { $$ = puppet_strdup("notify"); }
     ;
 
@@ -470,7 +489,7 @@ class_definition:
     ;
 
 class_instantiation:
-    CLASS '{' STRING_LITERAL ':' attribute_list_opt '}' {
+    CLASS '{' STRING_LITERAL ':' attribute_list_opt '}' %prec CLASS_INSTANTIATION %dprec 2 {
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
         $$->type = PUPPET_STMT_CLASS_INSTANCE;
         $$->data.class_instance.class_name = puppet_string_create($3);
@@ -908,7 +927,7 @@ hash_pairs:
     ;
 
 hash_pair:
-    expression FARROW expression {
+    expression FARROW expression %dprec 1 {
         $$ = puppet_calloc(1, sizeof(puppet_hash_pair_t));
         $$->key = $1;
         $$->value = $3;
@@ -1043,19 +1062,88 @@ conditional_expression:
 
 selector_expression:
     expression '?' '{' selector_cases '}' {
-        /* TODO: Implement selector */
-        $$ = $1;
+        $$ = puppet_calloc(1, sizeof(puppet_expr_t));
+        $$->type = PUPPET_EXPR_SELECTOR;
+        $$->data.selector.control = $1;
+        $$->data.selector.cases = $4.cases;
+        $$->data.selector.case_count = $4.count;
+        $$->data.selector.default_value = $4.default_value;
     }
     ;
 
 selector_cases:
-    selector_case
-    | selector_cases ',' selector_case
+    selector_case {
+        if ($1.match == NULL) {
+            /* This is a default case */
+            $$.cases = NULL;
+            $$.count = 0;
+            $$.default_value = $1.value;
+        } else {
+            $$.cases = puppet_calloc(1, sizeof(*$$.cases));
+            $$.cases[0].match = $1.match;
+            $$.cases[0].value = $1.value;
+            $$.count = 1;
+            $$.default_value = NULL;
+        }
+    }
+    | selector_cases ',' selector_case {
+        if ($3.match == NULL) {
+            /* This is a default case */
+            $$ = $1;
+            $$.default_value = $3.value;
+        } else {
+            $$.cases = puppet_realloc($1.cases, ($1.count + 1) * sizeof(*$$.cases));
+            $$.cases[$1.count].match = $3.match;
+            $$.cases[$1.count].value = $3.value;
+            $$.count = $1.count + 1;
+            $$.default_value = $1.default_value;
+        }
+    }
+    ;
+
+/* Selector match uses restricted syntax to avoid conflict with hash_pair.
+   Note: VARIABLE is excluded because it creates a reduce/reduce conflict
+   with hash_pair (both can match VARIABLE FARROW expression). */
+selector_match:
+    STRING_LITERAL {
+        puppet_value_t *val = puppet_value_create_string($1, strlen($1));
+        $$ = puppet_expr_create_value(val);
+        puppet_free($1);
+    }
+    | DQSTRING_LITERAL {
+        $$ = puppet_create_interpolated_expr($1);
+        puppet_free($1);
+    }
+    | NUMBER {
+        puppet_value_t *val = puppet_value_create_number($1);
+        $$ = puppet_expr_create_value(val);
+    }
+    | BOOLEAN {
+        puppet_value_t *val = puppet_value_create_bool($1);
+        $$ = puppet_expr_create_value(val);
+    }
+    | UNDEF {
+        puppet_value_t *val = puppet_value_create_undef();
+        $$ = puppet_expr_create_value(val);
+    }
+    | REGEX {
+        puppet_value_t *val = puppet_calloc(1, sizeof(puppet_value_t));
+        val->type = PUPPET_VALUE_REGEXP;
+        val->data.regexp = puppet_string_create($1);
+        puppet_free($1);
+        $$ = puppet_expr_create_value(val);
+    }
     ;
 
 selector_case:
-    expression FARROW expression
-    | DEFAULT FARROW expression
+    selector_match FARROW expression %dprec 2 {
+        $$.match = $1;
+        $$.value = $3;
+    }
+    | DEFAULT FARROW expression %dprec 2 {
+        $$.match = NULL;  /* NULL indicates default case */
+        $$.value = $3;
+    }
     ;
 
 lambda_expression:
