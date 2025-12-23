@@ -15,6 +15,10 @@ libfacter_c_la_LDFLAGS = -version-info 0:0:0
 # Library dependencies
 libfacter_c_la_LIBADD = $(top_builddir)/common/libpuppetc_common.la
 
+# Header files to install
+puppetcincludedir = $(includedir)/puppetc
+puppetcinclude_HEADERS = $(top_srcdir)/include/facter.h
+
 # Also build a standalone facter command
 bin_PROGRAMS = facter_c
 

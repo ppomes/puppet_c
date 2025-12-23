@@ -1,2 +1,2 @@
 usr/lib/*/libfacter_c.so
-usr/include/facter.h
+usr/include/puppetc/facter.h

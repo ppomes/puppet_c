@@ -1,2 +1,2 @@
 usr/lib/*/libpuppetc.so
-usr/include/puppet_*.h
+usr/include/puppetc/puppet_*.h

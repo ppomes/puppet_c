@@ -4,7 +4,7 @@
 #   docker build --target agent -t puppetc-agent .
 
 # =============================================================================
-# Build stage
+# Build stage - creates .deb packages
 # =============================================================================
 FROM debian:bookworm AS builder
 
@@ -15,20 +15,26 @@ RUN apt-get update && apt-get install -y \
     libtool \
     flex \
     bison \
+    gawk \
     pkg-config \
     libyaml-dev \
     libssl-dev \
     libmicrohttpd-dev \
     libcurl4-openssl-dev \
     ruby-dev \
+    debhelper \
+    devscripts \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 COPY . .
 
+# Build Debian packages
 RUN autoreconf -i && \
-    ./configure --prefix=/usr && \
-    make -j$(nproc)
+    dpkg-buildpackage -us -uc -b
+
+# Move packages to a known location
+RUN mkdir -p /packages && mv /puppet-c*.deb /lib*.deb /packages/ 2>/dev/null || mv ../*.deb /packages/
 
 # =============================================================================
 # Server image
@@ -43,20 +49,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy binaries and libraries
-COPY --from=builder /build/server/.libs/puppetc-server /usr/bin/
-COPY --from=builder /build/src/.libs/libpuppetc.so.0.0.0 /usr/lib/
-COPY --from=builder /build/facter/.libs/libfacter_c.so.0.0.0 /usr/lib/
-COPY --from=builder /build/common/.libs/libpuppetc_common.so.0.0.0 /usr/lib/
+# Copy and install packages
+COPY --from=builder /packages/libpuppetc-common0_*.deb /tmp/
+COPY --from=builder /packages/libpuppetc0_*.deb /tmp/
+COPY --from=builder /packages/puppetc-server_*.deb /tmp/
 
-# Create symlinks
-RUN ln -s libpuppetc.so.0.0.0 /usr/lib/libpuppetc.so.0 && \
-    ln -s libpuppetc.so.0 /usr/lib/libpuppetc.so && \
-    ln -s libfacter_c.so.0.0.0 /usr/lib/libfacter_c.so.0 && \
-    ln -s libfacter_c.so.0 /usr/lib/libfacter_c.so && \
-    ln -s libpuppetc_common.so.0.0.0 /usr/lib/libpuppetc_common.so.0 && \
-    ln -s libpuppetc_common.so.0 /usr/lib/libpuppetc_common.so && \
-    ldconfig
+RUN dpkg -i /tmp/libpuppetc-common0_*.deb \
+            /tmp/libpuppetc0_*.deb \
+            /tmp/puppetc-server_*.deb && \
+    rm -rf /tmp/*.deb
 
 # Create puppet directories
 RUN mkdir -p /etc/puppet/manifests /etc/puppet/modules /etc/puppet/hiera
@@ -76,17 +77,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy binaries and libraries
-COPY --from=builder /build/agent/.libs/puppetc-agent /usr/bin/
-COPY --from=builder /build/facter/.libs/libfacter_c.so.0.0.0 /usr/lib/
-COPY --from=builder /build/common/.libs/libpuppetc_common.so.0.0.0 /usr/lib/
+# Copy and install packages
+COPY --from=builder /packages/libpuppetc-common0_*.deb /tmp/
+COPY --from=builder /packages/libfacter-c0_*.deb /tmp/
+COPY --from=builder /packages/puppetc-agent_*.deb /tmp/
 
-# Create symlinks
-RUN ln -s libfacter_c.so.0.0.0 /usr/lib/libfacter_c.so.0 && \
-    ln -s libfacter_c.so.0 /usr/lib/libfacter_c.so && \
-    ln -s libpuppetc_common.so.0.0.0 /usr/lib/libpuppetc_common.so.0 && \
-    ln -s libpuppetc_common.so.0 /usr/lib/libpuppetc_common.so && \
-    ldconfig
+RUN dpkg -i /tmp/libpuppetc-common0_*.deb \
+            /tmp/libfacter-c0_*.deb \
+            /tmp/puppetc-agent_*.deb && \
+    rm -rf /tmp/*.deb
 
 ENTRYPOINT ["puppetc-agent"]
 # Default: noop mode. Use -a to apply.

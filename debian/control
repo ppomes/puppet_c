@@ -17,10 +17,27 @@ Build-Depends: debhelper-compat (= 13),
 Standards-Version: 4.6.0
 Homepage: https://github.com/ppomes/puppet_c
 
-Package: libpuppetc0
+Package: libpuppetc-common0
 Section: libs
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Puppet common library (memory management)
+ Shared library with common utilities including memory
+ management and tracking functions.
+
+Package: libpuppetc-common-dev
+Section: libdevel
+Architecture: any
+Depends: libpuppetc-common0 (= ${binary:Version}), ${misc:Depends}
+Description: Puppet common library - development files
+ Development headers for libpuppetc_common.
+
+Package: libpuppetc0
+Section: libs
+Architecture: any
+Depends: libpuppetc-common0 (= ${binary:Version}),
+         ${shlibs:Depends},
+         ${misc:Depends}
 Description: Puppet language parser and interpreter library
  libpuppetc is a C implementation of the Puppet language parser
  and interpreter. It provides parsing, AST generation, and
@@ -36,7 +53,9 @@ Description: Puppet language library - development files
 Package: libfacter-c0
 Section: libs
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
+Depends: libpuppetc-common0 (= ${binary:Version}),
+         ${shlibs:Depends},
+         ${misc:Depends}
 Description: Native fact collection library
  libfacter_c collects system facts (hostname, OS, network, etc.)
  for use with Puppet manifests.
