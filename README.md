@@ -11,6 +11,7 @@ Prerequisites:
 - Ruby development headers (for ERB templates)
 - libyaml (for Hiera)
 - libmicrohttpd (for puppetc-server)
+- libcurl (for puppetc-agent)
 
 ```bash
 autoreconf -i
@@ -60,6 +61,22 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 
 # JSON output
 ./facter/facter_c -j
+```
+
+### Puppet Agent
+
+```bash
+# Run agent (connects to localhost:8140)
+./agent/puppetc-agent
+
+# Specify server
+./agent/puppetc-agent -s http://puppet:8140
+
+# Just show collected facts
+./agent/puppetc-agent -f
+
+# No-op mode (simulation)
+./agent/puppetc-agent -n
 ```
 
 ## What Works
@@ -137,5 +154,5 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 - [x] **Phase 2**: Define catalog JSON format, add catalog serialization
 - [x] **Phase 3**: `puppetc-server` - HTTP API for catalog compilation
 - [x] **Phase 4**: `libfacter_c` - Native fact collection library
-- [ ] **Phase 5**: `puppetc-agent` - Client that collects facts, requests catalog
+- [x] **Phase 5**: `puppetc-agent` - Client that collects facts, requests catalog
 - [ ] **Phase 6**: Resource application (file, package, service...)
