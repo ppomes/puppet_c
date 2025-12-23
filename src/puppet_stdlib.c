@@ -1849,6 +1849,50 @@ puppet_value_t *puppet_func_range(puppet_expr_list_t *args, puppet_env_t *env) {
 }
 
 /**
+ * @brief Puppet merge() function - merge hashes
+ *
+ * Usage: merge(hash1, hash2, ...)
+ * Returns a new hash containing all key-value pairs from all input hashes.
+ * Later hashes override earlier ones for duplicate keys.
+ *
+ * Examples:
+ *   merge({a => 1}, {b => 2})       => {a => 1, b => 2}
+ *   merge({a => 1}, {a => 2})       => {a => 2}
+ */
+puppet_value_t *puppet_func_merge(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "merge() requires at least 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *result = puppet_value_create_hash();
+
+    for (size_t i = 0; i < args->count; i++) {
+        puppet_value_t *hash_val = puppet_eval_expr(args->exprs[i], env);
+
+        if (!hash_val || hash_val->type != PUPPET_VALUE_HASH) {
+            puppet_log(PUPPET_LOG_ERROR, "merge() arguments must be hashes");
+            if (hash_val) puppet_value_destroy(hash_val);
+            continue;
+        }
+
+        /* Copy all entries from this hash to result */
+        for (size_t j = 0; j < hash_val->data.hash->bucket_count; j++) {
+            puppet_hash_entry_t *entry = hash_val->data.hash->buckets[j];
+            while (entry) {
+                puppet_hash_set(result->data.hash, entry->key.data, entry->key.len,
+                               puppet_value_copy(entry->value));
+                entry = entry->next;
+            }
+        }
+
+        puppet_value_destroy(hash_val);
+    }
+
+    return result;
+}
+
+/**
  * @brief Puppet abs() function - get absolute value of a number
  *
  * Usage: abs(number)
