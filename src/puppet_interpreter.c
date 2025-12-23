@@ -393,6 +393,22 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "flatten") == 0) {
                 return puppet_func_flatten(&expr->data.funcall.args, env);
             }
+            // Array functions
+            else if (strcmp(func_name, "concat") == 0) {
+                return puppet_func_concat(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "delete") == 0) {
+                return puppet_func_delete(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "delete_at") == 0) {
+                return puppet_func_delete_at(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "first") == 0) {
+                return puppet_func_first(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "last") == 0) {
+                return puppet_func_last(&expr->data.funcall.args, env);
+            }
             else if (strcmp(func_name, "abs") == 0) {
                 return puppet_func_abs(&expr->data.funcall.args, env);
             }

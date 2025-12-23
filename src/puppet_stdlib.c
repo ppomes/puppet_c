@@ -1495,6 +1495,258 @@ puppet_value_t *puppet_func_flatten(puppet_expr_list_t *args, puppet_env_t *env)
 }
 
 /**
+ * @brief Puppet concat() function - concatenate arrays
+ *
+ * Usage: concat(array1, array2, ...)
+ * Returns a new array with all elements from all input arrays
+ *
+ * Examples:
+ *   concat([1, 2], [3, 4])        => [1, 2, 3, 4]
+ *   concat([1], [2], [3])         => [1, 2, 3]
+ */
+puppet_value_t *puppet_func_concat(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "concat() requires at least 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *result = puppet_value_create_array();
+
+    for (size_t i = 0; i < args->count; i++) {
+        puppet_value_t *val = puppet_eval_expr(args->exprs[i], env);
+        if (val && val->type == PUPPET_VALUE_ARRAY) {
+            for (size_t j = 0; j < val->data.array->count; j++) {
+                puppet_array_append(result->data.array,
+                    puppet_value_copy(val->data.array->items[j]));
+            }
+        } else if (val) {
+            /* Non-array values are added as single elements */
+            puppet_array_append(result->data.array, puppet_value_copy(val));
+        }
+        if (val) puppet_value_destroy(val);
+    }
+
+    return result;
+}
+
+/**
+ * @brief Puppet delete() function - delete elements from array or hash
+ *
+ * Usage: delete(array, value) or delete(hash, key)
+ * Returns a new array/hash with the specified element(s) removed
+ *
+ * Examples:
+ *   delete(['a', 'b', 'c'], 'b')   => ['a', 'c']
+ *   delete({a => 1, b => 2}, 'a') => {b => 2}
+ */
+puppet_value_t *puppet_func_delete(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log(PUPPET_LOG_ERROR, "delete() requires 2 arguments: collection, value");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *coll = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *target = puppet_eval_expr(args->exprs[1], env);
+
+    if (!coll) {
+        if (target) puppet_value_destroy(target);
+        return puppet_value_create_undef();
+    }
+
+    if (coll->type == PUPPET_VALUE_ARRAY) {
+        puppet_value_t *result = puppet_value_create_array();
+
+        for (size_t i = 0; i < coll->data.array->count; i++) {
+            puppet_value_t *item = coll->data.array->items[i];
+            bool should_delete = false;
+
+            /* Compare values */
+            if (target && item->type == target->type) {
+                if (item->type == PUPPET_VALUE_STRING) {
+                    if (item->data.string.len == target->data.string.len &&
+                        memcmp(item->data.string.data, target->data.string.data,
+                               item->data.string.len) == 0) {
+                        should_delete = true;
+                    }
+                } else if (item->type == PUPPET_VALUE_NUMBER) {
+                    if (item->data.number == target->data.number) {
+                        should_delete = true;
+                    }
+                }
+            }
+
+            if (!should_delete) {
+                puppet_array_append(result->data.array, puppet_value_copy(item));
+            }
+        }
+
+        puppet_value_destroy(coll);
+        puppet_value_destroy(target);
+        return result;
+    } else if (coll->type == PUPPET_VALUE_HASH) {
+        puppet_value_t *result = puppet_value_create_hash();
+
+        /* Get key to delete */
+        const char *del_key = NULL;
+        size_t del_key_len = 0;
+        if (target && target->type == PUPPET_VALUE_STRING) {
+            del_key = target->data.string.data;
+            del_key_len = target->data.string.len;
+        }
+
+        /* Copy all entries except the one to delete */
+        for (size_t i = 0; i < coll->data.hash->bucket_count; i++) {
+            puppet_hash_entry_t *entry = coll->data.hash->buckets[i];
+            while (entry) {
+                bool should_delete = false;
+                if (del_key && entry->key.len == del_key_len &&
+                    memcmp(entry->key.data, del_key, del_key_len) == 0) {
+                    should_delete = true;
+                }
+                if (!should_delete) {
+                    puppet_hash_set(result->data.hash, entry->key.data, entry->key.len,
+                                   puppet_value_copy(entry->value));
+                }
+                entry = entry->next;
+            }
+        }
+
+        puppet_value_destroy(coll);
+        puppet_value_destroy(target);
+        return result;
+    }
+
+    puppet_log(PUPPET_LOG_ERROR, "delete() first argument must be an array or hash");
+    puppet_value_destroy(coll);
+    if (target) puppet_value_destroy(target);
+    return puppet_value_create_undef();
+}
+
+/**
+ * @brief Puppet delete_at() function - delete element at index
+ *
+ * Usage: delete_at(array, index)
+ * Returns a new array with the element at the specified index removed
+ *
+ * Examples:
+ *   delete_at(['a', 'b', 'c'], 1)   => ['a', 'c']
+ *   delete_at(['a', 'b', 'c'], 0)   => ['b', 'c']
+ *   delete_at(['a', 'b', 'c'], -1)  => ['a', 'b']
+ */
+puppet_value_t *puppet_func_delete_at(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log(PUPPET_LOG_ERROR, "delete_at() requires 2 arguments: array, index");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *arr = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *idx_val = puppet_eval_expr(args->exprs[1], env);
+
+    if (!arr || arr->type != PUPPET_VALUE_ARRAY) {
+        puppet_log(PUPPET_LOG_ERROR, "delete_at() first argument must be an array");
+        if (arr) puppet_value_destroy(arr);
+        if (idx_val) puppet_value_destroy(idx_val);
+        return puppet_value_create_undef();
+    }
+
+    if (!idx_val || idx_val->type != PUPPET_VALUE_NUMBER) {
+        puppet_log(PUPPET_LOG_ERROR, "delete_at() second argument must be a number");
+        puppet_value_destroy(arr);
+        if (idx_val) puppet_value_destroy(idx_val);
+        return puppet_value_create_undef();
+    }
+
+    int idx = (int)idx_val->data.number;
+    size_t count = arr->data.array->count;
+
+    /* Handle negative index */
+    if (idx < 0) {
+        idx = (int)count + idx;
+    }
+
+    puppet_value_t *result = puppet_value_create_array();
+
+    for (size_t i = 0; i < count; i++) {
+        if ((int)i != idx) {
+            puppet_array_append(result->data.array,
+                puppet_value_copy(arr->data.array->items[i]));
+        }
+    }
+
+    puppet_value_destroy(arr);
+    puppet_value_destroy(idx_val);
+    return result;
+}
+
+/**
+ * @brief Puppet first() function - get first element of array
+ *
+ * Usage: first(array)
+ * Returns the first element of the array, or undef if empty
+ *
+ * Examples:
+ *   first(['a', 'b', 'c'])   => 'a'
+ *   first([])                => undef
+ */
+puppet_value_t *puppet_func_first(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "first() requires 1 argument: array");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *arr = puppet_eval_expr(args->exprs[0], env);
+
+    if (!arr || arr->type != PUPPET_VALUE_ARRAY) {
+        puppet_log(PUPPET_LOG_ERROR, "first() argument must be an array");
+        if (arr) puppet_value_destroy(arr);
+        return puppet_value_create_undef();
+    }
+
+    if (arr->data.array->count == 0) {
+        puppet_value_destroy(arr);
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *result = puppet_value_copy(arr->data.array->items[0]);
+    puppet_value_destroy(arr);
+    return result;
+}
+
+/**
+ * @brief Puppet last() function - get last element of array
+ *
+ * Usage: last(array)
+ * Returns the last element of the array, or undef if empty
+ *
+ * Examples:
+ *   last(['a', 'b', 'c'])   => 'c'
+ *   last([])                => undef
+ */
+puppet_value_t *puppet_func_last(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "last() requires 1 argument: array");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *arr = puppet_eval_expr(args->exprs[0], env);
+
+    if (!arr || arr->type != PUPPET_VALUE_ARRAY) {
+        puppet_log(PUPPET_LOG_ERROR, "last() argument must be an array");
+        if (arr) puppet_value_destroy(arr);
+        return puppet_value_create_undef();
+    }
+
+    if (arr->data.array->count == 0) {
+        puppet_value_destroy(arr);
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *result = puppet_value_copy(arr->data.array->items[arr->data.array->count - 1]);
+    puppet_value_destroy(arr);
+    return result;
+}
+
+/**
  * @brief Puppet abs() function - get absolute value of a number
  *
  * Usage: abs(number)

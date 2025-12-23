@@ -45,6 +45,13 @@ puppet_value_t *puppet_func_unique(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_sort(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_flatten(puppet_expr_list_t *args, puppet_env_t *env);
 
+// Array functions
+puppet_value_t *puppet_func_concat(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_delete(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_delete_at(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_first(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_last(puppet_expr_list_t *args, puppet_env_t *env);
+
 // Math functions
 puppet_value_t *puppet_func_abs(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_min(puppet_expr_list_t *args, puppet_env_t *env);
