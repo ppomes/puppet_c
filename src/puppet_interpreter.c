@@ -441,6 +441,18 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "max") == 0) {
                 return puppet_func_max(&expr->data.funcall.args, env);
             }
+            else if (strcmp(func_name, "floor") == 0) {
+                return puppet_func_floor(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "ceil") == 0 || strcmp(func_name, "ceiling") == 0) {
+                return puppet_func_ceil(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "round") == 0) {
+                return puppet_func_round(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "sqrt") == 0) {
+                return puppet_func_sqrt(&expr->data.funcall.args, env);
+            }
             else {
                 puppet_error("Unknown function: %s", func_name);
                 return puppet_value_create_undef();

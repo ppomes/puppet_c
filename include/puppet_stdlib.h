@@ -67,6 +67,10 @@ puppet_value_t *puppet_func_is_bool(puppet_expr_list_t *args, puppet_env_t *env)
 puppet_value_t *puppet_func_abs(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_min(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_max(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_floor(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_ceil(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_round(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_sqrt(puppet_expr_list_t *args, puppet_env_t *env);
 
 // Utility function to convert values to strings for logging
 char *puppet_value_to_display_string(puppet_value_t *value);

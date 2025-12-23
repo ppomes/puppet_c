@@ -13,6 +13,7 @@
 #include <string.h>
 #include <time.h>
 #include <ctype.h>
+#include <math.h>
 
 // Logging levels
 typedef enum {
@@ -2129,4 +2130,98 @@ puppet_value_t *puppet_func_max(puppet_expr_list_t *args, puppet_env_t *env) {
     }
 
     return puppet_value_create_number(max_val);
+}
+
+/**
+ * @brief Puppet floor() function - round down to nearest integer
+ */
+puppet_value_t *puppet_func_floor(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "floor() requires 1 argument: number");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *num_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!num_val || num_val->type != PUPPET_VALUE_NUMBER) {
+        puppet_log(PUPPET_LOG_ERROR, "floor() argument must be a number");
+        if (num_val) puppet_value_destroy(num_val);
+        return puppet_value_create_undef();
+    }
+
+    double result = floor(num_val->data.number);
+    puppet_value_destroy(num_val);
+    return puppet_value_create_number(result);
+}
+
+/**
+ * @brief Puppet ceil() function - round up to nearest integer
+ */
+puppet_value_t *puppet_func_ceil(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "ceil() requires 1 argument: number");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *num_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!num_val || num_val->type != PUPPET_VALUE_NUMBER) {
+        puppet_log(PUPPET_LOG_ERROR, "ceil() argument must be a number");
+        if (num_val) puppet_value_destroy(num_val);
+        return puppet_value_create_undef();
+    }
+
+    double result = ceil(num_val->data.number);
+    puppet_value_destroy(num_val);
+    return puppet_value_create_number(result);
+}
+
+/**
+ * @brief Puppet round() function - round to nearest integer
+ */
+puppet_value_t *puppet_func_round(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "round() requires 1 argument: number");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *num_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!num_val || num_val->type != PUPPET_VALUE_NUMBER) {
+        puppet_log(PUPPET_LOG_ERROR, "round() argument must be a number");
+        if (num_val) puppet_value_destroy(num_val);
+        return puppet_value_create_undef();
+    }
+
+    double result = round(num_val->data.number);
+    puppet_value_destroy(num_val);
+    return puppet_value_create_number(result);
+}
+
+/**
+ * @brief Puppet sqrt() function - square root
+ */
+puppet_value_t *puppet_func_sqrt(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "sqrt() requires 1 argument: number");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *num_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!num_val || num_val->type != PUPPET_VALUE_NUMBER) {
+        puppet_log(PUPPET_LOG_ERROR, "sqrt() argument must be a number");
+        if (num_val) puppet_value_destroy(num_val);
+        return puppet_value_create_undef();
+    }
+
+    if (num_val->data.number < 0) {
+        puppet_log(PUPPET_LOG_ERROR, "sqrt() argument must be non-negative");
+        puppet_value_destroy(num_val);
+        return puppet_value_create_undef();
+    }
+
+    double result = sqrt(num_val->data.number);
+    puppet_value_destroy(num_val);
+    return puppet_value_create_number(result);
 }
