@@ -109,6 +109,15 @@ PKG_CHECK_MODULES([YAML], [yaml-0.1], [
     AC_MSG_ERROR([libyaml not found. Install libyaml-dev package.])
 ])
 
+# Check for OpenSSL (required for crypto functions)
+PKG_CHECK_MODULES([OPENSSL], [openssl], [
+    AC_DEFINE([HAVE_OPENSSL], [1], [Define if OpenSSL is available])
+    AC_SUBST([OPENSSL_CFLAGS])
+    AC_SUBST([OPENSSL_LIBS])
+], [
+    AC_MSG_ERROR([OpenSSL not found. Install libssl-dev package.])
+])
+
 # Check for standard library functions
 AC_CHECK_FUNCS([malloc realloc free strdup strlen strcpy snprintf])
 AC_CHECK_HEADERS([stdio.h stdlib.h string.h])

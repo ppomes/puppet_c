@@ -470,6 +470,16 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "match") == 0) {
                 return puppet_func_match(&expr->data.funcall.args, env);
             }
+            // Crypto functions
+            else if (strcmp(func_name, "sha1") == 0) {
+                return puppet_func_sha1(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "md5") == 0) {
+                return puppet_func_md5(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "base64") == 0) {
+                return puppet_func_base64(&expr->data.funcall.args, env);
+            }
             else {
                 puppet_error("Unknown function: %s", func_name);
                 return puppet_value_create_undef();

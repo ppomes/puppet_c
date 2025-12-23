@@ -33,14 +33,17 @@ AM_CFLAGS = -Wall -Wextra -g
 # Conditional Ruby flags
 if HAVE_RUBY
 AM_CFLAGS += $(RUBY_CFLAGS) -DHAVE_RUBY
-puppetc_LDADD = $(RUBY_LIBS) -lm -lpthread $(YAML_LIBS)
+puppetc_LDADD = $(RUBY_LIBS) -lm -lpthread $(YAML_LIBS) $(OPENSSL_LIBS)
 else
 AM_CFLAGS += -DDISABLE_RUBY
-puppetc_LDADD = -lpthread $(YAML_LIBS)
+puppetc_LDADD = -lpthread $(YAML_LIBS) $(OPENSSL_LIBS)
 endif
 
 # YAML/Hiera is always included
 AM_CFLAGS += $(YAML_CFLAGS)
+
+# OpenSSL is always included
+AM_CFLAGS += $(OPENSSL_CFLAGS)
 
 # Header files to install
 include_HEADERS = \

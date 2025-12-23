@@ -15,6 +15,11 @@
 #include <ctype.h>
 #include <math.h>
 #include <regex.h>
+#include <openssl/sha.h>
+#include <openssl/md5.h>
+#include <openssl/evp.h>
+#include <openssl/bio.h>
+#include <openssl/buffer.h>
 
 // Logging levels
 typedef enum {
@@ -2637,6 +2642,168 @@ puppet_value_t *puppet_func_match(puppet_expr_list_t *args, puppet_env_t *env) {
 
     puppet_value_destroy(str_val);
     puppet_value_destroy(pattern_val);
+
+    return result;
+}
+
+/*
+ * =============================================================================
+ * Crypto Functions
+ * =============================================================================
+ */
+
+/**
+ * @brief Puppet sha1() function - compute SHA1 hash
+ *
+ * Usage: sha1(string)
+ * Returns hex-encoded SHA1 hash of the input string
+ *
+ * Examples:
+ *   sha1('hello')     => '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c'
+ *   sha1('password')  => '5baa61e4c9b93f3f0682250b6cf8331b7ee68fd8'
+ */
+puppet_value_t *puppet_func_sha1(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "sha1() requires 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
+    if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "sha1() argument must be a string");
+        if (str_val) puppet_value_destroy(str_val);
+        return puppet_value_create_undef();
+    }
+
+    unsigned char hash[SHA_DIGEST_LENGTH];
+    SHA1((const unsigned char *)str_val->data.string.data,
+         str_val->data.string.len, hash);
+
+    /* Convert to hex string */
+    char hex_str[SHA_DIGEST_LENGTH * 2 + 1];
+    for (int i = 0; i < SHA_DIGEST_LENGTH; i++) {
+        snprintf(hex_str + i * 2, 3, "%02x", hash[i]);
+    }
+
+    puppet_value_destroy(str_val);
+    return puppet_value_create_string(hex_str, SHA_DIGEST_LENGTH * 2);
+}
+
+/**
+ * @brief Puppet md5() function - compute MD5 hash
+ *
+ * Usage: md5(string)
+ * Returns hex-encoded MD5 hash of the input string
+ *
+ * Examples:
+ *   md5('hello')     => '5d41402abc4b2a76b9719d911017c592'
+ *   md5('password')  => '5f4dcc3b5aa765d61d8327deb882cf99'
+ */
+puppet_value_t *puppet_func_md5(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "md5() requires 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
+    if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "md5() argument must be a string");
+        if (str_val) puppet_value_destroy(str_val);
+        return puppet_value_create_undef();
+    }
+
+    unsigned char hash[MD5_DIGEST_LENGTH];
+    MD5((const unsigned char *)str_val->data.string.data,
+        str_val->data.string.len, hash);
+
+    /* Convert to hex string */
+    char hex_str[MD5_DIGEST_LENGTH * 2 + 1];
+    for (int i = 0; i < MD5_DIGEST_LENGTH; i++) {
+        snprintf(hex_str + i * 2, 3, "%02x", hash[i]);
+    }
+
+    puppet_value_destroy(str_val);
+    return puppet_value_create_string(hex_str, MD5_DIGEST_LENGTH * 2);
+}
+
+/**
+ * @brief Puppet base64() function - encode/decode base64
+ *
+ * Usage: base64(mode, string)
+ *   mode: 'encode' or 'decode'
+ *
+ * Examples:
+ *   base64('encode', 'hello')        => 'aGVsbG8='
+ *   base64('decode', 'aGVsbG8=')     => 'hello'
+ */
+puppet_value_t *puppet_func_base64(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log(PUPPET_LOG_ERROR, "base64() requires 2 arguments: mode, string");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *mode_val = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *str_val = puppet_eval_expr(args->exprs[1], env);
+
+    if (!mode_val || mode_val->type != PUPPET_VALUE_STRING ||
+        !str_val || str_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "base64() arguments must be strings");
+        if (mode_val) puppet_value_destroy(mode_val);
+        if (str_val) puppet_value_destroy(str_val);
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *result = NULL;
+
+    /* Check mode */
+    if (strncmp(mode_val->data.string.data, "encode", mode_val->data.string.len) == 0) {
+        /* Encode to base64 */
+        BIO *bio, *b64;
+        BUF_MEM *buffer_ptr;
+
+        b64 = BIO_new(BIO_f_base64());
+        bio = BIO_new(BIO_s_mem());
+        bio = BIO_push(b64, bio);
+
+        BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL);
+        BIO_write(bio, str_val->data.string.data, str_val->data.string.len);
+        BIO_flush(bio);
+        BIO_get_mem_ptr(bio, &buffer_ptr);
+
+        result = puppet_value_create_string(buffer_ptr->data, buffer_ptr->length);
+        BIO_free_all(bio);
+
+    } else if (strncmp(mode_val->data.string.data, "decode", mode_val->data.string.len) == 0) {
+        /* Decode from base64 */
+        BIO *bio, *b64;
+
+        size_t decode_len = str_val->data.string.len;
+        char *decode_buf = puppet_malloc(decode_len + 1);
+
+        bio = BIO_new_mem_buf(str_val->data.string.data, str_val->data.string.len);
+        b64 = BIO_new(BIO_f_base64());
+        bio = BIO_push(b64, bio);
+
+        BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL);
+        int decoded_len = BIO_read(bio, decode_buf, decode_len);
+
+        if (decoded_len > 0) {
+            result = puppet_value_create_string(decode_buf, decoded_len);
+        } else {
+            puppet_log(PUPPET_LOG_ERROR, "base64() decode failed");
+            result = puppet_value_create_undef();
+        }
+
+        puppet_free(decode_buf);
+        BIO_free_all(bio);
+
+    } else {
+        puppet_log(PUPPET_LOG_ERROR, "base64() mode must be 'encode' or 'decode'");
+        result = puppet_value_create_undef();
+    }
+
+    puppet_value_destroy(mode_val);
+    puppet_value_destroy(str_val);
 
     return result;
 }
