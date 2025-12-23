@@ -453,6 +453,16 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "sqrt") == 0) {
                 return puppet_func_sqrt(&expr->data.funcall.args, env);
             }
+            // Path functions
+            else if (strcmp(func_name, "basename") == 0) {
+                return puppet_func_basename(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "dirname") == 0) {
+                return puppet_func_dirname(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "extname") == 0) {
+                return puppet_func_extname(&expr->data.funcall.args, env);
+            }
             else {
                 puppet_error("Unknown function: %s", func_name);
                 return puppet_value_create_undef();

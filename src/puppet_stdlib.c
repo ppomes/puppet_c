@@ -2225,3 +2225,188 @@ puppet_value_t *puppet_func_sqrt(puppet_expr_list_t *args, puppet_env_t *env) {
     puppet_value_destroy(num_val);
     return puppet_value_create_number(result);
 }
+
+/**
+ * @brief Puppet basename() function - get filename from path
+ *
+ * Usage: basename(path) or basename(path, suffix)
+ * Returns the filename portion of a path, optionally removing suffix
+ *
+ * Examples:
+ *   basename('/etc/passwd')           => 'passwd'
+ *   basename('/etc/nginx/nginx.conf') => 'nginx.conf'
+ *   basename('file.txt', '.txt')      => 'file'
+ */
+puppet_value_t *puppet_func_basename(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "basename() requires 1 argument: path");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *path_val = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *suffix_val = NULL;
+
+    if (args->count >= 2) {
+        suffix_val = puppet_eval_expr(args->exprs[1], env);
+    }
+
+    if (!path_val || path_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "basename() path must be a string");
+        if (path_val) puppet_value_destroy(path_val);
+        if (suffix_val) puppet_value_destroy(suffix_val);
+        return puppet_value_create_undef();
+    }
+
+    const char *path = path_val->data.string.data;
+    size_t path_len = path_val->data.string.len;
+
+    /* Find last slash */
+    const char *base = path;
+    for (size_t i = 0; i < path_len; i++) {
+        if (path[i] == '/') {
+            base = path + i + 1;
+        }
+    }
+
+    size_t base_len = path_len - (base - path);
+
+    /* Remove suffix if specified */
+    if (suffix_val && suffix_val->type == PUPPET_VALUE_STRING) {
+        size_t suffix_len = suffix_val->data.string.len;
+        if (base_len > suffix_len) {
+            if (memcmp(base + base_len - suffix_len,
+                       suffix_val->data.string.data, suffix_len) == 0) {
+                base_len -= suffix_len;
+            }
+        }
+    }
+
+    char *result_str = puppet_malloc(base_len + 1);
+    memcpy(result_str, base, base_len);
+    result_str[base_len] = '\0';
+
+    puppet_value_t *result = puppet_value_create_string(result_str, base_len);
+    puppet_free(result_str);
+    puppet_value_destroy(path_val);
+    if (suffix_val) puppet_value_destroy(suffix_val);
+
+    return result;
+}
+
+/**
+ * @brief Puppet dirname() function - get directory from path
+ *
+ * Usage: dirname(path)
+ * Returns the directory portion of a path
+ *
+ * Examples:
+ *   dirname('/etc/passwd')           => '/etc'
+ *   dirname('/etc/nginx/nginx.conf') => '/etc/nginx'
+ *   dirname('file.txt')              => '.'
+ */
+puppet_value_t *puppet_func_dirname(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "dirname() requires 1 argument: path");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *path_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!path_val || path_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "dirname() path must be a string");
+        if (path_val) puppet_value_destroy(path_val);
+        return puppet_value_create_undef();
+    }
+
+    const char *path = path_val->data.string.data;
+    size_t path_len = path_val->data.string.len;
+
+    /* Find last slash */
+    ssize_t last_slash = -1;
+    for (size_t i = 0; i < path_len; i++) {
+        if (path[i] == '/') {
+            last_slash = (ssize_t)i;
+        }
+    }
+
+    puppet_value_t *result;
+    if (last_slash == -1) {
+        /* No slash - return "." */
+        result = puppet_value_create_string(".", 1);
+    } else if (last_slash == 0) {
+        /* Root directory */
+        result = puppet_value_create_string("/", 1);
+    } else {
+        char *result_str = puppet_malloc(last_slash + 1);
+        memcpy(result_str, path, last_slash);
+        result_str[last_slash] = '\0';
+        result = puppet_value_create_string(result_str, last_slash);
+        puppet_free(result_str);
+    }
+
+    puppet_value_destroy(path_val);
+    return result;
+}
+
+/**
+ * @brief Puppet extname() function - get file extension
+ *
+ * Usage: extname(path)
+ * Returns the file extension including the dot
+ *
+ * Examples:
+ *   extname('file.txt')     => '.txt'
+ *   extname('archive.tar.gz') => '.gz'
+ *   extname('README')       => ''
+ */
+puppet_value_t *puppet_func_extname(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "extname() requires 1 argument: path");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *path_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!path_val || path_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "extname() path must be a string");
+        if (path_val) puppet_value_destroy(path_val);
+        return puppet_value_create_undef();
+    }
+
+    const char *path = path_val->data.string.data;
+    size_t path_len = path_val->data.string.len;
+
+    /* Find basename first (after last slash) */
+    const char *base = path;
+    for (size_t i = 0; i < path_len; i++) {
+        if (path[i] == '/') {
+            base = path + i + 1;
+        }
+    }
+
+    size_t base_len = path_len - (base - path);
+
+    /* Find last dot in basename */
+    ssize_t last_dot = -1;
+    for (size_t i = 0; i < base_len; i++) {
+        if (base[i] == '.') {
+            last_dot = (ssize_t)i;
+        }
+    }
+
+    puppet_value_t *result;
+    if (last_dot <= 0) {
+        /* No extension or hidden file (.bashrc) */
+        result = puppet_value_create_string("", 0);
+    } else {
+        size_t ext_len = base_len - last_dot;
+        char *result_str = puppet_malloc(ext_len + 1);
+        memcpy(result_str, base + last_dot, ext_len);
+        result_str[ext_len] = '\0';
+        result = puppet_value_create_string(result_str, ext_len);
+        puppet_free(result_str);
+    }
+
+    puppet_value_destroy(path_val);
+    return result;
+}
