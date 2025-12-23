@@ -49,6 +49,19 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
      -d '{"certname": "node1.example.com"}'
 ```
 
+### Native Fact Collection
+
+```bash
+# Show all facts
+./facter/facter_c
+
+# Specific facts
+./facter/facter_c hostname ipaddress osfamily
+
+# JSON output
+./facter/facter_c -j
+```
+
 ## What Works
 
 - Basic parsing of classes, resources, nodes, defines
@@ -123,6 +136,6 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 - [x] **Phase 1**: Extract `libpuppetc.so` shared library from current code
 - [x] **Phase 2**: Define catalog JSON format, add catalog serialization
 - [x] **Phase 3**: `puppetc-server` - HTTP API for catalog compilation
-- [ ] **Phase 4**: `libfacter_c` - Native fact collection library
+- [x] **Phase 4**: `libfacter_c` - Native fact collection library
 - [ ] **Phase 5**: `puppetc-agent` - Client that collects facts, requests catalog
 - [ ] **Phase 6**: Resource application (file, package, service...)
