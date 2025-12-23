@@ -132,6 +132,15 @@ PKG_CHECK_MODULES([MHD], [libmicrohttpd], [
     AC_MSG_ERROR([libmicrohttpd not found. Install libmicrohttpd-dev package.])
 ])
 
+# Check for libcurl (required for puppetc-agent)
+PKG_CHECK_MODULES([CURL], [libcurl], [
+    AC_DEFINE([HAVE_CURL], [1], [Define if libcurl is available])
+    AC_SUBST([CURL_CFLAGS])
+    AC_SUBST([CURL_LIBS])
+], [
+    AC_MSG_ERROR([libcurl not found. Install libcurl4-openssl-dev package.])
+])
+
 # Check for standard library functions
 AC_CHECK_FUNCS([malloc realloc free strdup strlen strcpy snprintf])
 AC_CHECK_HEADERS([stdio.h stdlib.h string.h])
@@ -152,6 +161,7 @@ AC_CONFIG_FILES([
     src/Makefile
     facter/Makefile
     server/Makefile
+    agent/Makefile
     tests/Makefile
 ])
 

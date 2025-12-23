@@ -26,6 +26,8 @@ include/puppet.tab.h
 /server/Makefile.in
 /facter/Makefile
 /facter/Makefile.in
+/agent/Makefile
+/agent/Makefile.in
 /tests/Makefile
 /tests/Makefile.in
 
@@ -55,6 +57,10 @@ facter/*.o
 facter/*.lo
 facter/*.la
 facter/facter_c
+agent/.deps/
+agent/.libs/
+agent/*.o
+agent/puppetc-agent
 tests/output/
 
 # Distribution tarballs

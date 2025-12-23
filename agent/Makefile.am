@@ -1,0 +1,13 @@
+# puppetc-agent - Puppet agent client
+bin_PROGRAMS = puppetc-agent
+
+puppetc_agent_SOURCES = puppetc_agent.c
+
+# Link against libfacter_c and libcurl
+puppetc_agent_LDADD = $(top_builddir)/facter/libfacter_c.la $(CURL_LIBS)
+
+# Include directories
+AM_CPPFLAGS = -I$(top_srcdir)/include $(CURL_CFLAGS)
+
+# Compiler flags
+AM_CFLAGS = -Wall -Wextra -g
