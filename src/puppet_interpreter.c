@@ -535,7 +535,30 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             puppet_free(result);
             return ret;
         }
-            
+
+        case PUPPET_EXPR_CONDITIONAL: {
+            // Ternary conditional: condition ? then_expr : else_expr
+            puppet_value_t *cond = puppet_eval_expr(expr->data.conditional.condition, env);
+            bool is_true = false;
+
+            if (cond) {
+                if (cond->type == PUPPET_VALUE_BOOL) {
+                    is_true = cond->data.boolean;
+                } else if (cond->type == PUPPET_VALUE_UNDEF) {
+                    is_true = false;
+                } else {
+                    is_true = true;  // Non-undef, non-false values are truthy
+                }
+                puppet_value_destroy(cond);
+            }
+
+            if (is_true) {
+                return puppet_eval_expr(expr->data.conditional.then_expr, env);
+            } else {
+                return puppet_eval_expr(expr->data.conditional.else_expr, env);
+            }
+        }
+
         default:
             puppet_warn("Unimplemented expression type: %d", expr->type);
             return puppet_value_create_undef();
@@ -764,6 +787,113 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                 }
             }
             break;
+
+        case PUPPET_STMT_IF: {
+            // Execute if/elsif/else chain
+            puppet_if_branch_t *branch = stmt->data.if_stmt.branches;
+            bool executed = false;
+
+            while (branch && !executed) {
+                puppet_value_t *cond = puppet_eval_expr(branch->condition, env);
+                bool is_true = false;
+
+                // Evaluate truthiness: false and undef are falsy, everything else is truthy
+                if (cond) {
+                    if (cond->type == PUPPET_VALUE_BOOL) {
+                        is_true = cond->data.boolean;
+                    } else if (cond->type == PUPPET_VALUE_UNDEF) {
+                        is_true = false;
+                    } else {
+                        is_true = true;
+                    }
+                    puppet_value_destroy(cond);
+                }
+
+                if (is_true) {
+                    puppet_exec_stmt_list(&branch->body, env);
+                    executed = true;
+                }
+                branch = branch->next;
+            }
+
+            // Execute else branch if no condition matched
+            if (!executed && stmt->data.if_stmt.else_body) {
+                puppet_exec_stmt_list(stmt->data.if_stmt.else_body, env);
+            }
+            break;
+        }
+
+        case PUPPET_STMT_UNLESS: {
+            // Execute unless (inverse of if)
+            puppet_value_t *cond = puppet_eval_expr(stmt->data.unless_stmt.condition, env);
+            bool is_false = true;
+
+            if (cond) {
+                if (cond->type == PUPPET_VALUE_BOOL) {
+                    is_false = !cond->data.boolean;
+                } else if (cond->type == PUPPET_VALUE_UNDEF) {
+                    is_false = true;
+                } else {
+                    is_false = false;
+                }
+                puppet_value_destroy(cond);
+            }
+
+            if (is_false) {
+                puppet_exec_stmt_list(&stmt->data.unless_stmt.body, env);
+            }
+            break;
+        }
+
+        case PUPPET_STMT_CASE: {
+            // Execute case statement
+            puppet_value_t *expr_val = puppet_eval_expr(stmt->data.case_stmt.expr, env);
+            bool matched = false;
+
+            for (size_t i = 0; i < stmt->data.case_stmt.when_count && !matched; i++) {
+                puppet_case_when_t *when = &stmt->data.case_stmt.whens[i];
+                puppet_value_t *test_val = puppet_eval_expr(when->test, env);
+
+                // Check for match (using equality comparison)
+                bool is_match = false;
+                if (expr_val && test_val) {
+                    if (expr_val->type == test_val->type) {
+                        switch (expr_val->type) {
+                            case PUPPET_VALUE_BOOL:
+                                is_match = (expr_val->data.boolean == test_val->data.boolean);
+                                break;
+                            case PUPPET_VALUE_NUMBER:
+                                is_match = (expr_val->data.number == test_val->data.number);
+                                break;
+                            case PUPPET_VALUE_STRING:
+                                is_match = (expr_val->data.string.len == test_val->data.string.len &&
+                                           memcmp(expr_val->data.string.data, test_val->data.string.data,
+                                                  expr_val->data.string.len) == 0);
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+                    // Also check if test is 'default' keyword (represented as special value)
+                    // For now, we handle default_body separately
+                }
+
+                if (test_val) puppet_value_destroy(test_val);
+
+                if (is_match) {
+                    puppet_exec_stmt_list(&when->body, env);
+                    matched = true;
+                }
+            }
+
+            // Execute default branch if no when matched
+            if (!matched && stmt->data.case_stmt.default_body) {
+                puppet_exec_stmt_list(stmt->data.case_stmt.default_body, env);
+            }
+
+            if (expr_val) puppet_value_destroy(expr_val);
+            break;
+        }
 
         default:
             puppet_warn("Unimplemented statement type: %d", stmt->type);

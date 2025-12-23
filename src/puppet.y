@@ -143,6 +143,11 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
     puppet_resource_instance_t *resource_instance;
     puppet_resource_decl_t *resource_decl;
     puppet_case_when_t *case_when;
+    struct {
+        puppet_case_when_t *whens;
+        size_t count;
+        puppet_stmt_list_t *default_body;
+    } case_when_list;
     puppet_if_branch_t *if_branch;
     puppet_binop_t binop;
     puppet_unop_t unop;
@@ -167,7 +172,8 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 %token AT2 LCOLLECT RCOLLECT COLONCOLON
 %token DQSTRING_INTERP_START
 
-%left '?'
+%nonassoc TERNARY
+%right '?' ':'
 %left OR
 %left AND
 %left '<' '>' LE GE EQ NE MATCH NOT_MATCH
@@ -180,7 +186,7 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 %left '.' '[' ']'
 
 %type <expr> expression primary_expression
-%type <expr> unary_expression binary_expression
+%type <expr> unary_expression binary_expression conditional_expression
 %type <expr> selector_expression lambda_expression
 %type <expr> funcall_expression index_expression dot_expression
 %type <expr> variable_expression literal_expression
@@ -211,6 +217,7 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 %type <string> resource_type
 
 %type <case_when> case_when
+%type <case_when_list> case_when_list
 %type <if_branch> elsif_clauses
 
 %type <value> value hash_value array_value
@@ -650,23 +657,44 @@ case_statement:
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
         $$->type = PUPPET_STMT_CASE;
         $$->data.case_stmt.expr = $2;
-        /* TODO: Implement case when list */
+        $$->data.case_stmt.whens = $4.whens;
+        $$->data.case_stmt.when_count = $4.count;
+        $$->data.case_stmt.default_body = $4.default_body;
     }
     ;
 
 case_when_list:
-    case_when
-    | case_when_list case_when
+    case_when {
+        $$.whens = $1;
+        $$.count = $1 ? 1 : 0;
+        $$.default_body = NULL;
+    }
+    | case_when_list case_when {
+        if ($2) {
+            /* Append new when to the list */
+            $$.whens = puppet_realloc($1.whens, ($1.count + 1) * sizeof(puppet_case_when_t));
+            $$.whens[$1.count] = *$2;
+            $$.count = $1.count + 1;
+            puppet_free($2);
+        } else {
+            $$ = $1;
+        }
+        $$.default_body = $1.default_body;
+    }
+    | case_when_list DEFAULT ':' '{' statement_list '}' {
+        $$ = $1;
+        $$.default_body = puppet_calloc(1, sizeof(puppet_stmt_list_t));
+        *$$.default_body = *$5;
+        puppet_free($5);
+    }
     ;
 
 case_when:
-    expression_list ':' '{' statement_list '}' {
+    expression ':' '{' statement_list '}' {
         $$ = puppet_calloc(1, sizeof(puppet_case_when_t));
-        /* TODO: Implement case when */
-    }
-    | DEFAULT ':' '{' statement_list '}' {
-        $$ = puppet_calloc(1, sizeof(puppet_case_when_t));
-        /* TODO: Implement default case */
+        $$->test = $1;
+        $$->body = *$4;
+        puppet_free($4);
     }
     ;
 
@@ -770,6 +798,7 @@ expression:
     primary_expression
     | unary_expression
     | binary_expression
+    | conditional_expression
     | selector_expression
     | lambda_expression
     ;
@@ -1000,6 +1029,16 @@ comparison_op:
 logical_op:
     AND { $$ = PUPPET_OP_AND; }
     | OR { $$ = PUPPET_OP_OR; }
+    ;
+
+conditional_expression:
+    expression '?' expression ':' expression %prec TERNARY {
+        $$ = puppet_calloc(1, sizeof(puppet_expr_t));
+        $$->type = PUPPET_EXPR_CONDITIONAL;
+        $$->data.conditional.condition = $1;
+        $$->data.conditional.then_expr = $3;
+        $$->data.conditional.else_expr = $5;
+    }
     ;
 
 selector_expression:
