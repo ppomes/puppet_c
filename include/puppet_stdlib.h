@@ -27,6 +27,11 @@ puppet_value_t *puppet_func_join(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_downcase(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_upcase(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_strip(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_lstrip(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_rstrip(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_chomp(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_chop(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_capitalize(puppet_expr_list_t *args, puppet_env_t *env);
 
 // Inspection functions
 puppet_value_t *puppet_func_size(puppet_expr_list_t *args, puppet_env_t *env);

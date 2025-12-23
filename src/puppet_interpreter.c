@@ -347,6 +347,21 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "strip") == 0) {
                 return puppet_func_strip(&expr->data.funcall.args, env);
             }
+            else if (strcmp(func_name, "lstrip") == 0) {
+                return puppet_func_lstrip(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "rstrip") == 0) {
+                return puppet_func_rstrip(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "chomp") == 0) {
+                return puppet_func_chomp(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "chop") == 0) {
+                return puppet_func_chop(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "capitalize") == 0) {
+                return puppet_func_capitalize(&expr->data.funcall.args, env);
+            }
             // Inspection functions
             else if (strcmp(func_name, "size") == 0 || strcmp(func_name, "length") == 0) {
                 return puppet_func_size(&expr->data.funcall.args, env);

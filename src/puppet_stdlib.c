@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <ctype.h>
 
 // Logging levels
 typedef enum {
@@ -749,6 +750,234 @@ puppet_value_t *puppet_func_strip(puppet_expr_list_t *args, puppet_env_t *env) {
     result_str[new_len] = '\0';
 
     puppet_value_t *result = puppet_value_create_string(result_str, new_len);
+    puppet_free(result_str);
+    puppet_value_destroy(str_val);
+
+    return result;
+}
+
+/**
+ * @brief Puppet lstrip() function - remove leading whitespace
+ *
+ * Usage: lstrip(string)
+ * Returns the string with leading whitespace removed
+ *
+ * Examples:
+ *   lstrip('  hello')   => 'hello'
+ *   lstrip('\thello')   => 'hello'
+ */
+puppet_value_t *puppet_func_lstrip(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "lstrip() requires 1 argument: string");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "lstrip() argument must be a string");
+        if (str_val) puppet_value_destroy(str_val);
+        return puppet_value_create_undef();
+    }
+
+    const char *src = str_val->data.string.data;
+    size_t len = str_val->data.string.len;
+
+    /* Find start (skip leading whitespace) */
+    size_t start = 0;
+    while (start < len && (src[start] == ' ' || src[start] == '\t' ||
+                           src[start] == '\n' || src[start] == '\r')) {
+        start++;
+    }
+
+    size_t new_len = len - start;
+    char *result_str = puppet_malloc(new_len + 1);
+    if (new_len > 0) {
+        memcpy(result_str, src + start, new_len);
+    }
+    result_str[new_len] = '\0';
+
+    puppet_value_t *result = puppet_value_create_string(result_str, new_len);
+    puppet_free(result_str);
+    puppet_value_destroy(str_val);
+
+    return result;
+}
+
+/**
+ * @brief Puppet rstrip() function - remove trailing whitespace
+ *
+ * Usage: rstrip(string)
+ * Returns the string with trailing whitespace removed
+ *
+ * Examples:
+ *   rstrip('hello  ')   => 'hello'
+ *   rstrip('hello\n')   => 'hello'
+ */
+puppet_value_t *puppet_func_rstrip(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "rstrip() requires 1 argument: string");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "rstrip() argument must be a string");
+        if (str_val) puppet_value_destroy(str_val);
+        return puppet_value_create_undef();
+    }
+
+    const char *src = str_val->data.string.data;
+    size_t len = str_val->data.string.len;
+
+    /* Find end (skip trailing whitespace) */
+    size_t end = len;
+    while (end > 0 && (src[end - 1] == ' ' || src[end - 1] == '\t' ||
+                       src[end - 1] == '\n' || src[end - 1] == '\r')) {
+        end--;
+    }
+
+    char *result_str = puppet_malloc(end + 1);
+    if (end > 0) {
+        memcpy(result_str, src, end);
+    }
+    result_str[end] = '\0';
+
+    puppet_value_t *result = puppet_value_create_string(result_str, end);
+    puppet_free(result_str);
+    puppet_value_destroy(str_val);
+
+    return result;
+}
+
+/**
+ * @brief Puppet chomp() function - remove trailing newline
+ *
+ * Usage: chomp(string)
+ * Returns the string with trailing newline(s) removed
+ *
+ * Examples:
+ *   chomp("hello\n")     => 'hello'
+ *   chomp("hello\r\n")   => 'hello'
+ *   chomp("hello")       => 'hello'
+ */
+puppet_value_t *puppet_func_chomp(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "chomp() requires 1 argument: string");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "chomp() argument must be a string");
+        if (str_val) puppet_value_destroy(str_val);
+        return puppet_value_create_undef();
+    }
+
+    const char *src = str_val->data.string.data;
+    size_t len = str_val->data.string.len;
+
+    /* Remove trailing \n and \r only */
+    size_t end = len;
+    while (end > 0 && (src[end - 1] == '\n' || src[end - 1] == '\r')) {
+        end--;
+    }
+
+    char *result_str = puppet_malloc(end + 1);
+    if (end > 0) {
+        memcpy(result_str, src, end);
+    }
+    result_str[end] = '\0';
+
+    puppet_value_t *result = puppet_value_create_string(result_str, end);
+    puppet_free(result_str);
+    puppet_value_destroy(str_val);
+
+    return result;
+}
+
+/**
+ * @brief Puppet chop() function - remove last character
+ *
+ * Usage: chop(string)
+ * Returns the string with the last character removed
+ *
+ * Examples:
+ *   chop('hello')   => 'hell'
+ *   chop('hello\n') => 'hello'
+ *   chop('')        => ''
+ */
+puppet_value_t *puppet_func_chop(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "chop() requires 1 argument: string");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "chop() argument must be a string");
+        if (str_val) puppet_value_destroy(str_val);
+        return puppet_value_create_undef();
+    }
+
+    size_t len = str_val->data.string.len;
+    size_t new_len = (len > 0) ? len - 1 : 0;
+
+    char *result_str = puppet_malloc(new_len + 1);
+    if (new_len > 0) {
+        memcpy(result_str, str_val->data.string.data, new_len);
+    }
+    result_str[new_len] = '\0';
+
+    puppet_value_t *result = puppet_value_create_string(result_str, new_len);
+    puppet_free(result_str);
+    puppet_value_destroy(str_val);
+
+    return result;
+}
+
+/**
+ * @brief Puppet capitalize() function - capitalize first letter
+ *
+ * Usage: capitalize(string)
+ * Returns the string with the first character uppercased and rest lowercased
+ *
+ * Examples:
+ *   capitalize('hello')   => 'Hello'
+ *   capitalize('HELLO')   => 'Hello'
+ *   capitalize('hELLO')   => 'Hello'
+ */
+puppet_value_t *puppet_func_capitalize(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "capitalize() requires 1 argument: string");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "capitalize() argument must be a string");
+        if (str_val) puppet_value_destroy(str_val);
+        return puppet_value_create_undef();
+    }
+
+    size_t len = str_val->data.string.len;
+    char *result_str = puppet_malloc(len + 1);
+
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)str_val->data.string.data[i];
+        if (i == 0) {
+            result_str[i] = (char)toupper(c);
+        } else {
+            result_str[i] = (char)tolower(c);
+        }
+    }
+    result_str[len] = '\0';
+
+    puppet_value_t *result = puppet_value_create_string(result_str, len);
     puppet_free(result_str);
     puppet_value_destroy(str_val);
 
