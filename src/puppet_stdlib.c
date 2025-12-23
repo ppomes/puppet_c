@@ -1893,6 +1893,71 @@ puppet_value_t *puppet_func_merge(puppet_expr_list_t *args, puppet_env_t *env) {
 }
 
 /**
+ * @brief Puppet is_string() function - check if value is a string
+ */
+puppet_value_t *puppet_func_is_string(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        return puppet_value_create_bool(false);
+    }
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    bool result = val && val->type == PUPPET_VALUE_STRING;
+    if (val) puppet_value_destroy(val);
+    return puppet_value_create_bool(result);
+}
+
+/**
+ * @brief Puppet is_array() function - check if value is an array
+ */
+puppet_value_t *puppet_func_is_array(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        return puppet_value_create_bool(false);
+    }
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    bool result = val && val->type == PUPPET_VALUE_ARRAY;
+    if (val) puppet_value_destroy(val);
+    return puppet_value_create_bool(result);
+}
+
+/**
+ * @brief Puppet is_hash() function - check if value is a hash
+ */
+puppet_value_t *puppet_func_is_hash(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        return puppet_value_create_bool(false);
+    }
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    bool result = val && val->type == PUPPET_VALUE_HASH;
+    if (val) puppet_value_destroy(val);
+    return puppet_value_create_bool(result);
+}
+
+/**
+ * @brief Puppet is_numeric() function - check if value is a number
+ */
+puppet_value_t *puppet_func_is_numeric(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        return puppet_value_create_bool(false);
+    }
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    bool result = val && val->type == PUPPET_VALUE_NUMBER;
+    if (val) puppet_value_destroy(val);
+    return puppet_value_create_bool(result);
+}
+
+/**
+ * @brief Puppet is_bool() function - check if value is a boolean
+ */
+puppet_value_t *puppet_func_is_bool(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        return puppet_value_create_bool(false);
+    }
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    bool result = val && val->type == PUPPET_VALUE_BOOL;
+    if (val) puppet_value_destroy(val);
+    return puppet_value_create_bool(result);
+}
+
+/**
  * @brief Puppet abs() function - get absolute value of a number
  *
  * Usage: abs(number)

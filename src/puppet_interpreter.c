@@ -416,6 +416,22 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "merge") == 0) {
                 return puppet_func_merge(&expr->data.funcall.args, env);
             }
+            // Type checking functions
+            else if (strcmp(func_name, "is_string") == 0) {
+                return puppet_func_is_string(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "is_array") == 0) {
+                return puppet_func_is_array(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "is_hash") == 0) {
+                return puppet_func_is_hash(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "is_numeric") == 0 || strcmp(func_name, "is_integer") == 0 || strcmp(func_name, "is_float") == 0) {
+                return puppet_func_is_numeric(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "is_bool") == 0 || strcmp(func_name, "is_boolean") == 0) {
+                return puppet_func_is_bool(&expr->data.funcall.args, env);
+            }
             else if (strcmp(func_name, "abs") == 0) {
                 return puppet_func_abs(&expr->data.funcall.args, env);
             }

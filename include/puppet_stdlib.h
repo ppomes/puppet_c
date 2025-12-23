@@ -56,6 +56,13 @@ puppet_value_t *puppet_func_range(puppet_expr_list_t *args, puppet_env_t *env);
 // Hash functions
 puppet_value_t *puppet_func_merge(puppet_expr_list_t *args, puppet_env_t *env);
 
+// Type checking functions
+puppet_value_t *puppet_func_is_string(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_is_array(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_is_hash(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_is_numeric(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_is_bool(puppet_expr_list_t *args, puppet_env_t *env);
+
 // Math functions
 puppet_value_t *puppet_func_abs(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_min(puppet_expr_list_t *args, puppet_env_t *env);
