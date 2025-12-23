@@ -77,3 +77,39 @@ Run `./src/puppetc --help` for all options.
 **Crypto**: sha1, md5, base64
 
 **Data**: lookup
+
+## Roadmap
+
+### Target Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Libraries                               │
+├─────────────────────┬───────────────────────────────────────┤
+│  libpuppetc         │  libfacter_c                          │
+│  - Parser/Lexer     │  - Native fact collection             │
+│  - AST              │  - JSON fact loading                  │
+│  - Interpreter      │  - System info (hostname, os, etc.)   │
+│  - Stdlib           │                                       │
+│  - Hiera            │                                       │
+│  - Catalog builder  │                                       │
+└─────────────────────┴───────────────────────────────────────┘
+           │                        │
+           ▼                        ▼
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│ puppetc-server  │  │ puppetc-agent   │  │ puppetc         │
+│                 │  │                 │  │ (debug tool)    │
+│ - REST API      │  │ - Collect facts │  │ - Parse/eval    │
+│ - Compile       │  │ - Request catalog│ │ - JSON output   │
+│   catalogs      │  │ - Apply catalog │  │ - Template debug│
+└─────────────────┘  └─────────────────┘  └─────────────────┘
+```
+
+### Phases
+
+- [ ] **Phase 1**: Extract `libpuppetc.so` shared library from current code
+- [ ] **Phase 2**: Define catalog JSON format, add catalog serialization
+- [ ] **Phase 3**: `puppetc-server` - HTTP API for catalog compilation
+- [ ] **Phase 4**: `libfacter_c` - Native fact collection library
+- [ ] **Phase 5**: `puppetc-agent` - Client that collects facts, requests catalog
+- [ ] **Phase 6**: Resource application (file, package, service...)
