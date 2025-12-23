@@ -40,6 +40,11 @@ puppet_value_t *puppet_func_unique(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_sort(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_flatten(puppet_expr_list_t *args, puppet_env_t *env);
 
+// Math functions
+puppet_value_t *puppet_func_abs(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_min(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_max(puppet_expr_list_t *args, puppet_env_t *env);
+
 // Utility function to convert values to strings for logging
 char *puppet_value_to_display_string(puppet_value_t *value);
 

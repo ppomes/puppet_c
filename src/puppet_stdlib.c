@@ -1264,3 +1264,177 @@ puppet_value_t *puppet_func_flatten(puppet_expr_list_t *args, puppet_env_t *env)
     puppet_value_destroy(array_val);
     return result;
 }
+
+/**
+ * @brief Puppet abs() function - get absolute value of a number
+ *
+ * Usage: abs(number)
+ * Returns the absolute value of the number
+ *
+ * Examples:
+ *   abs(-5)      => 5
+ *   abs(5)       => 5
+ *   abs(-3.14)   => 3.14
+ */
+puppet_value_t *puppet_func_abs(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "abs() requires 1 argument: number");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *num_val = puppet_eval_expr(args->exprs[0], env);
+
+    if (!num_val || num_val->type != PUPPET_VALUE_NUMBER) {
+        puppet_log(PUPPET_LOG_ERROR, "abs() argument must be a number");
+        if (num_val) puppet_value_destroy(num_val);
+        return puppet_value_create_undef();
+    }
+
+    double result = num_val->data.number;
+    if (result < 0) {
+        result = -result;
+    }
+
+    puppet_value_destroy(num_val);
+    return puppet_value_create_number(result);
+}
+
+/**
+ * @brief Puppet min() function - get minimum of values
+ *
+ * Usage: min(a, b, ...) or min(array)
+ * Returns the smallest value
+ *
+ * Examples:
+ *   min(3, 1, 2)     => 1
+ *   min([5, 2, 8])   => 2
+ *   min(-1, 1)       => -1
+ */
+puppet_value_t *puppet_func_min(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "min() requires at least 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    /* Check if first argument is an array */
+    puppet_value_t *first = puppet_eval_expr(args->exprs[0], env);
+
+    if (first && first->type == PUPPET_VALUE_ARRAY) {
+        /* min(array) form */
+        puppet_array_t *arr = first->data.array;
+        if (arr->count == 0) {
+            puppet_value_destroy(first);
+            return puppet_value_create_undef();
+        }
+
+        double min_val = 0;
+        bool has_min = false;
+
+        for (size_t i = 0; i < arr->count; i++) {
+            if (arr->items[i]->type == PUPPET_VALUE_NUMBER) {
+                if (!has_min || arr->items[i]->data.number < min_val) {
+                    min_val = arr->items[i]->data.number;
+                    has_min = true;
+                }
+            }
+        }
+
+        puppet_value_destroy(first);
+        if (!has_min) {
+            return puppet_value_create_undef();
+        }
+        return puppet_value_create_number(min_val);
+    }
+
+    /* min(a, b, ...) form */
+    if (!first || first->type != PUPPET_VALUE_NUMBER) {
+        puppet_log(PUPPET_LOG_ERROR, "min() arguments must be numbers or an array");
+        if (first) puppet_value_destroy(first);
+        return puppet_value_create_undef();
+    }
+
+    double min_val = first->data.number;
+    puppet_value_destroy(first);
+
+    for (size_t i = 1; i < args->count; i++) {
+        puppet_value_t *val = puppet_eval_expr(args->exprs[i], env);
+        if (val && val->type == PUPPET_VALUE_NUMBER) {
+            if (val->data.number < min_val) {
+                min_val = val->data.number;
+            }
+        }
+        if (val) puppet_value_destroy(val);
+    }
+
+    return puppet_value_create_number(min_val);
+}
+
+/**
+ * @brief Puppet max() function - get maximum of values
+ *
+ * Usage: max(a, b, ...) or max(array)
+ * Returns the largest value
+ *
+ * Examples:
+ *   max(3, 1, 2)     => 3
+ *   max([5, 2, 8])   => 8
+ *   max(-1, 1)       => 1
+ */
+puppet_value_t *puppet_func_max(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "max() requires at least 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    /* Check if first argument is an array */
+    puppet_value_t *first = puppet_eval_expr(args->exprs[0], env);
+
+    if (first && first->type == PUPPET_VALUE_ARRAY) {
+        /* max(array) form */
+        puppet_array_t *arr = first->data.array;
+        if (arr->count == 0) {
+            puppet_value_destroy(first);
+            return puppet_value_create_undef();
+        }
+
+        double max_val = 0;
+        bool has_max = false;
+
+        for (size_t i = 0; i < arr->count; i++) {
+            if (arr->items[i]->type == PUPPET_VALUE_NUMBER) {
+                if (!has_max || arr->items[i]->data.number > max_val) {
+                    max_val = arr->items[i]->data.number;
+                    has_max = true;
+                }
+            }
+        }
+
+        puppet_value_destroy(first);
+        if (!has_max) {
+            return puppet_value_create_undef();
+        }
+        return puppet_value_create_number(max_val);
+    }
+
+    /* max(a, b, ...) form */
+    if (!first || first->type != PUPPET_VALUE_NUMBER) {
+        puppet_log(PUPPET_LOG_ERROR, "max() arguments must be numbers or an array");
+        if (first) puppet_value_destroy(first);
+        return puppet_value_create_undef();
+    }
+
+    double max_val = first->data.number;
+    puppet_value_destroy(first);
+
+    for (size_t i = 1; i < args->count; i++) {
+        puppet_value_t *val = puppet_eval_expr(args->exprs[i], env);
+        if (val && val->type == PUPPET_VALUE_NUMBER) {
+            if (val->data.number > max_val) {
+                max_val = val->data.number;
+            }
+        }
+        if (val) puppet_value_destroy(val);
+    }
+
+    return puppet_value_create_number(max_val);
+}
