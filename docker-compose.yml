@@ -32,7 +32,7 @@ services:
       - puppet
     # Run agent once and exit
     # Use -a to apply, -n for noop
-    command: ["-s", "http://server:8140", "-n", "-v"]
+    command: ["-s", "http://server:8140", "-n"]
 
 networks:
   puppet:
