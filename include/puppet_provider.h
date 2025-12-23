@@ -253,6 +253,11 @@ void provider_package_register(void);
  */
 void provider_service_register(void);
 
+/**
+ * @brief Register notify provider
+ */
+void provider_notify_register(void);
+
 #ifdef __cplusplus
 }
 #endif

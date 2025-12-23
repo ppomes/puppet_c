@@ -59,6 +59,7 @@ void providers_init(os_family_t os_family) {
     provider_file_register();
     provider_package_register();
     provider_service_register();
+    provider_notify_register();
 }
 
 void providers_shutdown(void) {

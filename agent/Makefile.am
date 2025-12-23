@@ -6,7 +6,8 @@ puppetc_agent_SOURCES = \
 	puppet_provider.c \
 	provider_file.c \
 	provider_package.c \
-	provider_service.c
+	provider_service.c \
+	provider_notify.c
 
 # Link against libfacter_c and libcurl
 puppetc_agent_LDADD = $(top_builddir)/facter/libfacter_c.la $(CURL_LIBS)
