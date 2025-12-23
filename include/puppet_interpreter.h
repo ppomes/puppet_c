@@ -20,6 +20,7 @@
 #define PUPPET_INTERPRETER_H
 
 #include "puppet_ast.h"
+#include "puppet_catalog.h"
 
 /* Forward declarations */
 typedef struct puppet_env puppet_env_t;
@@ -148,6 +149,10 @@ typedef struct puppet_env {
 
     /* Output control */
     bool verbose;                             /**< Enable verbose/debug output */
+
+    /* Catalog building */
+    puppet_catalog_t *catalog;                /**< Resource catalog (NULL if not building) */
+    bool build_catalog;                       /**< Whether to build a catalog */
 } puppet_env_t;
 
 /* Global verbose flag for use before environment is created */
@@ -238,5 +243,9 @@ void puppet_env_set_execute_all_nodes(puppet_env_t *env, bool execute_all);
 
 /* Template output */
 void puppet_env_set_template_output(puppet_env_t *env, const char *template_target);
+
+/* Catalog building */
+void puppet_env_enable_catalog(puppet_env_t *env, const char *certname, const char *environment);
+puppet_catalog_t *puppet_env_get_catalog(puppet_env_t *env);
 
 #endif

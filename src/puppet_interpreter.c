@@ -78,6 +78,10 @@ puppet_env_t *puppet_env_create(void) {
     /* Initialize output control */
     env->verbose = puppet_verbose;  /* Inherit from global flag */
 
+    /* Initialize catalog building (disabled by default) */
+    env->catalog = NULL;
+    env->build_catalog = false;
+
     /* Register Hiera data provider */
     puppet_hiera_register_provider(env, "data");
 
@@ -167,7 +171,10 @@ void puppet_env_destroy(puppet_env_t *env) {
     
     /* Clean up failure message */
     puppet_free(env->failure_message);
-    
+
+    /* Note: catalog is NOT destroyed here - caller owns it after puppet_env_get_catalog() */
+    /* If catalog was never retrieved, it will be leaked - caller should always get it */
+
     puppet_free(env);
 }
 
@@ -797,23 +804,30 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         continue;  // Skip this duplicate resource
                     }
                     
-                    // Add to catalog
+                    // Add to duplicate detection catalog
                     puppet_value_t *marker = puppet_value_create_bool(true);
                     puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);
 
                     puppet_debug("  Title: %s", title_str);
-                    
+
                     // Check if this is the template target for output
-                    bool is_template_target = (env->template_output_target && 
+                    bool is_template_target = (env->template_output_target &&
                                                strcmp(title_str, env->template_output_target) == 0 &&
                                                strcmp(stmt->data.resource.type.data, "file") == 0);
-                    
+
+                    // Collect parameters for catalog
+                    puppet_catalog_param_t *params = NULL;
+                    size_t param_count = instance->attr_count;
+                    if (env->build_catalog && param_count > 0) {
+                        params = puppet_calloc(param_count, sizeof(puppet_catalog_param_t));
+                    }
+
                     // Show attributes for this instance
                     for (size_t j = 0; j < instance->attr_count; j++) {
                         puppet_value_t *attr_val = puppet_eval_expr(instance->attributes[j].value, env);
                         const char *attr_str = puppet_value_to_string(attr_val);
                         puppet_debug("    %s => %s", instance->attributes[j].name.data, attr_str);
-                        
+
                         // If this is template output mode and we found the content attribute
                         // Output goes to stdout (clean, for piping) - no markers
                         if (is_template_target && strcmp(instance->attributes[j].name.data, "content") == 0) {
@@ -822,11 +836,25 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                                 env->template_output_found = true;
                             }
                         }
-                        
-                        // Don't free attr_str - it's internal to attr_val
+
+                        // Store in catalog params if building catalog
+                        if (env->build_catalog && params) {
+                            params[j].name = puppet_strdup(instance->attributes[j].name.data);
+                            params[j].value = puppet_value_copy(attr_val);
+                        }
+
                         puppet_value_destroy(attr_val);
                     }
-                    
+
+                    // Add to resource catalog if building
+                    if (env->build_catalog && env->catalog) {
+                        puppet_catalog_add_resource(env->catalog,
+                                                    stmt->data.resource.type.data,
+                                                    title_str,
+                                                    params,
+                                                    param_count);
+                    }
+
                     puppet_free(resource_id);
                     puppet_value_destroy(title_val);
                 }
@@ -1174,9 +1202,24 @@ void puppet_env_set_execute_all_nodes(puppet_env_t *env, bool execute_all) {
 
 void puppet_env_set_template_output(puppet_env_t *env, const char *template_target) {
     if (!env) return;
-    
+
     puppet_free(env->template_output_target);
     env->template_output_target = template_target ? puppet_strdup(template_target) : NULL;
+}
+
+void puppet_env_enable_catalog(puppet_env_t *env, const char *certname, const char *environment) {
+    if (!env) return;
+
+    env->build_catalog = true;
+    env->catalog = puppet_catalog_create(certname, environment);
+}
+
+puppet_catalog_t *puppet_env_get_catalog(puppet_env_t *env) {
+    if (!env) return NULL;
+
+    puppet_catalog_t *catalog = env->catalog;
+    env->catalog = NULL;  /* Transfer ownership to caller */
+    return catalog;
 }
 
 void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t *env) {
@@ -1263,6 +1306,11 @@ void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t
     // Execute the class body
     puppet_debug("Executing class body for: %s", class_name);
     puppet_exec_stmt_list(&class_def->data.class_def.body, env);
+
+    // Add class to catalog if building
+    if (env->build_catalog && env->catalog) {
+        puppet_catalog_add_class(env->catalog, class_name);
+    }
 
     puppet_debug("Class %s instantiation complete", class_name);
     

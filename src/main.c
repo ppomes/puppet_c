@@ -21,6 +21,7 @@
 #include <getopt.h>
 #include <sys/stat.h>
 #include "puppet_ast.h"
+#include "puppet_catalog.h"
 #include "puppet_json.h"
 #include "puppet_interpreter.h"
 #include "puppet_loader.h"
@@ -42,6 +43,7 @@ static void print_usage(const char *program_name) {
     printf("Options:\n");
     printf("  -j, --json        Output AST as JSON\n");
     printf("  -e, --eval        Evaluate the manifest\n");
+    printf("  -c, --catalog     Output compiled catalog as JSON (implies -e)\n");
     printf("  -o, --output      Output file (default: stdout)\n");
     printf("  -m, --modules     Path to modules directory (default: ./modules)\n");
     printf("  -n, --node        Execute only the specified node\n");
@@ -65,6 +67,7 @@ int main(int argc, char *argv[]) {
     
     int json_output = 0;
     int eval_mode = 0;
+    int catalog_mode = 0;
     char *output_file = NULL;
     char *modules_path = NULL;
     char *node_name = NULL;
@@ -74,10 +77,11 @@ int main(int argc, char *argv[]) {
     char *hiera_datadir = NULL;
     int verbose = 0;
     int opt;
-    
+
     static struct option long_options[] = {
         {"json", no_argument, 0, 'j'},
         {"eval", no_argument, 0, 'e'},
+        {"catalog", no_argument, 0, 'c'},
         {"output", required_argument, 0, 'o'},
         {"modules", required_argument, 0, 'm'},
         {"node", required_argument, 0, 'n'},
@@ -90,13 +94,17 @@ int main(int argc, char *argv[]) {
         {0, 0, 0, 0}
     };
 
-    while ((opt = getopt_long(argc, argv, "jeo:m:n:af:t:D:vh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "jeco:m:n:af:t:D:vh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'j':
                 json_output = 1;
                 break;
             case 'e':
                 eval_mode = 1;
+                break;
+            case 'c':
+                catalog_mode = 1;
+                eval_mode = 1;  /* Catalog implies eval */
                 break;
             case 'o':
                 output_file = optarg;
@@ -284,6 +292,13 @@ int main(int argc, char *argv[]) {
                 if (verbose) fprintf(stderr, "Template output mode for resource title: %s\n", template_output);
             }
 
+            /* Enable catalog building if requested */
+            if (catalog_mode) {
+                const char *certname = node_name ? node_name : "localhost";
+                puppet_env_enable_catalog(env, certname, "production");
+                if (verbose) fprintf(stderr, "Building catalog for: %s\n", certname);
+            }
+
             /* Load facts if specified */
             if (facts_file) {
                 if (verbose) fprintf(stderr, "Loading facts from: %s\n", facts_file);
@@ -320,9 +335,38 @@ int main(int argc, char *argv[]) {
                     fprintf(stderr, "Catalog compilation failed\n");
                 }
                 puppet_env_destroy(env);
+                puppet_program_destroy(program);
+                if (loader) puppet_loader_destroy(loader);
                 return 1;  // Exit with failure
             }
-            
+
+            /* Output catalog if requested */
+            if (catalog_mode) {
+                puppet_catalog_t *catalog = puppet_env_get_catalog(env);
+                if (catalog) {
+                    char *json = puppet_catalog_to_json(catalog);
+                    if (json) {
+                        FILE *out = stdout;
+                        if (output_file) {
+                            out = fopen(output_file, "w");
+                            if (!out) {
+                                perror("fopen output");
+                                free(json);
+                                puppet_catalog_destroy(catalog);
+                                puppet_env_destroy(env);
+                                puppet_program_destroy(program);
+                                if (loader) puppet_loader_destroy(loader);
+                                return 1;
+                            }
+                        }
+                        fputs(json, out);
+                        if (output_file) fclose(out);
+                        free(json);
+                    }
+                    puppet_catalog_destroy(catalog);
+                }
+            }
+
             puppet_env_destroy(env);
         } else {
             if (verbose) {

@@ -9,6 +9,7 @@ CLEANFILES = $(BUILT_SOURCES)
 # Library sources (everything except main.c)
 libpuppetc_la_SOURCES = \
     puppet_ast.c \
+    puppet_catalog.c \
     puppet_interpreter.c \
     puppet_json.c \
     puppet_json_parser.c \
@@ -61,6 +62,7 @@ AM_CFLAGS += $(OPENSSL_CFLAGS)
 puppetcincludedir = $(includedir)/puppetc
 puppetcinclude_HEADERS = \
     $(top_srcdir)/include/puppet_ast.h \
+    $(top_srcdir)/include/puppet_catalog.h \
     $(top_srcdir)/include/puppet_interpreter.h \
     $(top_srcdir)/include/puppet_json.h \
     $(top_srcdir)/include/puppet_json_parser.h \
@@ -83,6 +85,7 @@ puppet.tab.c puppet.tab.h: puppet.y
 
 # Ensure proper build order
 puppet_ast.lo: puppet.tab.h
+puppet_catalog.lo: puppet.tab.h
 puppet_interpreter.lo: puppet.tab.h
 puppet_json.lo: puppet.tab.h
 puppet_loader.lo: puppet.tab.h
