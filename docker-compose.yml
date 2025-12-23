@@ -24,15 +24,16 @@ services:
       context: .
       target: agent
     image: puppetc-agent:latest
-    container_name: puppetc-agent
     depends_on:
       server:
         condition: service_healthy
+    environment:
+      - PUPPET_SERVER=http://server:8140
     networks:
       - puppet
     # Run agent once and exit
-    # Use -a to apply, -n for noop
-    command: ["-s", "http://server:8140", "-n"]
+    # Use: docker-compose run agent       (noop mode)
+    #      docker-compose run agent -a    (apply mode)
 
 networks:
   puppet:

@@ -468,10 +468,14 @@ static void print_usage(const char *prog) {
 }
 
 int main(int argc, char *argv[]) {
+    // Check environment variables for defaults
+    const char *env_server = getenv("PUPPET_SERVER");
+    const char *env_environment = getenv("PUPPET_ENVIRONMENT");
+
     agent_config_t config = {
-        .server_url = DEFAULT_SERVER,
+        .server_url = env_server ? env_server : DEFAULT_SERVER,
         .certname = NULL,
-        .environment = DEFAULT_ENVIRONMENT,
+        .environment = env_environment ? env_environment : DEFAULT_ENVIRONMENT,
         .verbose = false,
         .noop = false,
         .apply_catalog = false,
