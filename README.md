@@ -107,7 +107,7 @@ Run `./src/puppetc --help` for all options.
 
 ### Phases
 
-- [ ] **Phase 1**: Extract `libpuppetc.so` shared library from current code
+- [x] **Phase 1**: Extract `libpuppetc.so` shared library from current code
 - [ ] **Phase 2**: Define catalog JSON format, add catalog serialization
 - [ ] **Phase 3**: `puppetc-server` - HTTP API for catalog compilation
 - [ ] **Phase 4**: `libfacter_c` - Native fact collection library
