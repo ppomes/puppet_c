@@ -8,6 +8,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include "puppet_memory.h"
 #include <string.h>
 #include <stdbool.h>
 #include <getopt.h>
@@ -47,7 +48,7 @@ static size_t write_callback(void *contents, size_t size, size_t nmemb, void *us
     size_t realsize = size * nmemb;
     response_buffer_t *buf = (response_buffer_t *)userp;
 
-    char *ptr = realloc(buf->data, buf->size + realsize + 1);
+    char *ptr = puppet_realloc(buf->data, buf->size + realsize + 1);
     if (!ptr) {
         fprintf(stderr, "Error: Out of memory\n");
         return 0;
@@ -73,9 +74,9 @@ static char *build_catalog_request(const char *certname, const char *environment
      * Format: {"certname": "...", "environment": "...", "facts": {...}}
      */
     size_t buf_size = strlen(facts_json) + strlen(certname) + strlen(environment) + 256;
-    char *request = malloc(buf_size);
+    char *request = puppet_malloc(buf_size);
     if (!request) {
-        free(facts_json);
+        puppet_free(facts_json);
         return NULL;
     }
 
@@ -87,7 +88,7 @@ static char *build_catalog_request(const char *certname, const char *environment
              "}",
              certname, environment, facts_json);
 
-    free(facts_json);
+    puppet_free(facts_json);
     return request;
 }
 
@@ -159,7 +160,7 @@ static char *request_catalog(const char *server_url, const char *request_json,
     /* Cleanup */
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
-    free(response.data);
+    puppet_free(response.data);
 
     return result;
 }
@@ -202,7 +203,7 @@ static int check_server_status(const char *server_url, bool verbose) {
     }
 
     curl_easy_cleanup(curl);
-    free(response.data);
+    puppet_free(response.data);
 
     return result;
 }
@@ -332,9 +333,9 @@ static int run_agent(agent_config_t *config) {
             hostname = facter_get_string(facts, "hostname");
         }
         if (hostname) {
-            config->certname = strdup(hostname);
+            config->certname = puppet_strdup(hostname);
         } else {
-            config->certname = strdup("unknown");
+            config->certname = puppet_strdup("unknown");
         }
     }
 
@@ -350,7 +351,7 @@ static int run_agent(agent_config_t *config) {
         char *facts_text = facter_to_text(facts);
         if (facts_text) {
             printf("%s", facts_text);
-            free(facts_text);
+            puppet_free(facts_text);
         }
         facter_destroy(facts);
         return 0;
@@ -381,7 +382,7 @@ static int run_agent(agent_config_t *config) {
 
     /* Request catalog from server */
     char *catalog_json = request_catalog(config->server_url, request_json, config->verbose);
-    free(request_json);
+    puppet_free(request_json);
 
     if (!catalog_json) {
         fprintf(stderr, "Error: Failed to receive catalog from server\n");
@@ -436,7 +437,7 @@ static int run_agent(agent_config_t *config) {
         result = 0;
     }
 
-    free(catalog_json);
+    puppet_free(catalog_json);
     facter_destroy(facts);
 
     return result;
@@ -503,7 +504,7 @@ int main(int argc, char *argv[]) {
                 config.server_url = optarg;
                 break;
             case 'c':
-                config.certname = strdup(optarg);
+                config.certname = puppet_strdup(optarg);
                 break;
             case 'e':
                 config.environment = optarg;
@@ -540,7 +541,7 @@ int main(int argc, char *argv[]) {
     /* Cleanup */
     curl_global_cleanup();
     if (config.certname) {
-        free(config.certname);
+        puppet_free(config.certname);
     }
 
     return result;

@@ -43,16 +43,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy binaries
+# Copy binaries and libraries
 COPY --from=builder /build/server/.libs/puppetc-server /usr/bin/
 COPY --from=builder /build/src/.libs/libpuppetc.so.0.0.0 /usr/lib/
 COPY --from=builder /build/facter/.libs/libfacter_c.so.0.0.0 /usr/lib/
+COPY --from=builder /build/common/.libs/libpuppetc_common.so.0.0.0 /usr/lib/
 
 # Create symlinks
 RUN ln -s libpuppetc.so.0.0.0 /usr/lib/libpuppetc.so.0 && \
     ln -s libpuppetc.so.0 /usr/lib/libpuppetc.so && \
     ln -s libfacter_c.so.0.0.0 /usr/lib/libfacter_c.so.0 && \
     ln -s libfacter_c.so.0 /usr/lib/libfacter_c.so && \
+    ln -s libpuppetc_common.so.0.0.0 /usr/lib/libpuppetc_common.so.0 && \
+    ln -s libpuppetc_common.so.0 /usr/lib/libpuppetc_common.so && \
     ldconfig
 
 # Create puppet directories
@@ -73,13 +76,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy binaries
+# Copy binaries and libraries
 COPY --from=builder /build/agent/.libs/puppetc-agent /usr/bin/
 COPY --from=builder /build/facter/.libs/libfacter_c.so.0.0.0 /usr/lib/
+COPY --from=builder /build/common/.libs/libpuppetc_common.so.0.0.0 /usr/lib/
 
 # Create symlinks
 RUN ln -s libfacter_c.so.0.0.0 /usr/lib/libfacter_c.so.0 && \
     ln -s libfacter_c.so.0 /usr/lib/libfacter_c.so && \
+    ln -s libpuppetc_common.so.0.0.0 /usr/lib/libpuppetc_common.so.0 && \
+    ln -s libpuppetc_common.so.0 /usr/lib/libpuppetc_common.so && \
     ldconfig
 
 ENTRYPOINT ["puppetc-agent"]

@@ -111,7 +111,7 @@ static char *compile_catalog(const char *certname, const char *environment,
     if (manifest_path) {
         loader = puppet_loader_create(manifest_path);
         if (!loader) {
-            return strdup("{\"error\": \"Failed to create module loader\"}");
+            return puppet_strdup("{\"error\": \"Failed to create module loader\"}");
         }
 
         if (modules_path) {
@@ -124,7 +124,7 @@ static char *compile_catalog(const char *certname, const char *environment,
 
     if (!program) {
         if (loader) puppet_loader_destroy(loader);
-        return strdup("{\"error\": \"No manifest found\"}");
+        return puppet_strdup("{\"error\": \"No manifest found\"}");
     }
 
     /* Create environment */
@@ -162,7 +162,7 @@ static char *compile_catalog(const char *certname, const char *environment,
         snprintf(error_json, sizeof(error_json),
                  "{\"error\": \"Catalog compilation failed: %s\"}",
                  env->failure_message ? env->failure_message : "unknown error");
-        catalog_json = strdup(error_json);
+        catalog_json = puppet_strdup(error_json);
     } else {
         /* Get compiled catalog */
         puppet_catalog_t *catalog = puppet_env_get_catalog(env);
@@ -170,7 +170,7 @@ static char *compile_catalog(const char *certname, const char *environment,
             catalog_json = puppet_catalog_to_json(catalog);
             puppet_catalog_destroy(catalog);
         } else {
-            catalog_json = strdup("{\"error\": \"No catalog generated\"}");
+            catalog_json = puppet_strdup("{\"error\": \"No catalog generated\"}");
         }
     }
 
@@ -244,7 +244,7 @@ static enum MHD_Result handle_catalog(struct MHD_Connection *connection,
     }
 
     enum MHD_Result ret = send_json_response(connection, MHD_HTTP_OK, catalog_json);
-    free(catalog_json);
+    puppet_free(catalog_json);
 
     return ret;
 }
@@ -265,7 +265,7 @@ static enum MHD_Result request_handler(void *cls,
 
     /* Handle connection setup */
     if (*con_cls == NULL) {
-        struct connection_info *con_info = calloc(1, sizeof(struct connection_info));
+        struct connection_info *con_info = puppet_calloc(1, sizeof(struct connection_info));
         if (!con_info) return MHD_NO;
         *con_cls = con_info;
         return MHD_YES;
@@ -275,7 +275,7 @@ static enum MHD_Result request_handler(void *cls,
 
     /* Accumulate POST data */
     if (*upload_data_size > 0) {
-        char *new_data = realloc(con_info->post_data,
+        char *new_data = puppet_realloc(con_info->post_data,
                                   con_info->post_data_size + *upload_data_size + 1);
         if (!new_data) return MHD_NO;
 
@@ -324,8 +324,8 @@ static void request_completed(void *cls,
 
     struct connection_info *con_info = *con_cls;
     if (con_info) {
-        free(con_info->post_data);
-        free(con_info);
+        puppet_free(con_info->post_data);
+        puppet_free(con_info);
     }
     *con_cls = NULL;
 }

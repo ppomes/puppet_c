@@ -8,6 +8,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include "puppet_memory.h"
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -53,7 +54,7 @@ static char *read_file_contents(const char *path) {
         return NULL;
     }
 
-    char *content = malloc(size + 1);
+    char *content = puppet_malloc(size + 1);
     if (!content) {
         fclose(f);
         return NULL;
@@ -278,20 +279,20 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
                 if (strcmp(current, content) != 0) {
                     if (ctx->noop) {
                         printf("  Would update content: %s\n", path);
-                        free(current);
+                        puppet_free(current);
                         return APPLY_SKIPPED;
                     }
 
                     if (write_file_contents(path, content) != 0) {
                         apply_context_set_error(ctx, "Failed to update file %s: %s",
                                                path, strerror(errno));
-                        free(current);
+                        puppet_free(current);
                         return APPLY_FAILED;
                     }
                     printf("  Updated content: %s\n", path);
                     changed = true;
                 }
-                free(current);
+                puppet_free(current);
             }
         }
 
@@ -307,23 +308,23 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
             if (!current || strcmp(current, source_content) != 0) {
                 if (ctx->noop) {
                     printf("  Would copy from: %s\n", source);
-                    free(source_content);
-                    free(current);
+                    puppet_free(source_content);
+                    puppet_free(current);
                     return APPLY_SKIPPED;
                 }
 
                 if (write_file_contents(path, source_content) != 0) {
                     apply_context_set_error(ctx, "Failed to copy to %s: %s",
                                            path, strerror(errno));
-                    free(source_content);
-                    free(current);
+                    puppet_free(source_content);
+                    puppet_free(current);
                     return APPLY_FAILED;
                 }
                 printf("  Copied from: %s\n", source);
                 changed = true;
             }
-            free(source_content);
-            free(current);
+            puppet_free(source_content);
+            puppet_free(current);
         }
     }
 

@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include "puppet_memory.h"
 #include <string.h>
 #include <stdarg.h>
 
@@ -109,16 +110,16 @@ const provider_t *provider_get(const char *resource_type) {
  * ============================================================================ */
 
 resource_t *resource_create(const char *type, const char *title) {
-    resource_t *r = calloc(1, sizeof(resource_t));
+    resource_t *r = puppet_calloc(1, sizeof(resource_t));
     if (!r) return NULL;
 
-    r->type = strdup(type);
-    r->title = strdup(title);
+    r->type = puppet_strdup(type);
+    r->title = puppet_strdup(title);
 
     if (!r->type || !r->title) {
-        free(r->type);
-        free(r->title);
-        free(r);
+        puppet_free(r->type);
+        puppet_free(r->title);
+        puppet_free(r);
         return NULL;
     }
 
@@ -128,13 +129,13 @@ resource_t *resource_create(const char *type, const char *title) {
 int resource_add_param(resource_t *resource, const char *name, const char *value) {
     if (!resource || !name) return -1;
 
-    resource_param_t *new_params = realloc(resource->params,
+    resource_param_t *new_params = puppet_realloc(resource->params,
                                            (resource->param_count + 1) * sizeof(resource_param_t));
     if (!new_params) return -1;
 
     resource->params = new_params;
-    resource->params[resource->param_count].name = strdup(name);
-    resource->params[resource->param_count].value = value ? strdup(value) : NULL;
+    resource->params[resource->param_count].name = puppet_strdup(name);
+    resource->params[resource->param_count].value = value ? puppet_strdup(value) : NULL;
     resource->param_count++;
 
     return 0;
@@ -155,15 +156,15 @@ const char *resource_get_param(const resource_t *resource, const char *name) {
 void resource_free(resource_t *resource) {
     if (!resource) return;
 
-    free(resource->type);
-    free(resource->title);
+    puppet_free(resource->type);
+    puppet_free(resource->title);
 
     for (size_t i = 0; i < resource->param_count; i++) {
-        free(resource->params[i].name);
-        free(resource->params[i].value);
+        puppet_free(resource->params[i].name);
+        puppet_free(resource->params[i].value);
     }
-    free(resource->params);
-    free(resource);
+    puppet_free(resource->params);
+    puppet_free(resource);
 }
 
 /* ============================================================================
@@ -171,7 +172,7 @@ void resource_free(resource_t *resource) {
  * ============================================================================ */
 
 apply_context_t *apply_context_create(os_family_t os_family, bool noop, bool verbose) {
-    apply_context_t *ctx = calloc(1, sizeof(apply_context_t));
+    apply_context_t *ctx = puppet_calloc(1, sizeof(apply_context_t));
     if (!ctx) return NULL;
 
     ctx->os_family = os_family;
@@ -183,21 +184,21 @@ apply_context_t *apply_context_create(os_family_t os_family, bool noop, bool ver
 
 void apply_context_free(apply_context_t *ctx) {
     if (!ctx) return;
-    free(ctx->last_error);
-    free(ctx);
+    puppet_free(ctx->last_error);
+    puppet_free(ctx);
 }
 
 void apply_context_set_error(apply_context_t *ctx, const char *fmt, ...) {
     if (!ctx) return;
 
-    free(ctx->last_error);
+    puppet_free(ctx->last_error);
 
     va_list args;
     va_start(args, fmt);
 
     char buf[1024];
     vsnprintf(buf, sizeof(buf), fmt, args);
-    ctx->last_error = strdup(buf);
+    ctx->last_error = puppet_strdup(buf);
 
     va_end(args);
 }
@@ -262,7 +263,7 @@ static char *json_extract_string(const char *json, const char *key) {
     if (!end) return NULL;
 
     size_t len = end - start;
-    char *result = malloc(len + 1);
+    char *result = puppet_malloc(len + 1);
     if (!result) return NULL;
 
     memcpy(result, start, len);
@@ -278,14 +279,14 @@ static resource_t *parse_resource_json(const char *json_start, const char **json
     char *title = json_extract_string(json_start, "title");
 
     if (!type || !title) {
-        free(type);
-        free(title);
+        puppet_free(type);
+        puppet_free(title);
         return NULL;
     }
 
     resource_t *resource = resource_create(type, title);
-    free(type);
-    free(title);
+    puppet_free(type);
+    puppet_free(title);
 
     if (!resource) return NULL;
 
@@ -312,7 +313,7 @@ static resource_t *parse_resource_json(const char *json_start, const char **json
                 if (!*p) break;
 
                 size_t key_len = p - key_start;
-                char *key = malloc(key_len + 1);
+                char *key = puppet_malloc(key_len + 1);
                 if (!key) break;
                 memcpy(key, key_start, key_len);
                 key[key_len] = '\0';
@@ -321,7 +322,7 @@ static resource_t *parse_resource_json(const char *json_start, const char **json
 
                 /* Find colon */
                 while (*p && *p != ':') p++;
-                if (!*p) { free(key); break; }
+                if (!*p) { puppet_free(key); break; }
                 p++;
 
                 /* Skip whitespace */
@@ -337,7 +338,7 @@ static resource_t *parse_resource_json(const char *json_start, const char **json
                         p++;
                     }
                     size_t val_len = p - val_start;
-                    value = malloc(val_len + 1);
+                    value = puppet_malloc(val_len + 1);
                     if (value) {
                         memcpy(value, val_start, val_len);
                         value[val_len] = '\0';
@@ -346,10 +347,10 @@ static resource_t *parse_resource_json(const char *json_start, const char **json
                 } else if (*p == 't' || *p == 'f') {
                     /* Boolean */
                     if (strncmp(p, "true", 4) == 0) {
-                        value = strdup("true");
+                        value = puppet_strdup("true");
                         p += 4;
                     } else if (strncmp(p, "false", 5) == 0) {
-                        value = strdup("false");
+                        value = puppet_strdup("false");
                         p += 5;
                     }
                 } else if (*p == '-' || (*p >= '0' && *p <= '9')) {
@@ -357,7 +358,7 @@ static resource_t *parse_resource_json(const char *json_start, const char **json
                     const char *num_start = p;
                     while (*p && (*p == '-' || *p == '.' || (*p >= '0' && *p <= '9'))) p++;
                     size_t num_len = p - num_start;
-                    value = malloc(num_len + 1);
+                    value = puppet_malloc(num_len + 1);
                     if (value) {
                         memcpy(value, num_start, num_len);
                         value[num_len] = '\0';
@@ -366,9 +367,9 @@ static resource_t *parse_resource_json(const char *json_start, const char **json
 
                 if (value) {
                     resource_add_param(resource, key, value);
-                    free(value);
+                    puppet_free(value);
                 }
-                free(key);
+                puppet_free(key);
             }
         }
     }

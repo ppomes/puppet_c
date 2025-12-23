@@ -9,6 +9,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include "puppet_memory.h"
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
@@ -76,7 +77,7 @@ static char *apt_get_version(const char *package) {
         /* Remove trailing newline */
         char *nl = strchr(output, '\n');
         if (nl) *nl = '\0';
-        return strdup(output);
+        return puppet_strdup(output);
     }
     return NULL;
 }
@@ -151,7 +152,7 @@ static apply_result_t apt_apply(const resource_t *resource, apply_context_t *ctx
                 if (strcmp(current_version, ensure) != 0) {
                     need_install = true;  /* Different version needed */
                 }
-                free(current_version);
+                puppet_free(current_version);
             }
         } else {
             need_install = true;
@@ -217,7 +218,7 @@ static char *dnf_get_version(const char *package) {
     if (run_command(cmd, output, sizeof(output)) == 0 && output[0]) {
         char *nl = strchr(output, '\n');
         if (nl) *nl = '\0';
-        return strdup(output);
+        return puppet_strdup(output);
     }
     return NULL;
 }
@@ -287,7 +288,7 @@ static apply_result_t dnf_apply(const resource_t *resource, apply_context_t *ctx
                 if (strcmp(current_version, ensure) != 0) {
                     need_install = true;
                 }
-                free(current_version);
+                puppet_free(current_version);
             }
         } else {
             need_install = true;

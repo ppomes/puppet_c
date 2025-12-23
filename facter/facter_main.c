@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include "puppet_memory.h"
 #include <string.h>
 #include <getopt.h>
 
@@ -151,7 +152,7 @@ int main(int argc, char *argv[]) {
 
     if (output) {
         printf("%s", output);
-        free(output);
+        puppet_free(output);
     }
 
     facter_destroy(ctx);

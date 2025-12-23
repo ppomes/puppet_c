@@ -14,7 +14,6 @@ libpuppetc_la_SOURCES = \
     puppet_json.c \
     puppet_json_parser.c \
     puppet_loader.c \
-    puppet_memory.c \
     puppet_stdlib.c \
     puppet_hiera.c \
     $(BUILT_SOURCES)
@@ -30,14 +29,14 @@ libpuppetc_la_LDFLAGS = -version-info 0:0:0
 
 # Library dependencies
 if HAVE_RUBY
-libpuppetc_la_LIBADD = $(RUBY_LIBS) -lm -lpthread $(YAML_LIBS) $(OPENSSL_LIBS)
+libpuppetc_la_LIBADD = $(top_builddir)/common/libpuppetc_common.la $(RUBY_LIBS) -lm -lpthread $(YAML_LIBS) $(OPENSSL_LIBS)
 else
-libpuppetc_la_LIBADD = -lpthread $(YAML_LIBS) $(OPENSSL_LIBS)
+libpuppetc_la_LIBADD = $(top_builddir)/common/libpuppetc_common.la -lpthread $(YAML_LIBS) $(OPENSSL_LIBS)
 endif
 
 # Binary sources (just main.c, links against library)
 puppetc_SOURCES = main.c
-puppetc_LDADD = libpuppetc.la
+puppetc_LDADD = libpuppetc.la $(top_builddir)/common/libpuppetc_common.la
 
 # Include directories
 AM_CPPFLAGS = -I$(top_srcdir)/include
@@ -67,7 +66,6 @@ puppetcinclude_HEADERS = \
     $(top_srcdir)/include/puppet_json.h \
     $(top_srcdir)/include/puppet_json_parser.h \
     $(top_srcdir)/include/puppet_loader.h \
-    $(top_srcdir)/include/puppet_memory.h \
     $(top_srcdir)/include/puppet_stdlib.h \
     $(top_srcdir)/include/puppet_hiera.h
 

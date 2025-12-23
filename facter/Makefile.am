@@ -12,6 +12,9 @@ AM_CFLAGS = -Wall -Wextra -g
 # Library versioning (current:revision:age)
 libfacter_c_la_LDFLAGS = -version-info 0:0:0
 
+# Library dependencies
+libfacter_c_la_LIBADD = $(top_builddir)/common/libpuppetc_common.la
+
 # Also build a standalone facter command
 bin_PROGRAMS = facter_c
 

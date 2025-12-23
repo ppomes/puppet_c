@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include "puppet_memory.h"
 #include <string.h>
 #include <stdbool.h>
 #include <unistd.h>
@@ -50,7 +51,7 @@ struct facter_ctx {
  * ============================================================================ */
 
 static char *safe_strdup(const char *s) {
-    return s ? strdup(s) : NULL;
+    return s ? puppet_strdup(s) : NULL;
 }
 
 static char *trim_string(char *str) {
@@ -79,7 +80,7 @@ static char *read_file_line(const char *path) {
     fclose(f);
 
     if (read <= 0) {
-        free(line);
+        puppet_free(line);
         return NULL;
     }
 
@@ -104,7 +105,7 @@ static char *read_file_contents(const char *path) {
         return NULL;
     }
 
-    char *content = malloc(size + 1);
+    char *content = puppet_malloc(size + 1);
     if (!content) {
         fclose(f);
         return NULL;
@@ -122,7 +123,7 @@ static char *read_file_contents(const char *path) {
  * ============================================================================ */
 
 facter_value_t *facter_value_string(const char *str) {
-    facter_value_t *v = calloc(1, sizeof(facter_value_t));
+    facter_value_t *v = puppet_calloc(1, sizeof(facter_value_t));
     if (!v) return NULL;
     v->type = FACTER_VALUE_STRING;
     v->data.string_val = safe_strdup(str);
@@ -130,7 +131,7 @@ facter_value_t *facter_value_string(const char *str) {
 }
 
 facter_value_t *facter_value_integer(long val) {
-    facter_value_t *v = calloc(1, sizeof(facter_value_t));
+    facter_value_t *v = puppet_calloc(1, sizeof(facter_value_t));
     if (!v) return NULL;
     v->type = FACTER_VALUE_INTEGER;
     v->data.integer_val = val;
@@ -138,7 +139,7 @@ facter_value_t *facter_value_integer(long val) {
 }
 
 facter_value_t *facter_value_boolean(bool val) {
-    facter_value_t *v = calloc(1, sizeof(facter_value_t));
+    facter_value_t *v = puppet_calloc(1, sizeof(facter_value_t));
     if (!v) return NULL;
     v->type = FACTER_VALUE_BOOLEAN;
     v->data.boolean_val = val;
@@ -146,7 +147,7 @@ facter_value_t *facter_value_boolean(bool val) {
 }
 
 static facter_value_t *facter_value_float(double val) {
-    facter_value_t *v = calloc(1, sizeof(facter_value_t));
+    facter_value_t *v = puppet_calloc(1, sizeof(facter_value_t));
     if (!v) return NULL;
     v->type = FACTER_VALUE_FLOAT;
     v->data.float_val = val;
@@ -158,26 +159,26 @@ void facter_value_free(facter_value_t *value) {
 
     switch (value->type) {
         case FACTER_VALUE_STRING:
-            free(value->data.string_val);
+            puppet_free(value->data.string_val);
             break;
         case FACTER_VALUE_ARRAY:
             for (size_t i = 0; i < value->data.array_val.count; i++) {
                 facter_value_free(value->data.array_val.items[i]);
             }
-            free(value->data.array_val.items);
+            puppet_free(value->data.array_val.items);
             break;
         case FACTER_VALUE_HASH:
             for (size_t i = 0; i < value->data.hash_val.count; i++) {
-                free(value->data.hash_val.keys[i]);
+                puppet_free(value->data.hash_val.keys[i]);
                 facter_value_free(value->data.hash_val.values[i]);
             }
-            free(value->data.hash_val.keys);
-            free(value->data.hash_val.values);
+            puppet_free(value->data.hash_val.keys);
+            puppet_free(value->data.hash_val.values);
             break;
         default:
             break;
     }
-    free(value);
+    puppet_free(value);
 }
 
 /* ============================================================================
@@ -185,7 +186,7 @@ void facter_value_free(facter_value_t *value) {
  * ============================================================================ */
 
 facter_ctx_t *facter_create(void) {
-    facter_ctx_t *ctx = calloc(1, sizeof(facter_ctx_t));
+    facter_ctx_t *ctx = puppet_calloc(1, sizeof(facter_ctx_t));
     return ctx;
 }
 
@@ -195,7 +196,7 @@ void facter_destroy(facter_ctx_t *ctx) {
     for (size_t i = 0; i < ctx->fact_count; i++) {
         facter_value_free(ctx->facts[i].value);
     }
-    free(ctx);
+    puppet_free(ctx);
 }
 
 static int facter_set(facter_ctx_t *ctx, const char *name, facter_value_t *value) {
@@ -243,7 +244,7 @@ char *facter_hostname(void) {
         /* Remove domain part if present */
         char *dot = strchr(hostname, '.');
         if (dot) *dot = '\0';
-        return strdup(hostname);
+        return puppet_strdup(hostname);
     }
     return NULL;
 }
@@ -261,12 +262,12 @@ char *facter_fqdn(void) {
     hints.ai_flags = AI_CANONNAME;
 
     if (getaddrinfo(hostname, NULL, &hints, &info) == 0 && info) {
-        char *fqdn = strdup(info->ai_canonname ? info->ai_canonname : hostname);
+        char *fqdn = puppet_strdup(info->ai_canonname ? info->ai_canonname : hostname);
         freeaddrinfo(info);
         return fqdn;
     }
 
-    return strdup(hostname);
+    return puppet_strdup(hostname);
 }
 
 char *facter_domain(void) {
@@ -275,19 +276,19 @@ char *facter_domain(void) {
 
     char *dot = strchr(fqdn, '.');
     if (dot && *(dot + 1)) {
-        char *domain = strdup(dot + 1);
-        free(fqdn);
+        char *domain = puppet_strdup(dot + 1);
+        puppet_free(fqdn);
         return domain;
     }
 
-    free(fqdn);
+    puppet_free(fqdn);
     return NULL;
 }
 
 char *facter_kernel(void) {
     struct utsname buf;
     if (uname(&buf) == 0) {
-        return strdup(buf.sysname);
+        return puppet_strdup(buf.sysname);
     }
     return NULL;
 }
@@ -296,7 +297,7 @@ char *facter_kernelversion(void) {
     struct utsname buf;
     if (uname(&buf) == 0) {
         /* Extract major.minor from release */
-        char *version = strdup(buf.release);
+        char *version = puppet_strdup(buf.release);
         if (version) {
             char *p = version;
             int dots = 0;
@@ -319,7 +320,7 @@ char *facter_kernelversion(void) {
 char *facter_kernelrelease(void) {
     struct utsname buf;
     if (uname(&buf) == 0) {
-        return strdup(buf.release);
+        return puppet_strdup(buf.release);
     }
     return NULL;
 }
@@ -327,7 +328,7 @@ char *facter_kernelrelease(void) {
 char *facter_architecture(void) {
     struct utsname buf;
     if (uname(&buf) == 0) {
-        return strdup(buf.machine);
+        return puppet_strdup(buf.machine);
     }
     return NULL;
 }
@@ -344,22 +345,22 @@ char *facter_os_name(void) {
                 if (*name == '"') name++;
                 char *end = name + strlen(name) - 1;
                 if (*end == '"') *end = '\0';
-                char *result = strdup(name);
-                free(content);
+                char *result = puppet_strdup(name);
+                puppet_free(content);
                 return result;
             }
             line = strtok(NULL, "\n");
         }
-        free(content);
+        puppet_free(content);
     }
 
     /* Fallback to uname */
     struct utsname buf;
     if (uname(&buf) == 0) {
-        return strdup(buf.sysname);
+        return puppet_strdup(buf.sysname);
     }
 
-    return strdup("Linux");
+    return puppet_strdup("Linux");
 }
 
 char *facter_os_family(void) {
@@ -384,36 +385,36 @@ char *facter_os_family(void) {
         if (family) {
             /* Map to Puppet OS families */
             if (strstr(family, "debian") || strstr(family, "ubuntu")) {
-                free(content);
-                return strdup("Debian");
+                puppet_free(content);
+                return puppet_strdup("Debian");
             } else if (strstr(family, "rhel") || strstr(family, "fedora") ||
                        strstr(family, "centos") || strstr(family, "redhat")) {
-                free(content);
-                return strdup("RedHat");
+                puppet_free(content);
+                return puppet_strdup("RedHat");
             } else if (strstr(family, "suse") || strstr(family, "opensuse")) {
-                free(content);
-                return strdup("Suse");
+                puppet_free(content);
+                return puppet_strdup("Suse");
             } else if (strstr(family, "arch")) {
-                free(content);
-                return strdup("Archlinux");
+                puppet_free(content);
+                return puppet_strdup("Archlinux");
             } else if (strstr(family, "gentoo")) {
-                free(content);
-                return strdup("Gentoo");
+                puppet_free(content);
+                return puppet_strdup("Gentoo");
             }
         }
-        free(content);
+        puppet_free(content);
     }
 
     /* Check for specific distro files */
     if (access("/etc/debian_version", F_OK) == 0) {
-        return strdup("Debian");
+        return puppet_strdup("Debian");
     } else if (access("/etc/redhat-release", F_OK) == 0) {
-        return strdup("RedHat");
+        return puppet_strdup("RedHat");
     } else if (access("/etc/SuSE-release", F_OK) == 0) {
-        return strdup("Suse");
+        return puppet_strdup("Suse");
     }
 
-    return strdup("Linux");
+    return puppet_strdup("Linux");
 }
 
 char *facter_os_release(void) {
@@ -426,13 +427,13 @@ char *facter_os_release(void) {
                 if (*version == '"') version++;
                 char *end = version + strlen(version) - 1;
                 if (*end == '"') *end = '\0';
-                char *result = strdup(version);
-                free(content);
+                char *result = puppet_strdup(version);
+                puppet_free(content);
                 return result;
             }
             line = strtok(NULL, "\n");
         }
-        free(content);
+        puppet_free(content);
     }
 
     return NULL;
@@ -479,14 +480,14 @@ bool facter_is_virtual(void) {
                           strstr(product, "KVM") != NULL ||
                           strstr(product, "Bochs") != NULL ||
                           strstr(product, "HVM") != NULL);
-        free(product);
+        puppet_free(product);
         if (is_virtual) return true;
     }
 
     /* Check /sys/hypervisor/type */
     char *hypervisor = read_file_line("/sys/hypervisor/type");
     if (hypervisor) {
-        free(hypervisor);
+        puppet_free(hypervisor);
         return true;
     }
 
@@ -501,7 +502,7 @@ bool facter_is_virtual(void) {
         bool is_container = (strstr(cgroup, "docker") != NULL ||
                             strstr(cgroup, "lxc") != NULL ||
                             strstr(cgroup, "kubepods") != NULL);
-        free(cgroup);
+        puppet_free(cgroup);
         if (is_container) return true;
     }
 
@@ -513,54 +514,54 @@ char *facter_virtual(void) {
     char *product = read_file_line("/sys/class/dmi/id/product_name");
     if (product) {
         if (strstr(product, "VirtualBox")) {
-            free(product);
-            return strdup("virtualbox");
+            puppet_free(product);
+            return puppet_strdup("virtualbox");
         } else if (strstr(product, "VMware")) {
-            free(product);
-            return strdup("vmware");
+            puppet_free(product);
+            return puppet_strdup("vmware");
         } else if (strstr(product, "QEMU") || strstr(product, "KVM")) {
-            free(product);
-            return strdup("kvm");
+            puppet_free(product);
+            return puppet_strdup("kvm");
         } else if (strstr(product, "Bochs")) {
-            free(product);
-            return strdup("bochs");
+            puppet_free(product);
+            return puppet_strdup("bochs");
         } else if (strstr(product, "Xen") || strstr(product, "HVM")) {
-            free(product);
-            return strdup("xen");
+            puppet_free(product);
+            return puppet_strdup("xen");
         }
-        free(product);
+        puppet_free(product);
     }
 
     /* Check /sys/hypervisor/type */
     char *hypervisor = read_file_line("/sys/hypervisor/type");
     if (hypervisor) {
-        char *result = strdup(trim_string(hypervisor));
-        free(hypervisor);
+        char *result = puppet_strdup(trim_string(hypervisor));
+        puppet_free(hypervisor);
         return result;
     }
 
     /* Check for Docker */
     if (access("/.dockerenv", F_OK) == 0) {
-        return strdup("docker");
+        return puppet_strdup("docker");
     }
 
     /* Check cgroup for container */
     char *cgroup = read_file_contents("/proc/1/cgroup");
     if (cgroup) {
         if (strstr(cgroup, "docker")) {
-            free(cgroup);
-            return strdup("docker");
+            puppet_free(cgroup);
+            return puppet_strdup("docker");
         } else if (strstr(cgroup, "lxc")) {
-            free(cgroup);
-            return strdup("lxc");
+            puppet_free(cgroup);
+            return puppet_strdup("lxc");
         } else if (strstr(cgroup, "kubepods")) {
-            free(cgroup);
-            return strdup("docker");
+            puppet_free(cgroup);
+            return puppet_strdup("docker");
         }
-        free(cgroup);
+        puppet_free(cgroup);
     }
 
-    return strdup("physical");
+    return puppet_strdup("physical");
 }
 
 char *facter_ipaddress(void) {
@@ -588,7 +589,7 @@ char *facter_ipaddress(void) {
         /* Skip link-local addresses */
         if (strncmp(ip, "169.254.", 8) == 0) continue;
 
-        result = strdup(ip);
+        result = puppet_strdup(ip);
         break;
     }
 
@@ -621,7 +622,7 @@ char *facter_macaddress(void) {
             result = mac;
             break;
         }
-        free(mac);
+        puppet_free(mac);
     }
 
     freeifaddrs(ifaddr);
@@ -659,7 +660,7 @@ facter_interface_t *facter_interfaces(size_t *count) {
         }
     }
 
-    interfaces = calloc(seen_count, sizeof(facter_interface_t));
+    interfaces = puppet_calloc(seen_count, sizeof(facter_interface_t));
     if (!interfaces) {
         freeifaddrs(ifaddr);
         return NULL;
@@ -667,7 +668,7 @@ facter_interface_t *facter_interfaces(size_t *count) {
 
     /* Fill in interface details */
     for (size_t i = 0; i < seen_count; i++) {
-        interfaces[iface_count].name = strdup(seen[i]);
+        interfaces[iface_count].name = puppet_strdup(seen[i]);
 
         /* Get MAC address */
         char path[256];
@@ -679,7 +680,7 @@ facter_interface_t *facter_interfaces(size_t *count) {
         char *mtu_str = read_file_line(path);
         if (mtu_str) {
             interfaces[iface_count].mtu = atoi(mtu_str);
-            free(mtu_str);
+            puppet_free(mtu_str);
         }
 
         /* Get UP status and addresses from ifaddrs */
@@ -692,20 +693,20 @@ facter_interface_t *facter_interfaces(size_t *count) {
                 struct sockaddr_in *addr = (struct sockaddr_in *)ifa->ifa_addr;
                 char ip[INET_ADDRSTRLEN];
                 inet_ntop(AF_INET, &addr->sin_addr, ip, sizeof(ip));
-                interfaces[iface_count].ip = strdup(ip);
+                interfaces[iface_count].ip = puppet_strdup(ip);
 
                 if (ifa->ifa_netmask) {
                     struct sockaddr_in *mask = (struct sockaddr_in *)ifa->ifa_netmask;
                     char netmask[INET_ADDRSTRLEN];
                     inet_ntop(AF_INET, &mask->sin_addr, netmask, sizeof(netmask));
-                    interfaces[iface_count].netmask = strdup(netmask);
+                    interfaces[iface_count].netmask = puppet_strdup(netmask);
                 }
             } else if (ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_INET6) {
                 struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)ifa->ifa_addr;
                 char ip6[INET6_ADDRSTRLEN];
                 inet_ntop(AF_INET6, &addr6->sin6_addr, ip6, sizeof(ip6));
                 if (!interfaces[iface_count].ip6) {
-                    interfaces[iface_count].ip6 = strdup(ip6);
+                    interfaces[iface_count].ip6 = puppet_strdup(ip6);
                 }
             }
         }
@@ -722,13 +723,13 @@ void facter_interfaces_free(facter_interface_t *interfaces, size_t count) {
     if (!interfaces) return;
 
     for (size_t i = 0; i < count; i++) {
-        free(interfaces[i].name);
-        free(interfaces[i].ip);
-        free(interfaces[i].ip6);
-        free(interfaces[i].mac);
-        free(interfaces[i].netmask);
+        puppet_free(interfaces[i].name);
+        puppet_free(interfaces[i].ip);
+        puppet_free(interfaces[i].ip6);
+        puppet_free(interfaces[i].mac);
+        puppet_free(interfaces[i].netmask);
     }
-    free(interfaces);
+    puppet_free(interfaces);
 }
 
 /* ============================================================================
@@ -739,19 +740,19 @@ static void collect_system_facts(facter_ctx_t *ctx) {
     char *hostname = facter_hostname();
     if (hostname) {
         facter_set_string(ctx, "hostname", hostname);
-        free(hostname);
+        puppet_free(hostname);
     }
 
     char *fqdn = facter_fqdn();
     if (fqdn) {
         facter_set_string(ctx, "fqdn", fqdn);
-        free(fqdn);
+        puppet_free(fqdn);
     }
 
     char *domain = facter_domain();
     if (domain) {
         facter_set_string(ctx, "domain", domain);
-        free(domain);
+        puppet_free(domain);
     }
 
     facter_set_integer(ctx, "uptime_seconds", facter_uptime_seconds());
@@ -765,19 +766,19 @@ static void collect_kernel_facts(facter_ctx_t *ctx) {
     char *kernel = facter_kernel();
     if (kernel) {
         facter_set_string(ctx, "kernel", kernel);
-        free(kernel);
+        puppet_free(kernel);
     }
 
     char *kernelrelease = facter_kernelrelease();
     if (kernelrelease) {
         facter_set_string(ctx, "kernelrelease", kernelrelease);
-        free(kernelrelease);
+        puppet_free(kernelrelease);
     }
 
     char *kernelversion = facter_kernelversion();
     if (kernelversion) {
         facter_set_string(ctx, "kernelversion", kernelversion);
-        free(kernelversion);
+        puppet_free(kernelversion);
     }
 }
 
@@ -786,14 +787,14 @@ static void collect_os_facts(facter_ctx_t *ctx) {
     if (os_name) {
         facter_set_string(ctx, "operatingsystem", os_name);
         facter_set_string(ctx, "os.name", os_name);
-        free(os_name);
+        puppet_free(os_name);
     }
 
     char *os_family = facter_os_family();
     if (os_family) {
         facter_set_string(ctx, "osfamily", os_family);
         facter_set_string(ctx, "os.family", os_family);
-        free(os_family);
+        puppet_free(os_family);
     }
 
     char *os_release = facter_os_release();
@@ -802,13 +803,13 @@ static void collect_os_facts(facter_ctx_t *ctx) {
         facter_set_string(ctx, "os.release.full", os_release);
 
         /* Extract major version */
-        char *major = strdup(os_release);
+        char *major = puppet_strdup(os_release);
         char *dot = strchr(major, '.');
         if (dot) *dot = '\0';
         facter_set_string(ctx, "os.release.major", major);
-        free(major);
+        puppet_free(major);
 
-        free(os_release);
+        puppet_free(os_release);
     }
 
     char *arch = facter_architecture();
@@ -819,7 +820,7 @@ static void collect_os_facts(facter_ctx_t *ctx) {
         /* Hardware model */
         facter_set_string(ctx, "hardwaremodel", arch);
 
-        free(arch);
+        puppet_free(arch);
     }
 }
 
@@ -863,7 +864,7 @@ static void collect_processor_facts(facter_ctx_t *ctx) {
             }
             line = strtok(NULL, "\n");
         }
-        free(cpuinfo);
+        puppet_free(cpuinfo);
     }
 }
 
@@ -872,14 +873,14 @@ static void collect_network_facts(facter_ctx_t *ctx) {
     if (ip) {
         facter_set_string(ctx, "ipaddress", ip);
         facter_set_string(ctx, "networking.ip", ip);
-        free(ip);
+        puppet_free(ip);
     }
 
     char *mac = facter_macaddress();
     if (mac) {
         facter_set_string(ctx, "macaddress", mac);
         facter_set_string(ctx, "networking.mac", mac);
-        free(mac);
+        puppet_free(mac);
     }
 
     /* Collect interface details */
@@ -915,7 +916,7 @@ static void collect_virtual_facts(facter_ctx_t *ctx) {
     char *virtual = facter_virtual();
     if (virtual) {
         facter_set_string(ctx, "virtual", virtual);
-        free(virtual);
+        puppet_free(virtual);
     }
 }
 
@@ -1032,7 +1033,7 @@ char *facter_to_json(facter_ctx_t *ctx) {
     if (!ctx) return NULL;
 
     size_t buf_size = 16384;
-    char *buf = malloc(buf_size);
+    char *buf = puppet_malloc(buf_size);
     if (!buf) return NULL;
 
     size_t pos = 0;
@@ -1082,7 +1083,7 @@ char *facter_to_yaml(facter_ctx_t *ctx) {
     if (!ctx) return NULL;
 
     size_t buf_size = 16384;
-    char *buf = malloc(buf_size);
+    char *buf = puppet_malloc(buf_size);
     if (!buf) return NULL;
 
     size_t pos = 0;
@@ -1121,7 +1122,7 @@ char *facter_to_text(facter_ctx_t *ctx) {
     if (!ctx) return NULL;
 
     size_t buf_size = 16384;
-    char *buf = malloc(buf_size);
+    char *buf = puppet_malloc(buf_size);
     if (!buf) return NULL;
 
     size_t pos = 0;

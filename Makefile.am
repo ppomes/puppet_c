@@ -1,7 +1,7 @@
-SUBDIRS = src facter server agent tests
+SUBDIRS = common src facter server agent tests
 
 # Additional files to distribute
-EXTRA_DIST = README.md docs/ERB_ARCHITECTURE.md docs/CODE_DOCUMENTATION.md README_MODULES.md
+EXTRA_DIST = README.md
 
 # Clean up generated files
 MAINTAINERCLEANFILES = \

@@ -3,8 +3,8 @@ bin_PROGRAMS = puppetc-server
 
 puppetc_server_SOURCES = puppetc_server.c
 
-# Link against libpuppetc from src/
-puppetc_server_LDADD = $(top_builddir)/src/libpuppetc.la $(MHD_LIBS) $(YAML_LIBS) $(OPENSSL_LIBS)
+# Link against libpuppetc and libpuppetc_common
+puppetc_server_LDADD = $(top_builddir)/src/libpuppetc.la $(top_builddir)/common/libpuppetc_common.la $(MHD_LIBS) $(YAML_LIBS) $(OPENSSL_LIBS)
 
 # Include directories
 AM_CPPFLAGS = -I$(top_srcdir)/include $(MHD_CFLAGS)

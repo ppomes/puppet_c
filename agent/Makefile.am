@@ -9,8 +9,8 @@ puppetc_agent_SOURCES = \
 	provider_service.c \
 	provider_notify.c
 
-# Link against libfacter_c and libcurl
-puppetc_agent_LDADD = $(top_builddir)/facter/libfacter_c.la $(CURL_LIBS)
+# Link against libfacter_c, libpuppetc_common, and libcurl
+puppetc_agent_LDADD = $(top_builddir)/facter/libfacter_c.la $(top_builddir)/common/libpuppetc_common.la $(CURL_LIBS)
 
 # Include directories
 AM_CPPFLAGS = -I$(top_srcdir)/include $(CURL_CFLAGS)
