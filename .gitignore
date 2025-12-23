@@ -25,9 +25,20 @@ include/puppet.tab.h
 /tests/Makefile
 /tests/Makefile.in
 
+# Libtool generated files
+/ar-lib
+/config.guess
+/config.sub
+/libtool
+/ltmain.sh
+m4/
+
 # Autotools build artifacts
 src/.deps/
+src/.libs/
 src/*.o
+src/*.lo
+src/*.la
 src/lex.yy.o
 src/puppetc
 tests/output/

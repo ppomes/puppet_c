@@ -1,5 +1,10 @@
 AC_INIT([puppet-c], [0.0.1], [pierre.pomes@gmail.com])
 AM_INIT_AUTOMAKE([-Wall -Werror foreign])
+
+# Libtool support for shared libraries
+AM_PROG_AR
+LT_INIT
+
 AC_PROG_CC
 AC_PROG_LEX
 AC_PROG_YACC
