@@ -76,6 +76,17 @@ tests/development/
 # Test results and temporary files
 test_results/
 
+# Debian packaging
+debian/tmp/
+debian/*.debhelper*
+debian/*.substvars
+debian/files
+debian/autoreconf.after
+debian/autoreconf.before
+*.deb
+*.changes
+*.buildinfo
+
 # OS specific
 .DS_Store
 *.swp

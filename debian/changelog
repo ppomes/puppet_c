@@ -1,0 +1,10 @@
+puppet-c (0.0.1-1) unstable; urgency=medium
+
+  * Initial release
+  * libpuppetc: Puppet language parser and interpreter
+  * libfacter_c: Native fact collection
+  * puppetc: CLI tool for manifest debugging
+  * puppetc-server: HTTP catalog compilation server
+  * puppetc-agent: Agent with resource application
+
+ -- Pierre Pomes <pierre.pomes@gmail.com>  Mon, 23 Dec 2024 12:00:00 +0100

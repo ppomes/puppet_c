@@ -1,0 +1,33 @@
+# Build stage for puppet_c
+FROM debian:bookworm AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    autoconf \
+    automake \
+    libtool \
+    flex \
+    bison \
+    pkg-config \
+    libyaml-dev \
+    libssl-dev \
+    libmicrohttpd-dev \
+    libcurl4-openssl-dev \
+    ruby-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy source
+WORKDIR /build
+COPY . .
+
+# Build
+RUN autoreconf -i && \
+    ./configure --prefix=/usr && \
+    make -j$(nproc) && \
+    make DESTDIR=/install install
+
+# Also copy shared libraries needed at runtime
+RUN mkdir -p /install/usr/lib && \
+    cp -P /build/src/.libs/libpuppetc.so* /install/usr/lib/ && \
+    cp -P /build/facter/.libs/libfacter_c.so* /install/usr/lib/

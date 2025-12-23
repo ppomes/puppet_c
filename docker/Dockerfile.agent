@@ -1,0 +1,19 @@
+# puppetc-agent container
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcurl4 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy built binaries and libraries from builder
+COPY --from=builder /install/usr/bin/puppetc-agent /usr/bin/
+COPY --from=builder /install/usr/lib/libfacter_c.so* /usr/lib/
+
+# Update library cache
+RUN ldconfig
+
+# Default command - connect to server, apply in noop mode by default
+ENTRYPOINT ["puppetc-agent"]
+CMD ["-s", "http://server:8140", "-n"]

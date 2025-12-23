@@ -1,0 +1,76 @@
+Source: puppet-c
+Section: admin
+Priority: optional
+Maintainer: Pierre Pomes <pierre.pomes@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               autoconf,
+               automake,
+               libtool,
+               flex,
+               bison,
+               pkg-config,
+               libyaml-dev,
+               libssl-dev,
+               libmicrohttpd-dev,
+               libcurl4-openssl-dev,
+               ruby-dev
+Standards-Version: 4.6.0
+Homepage: https://github.com/ppomes/puppet_c
+
+Package: libpuppetc0
+Section: libs
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Puppet language parser and interpreter library
+ libpuppetc is a C implementation of the Puppet language parser
+ and interpreter. It provides parsing, AST generation, and
+ manifest evaluation functionality.
+
+Package: libpuppetc-dev
+Section: libdevel
+Architecture: any
+Depends: libpuppetc0 (= ${binary:Version}), ${misc:Depends}
+Description: Puppet language library - development files
+ Development headers for libpuppetc.
+
+Package: libfacter-c0
+Section: libs
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Native fact collection library
+ libfacter_c collects system facts (hostname, OS, network, etc.)
+ for use with Puppet manifests.
+
+Package: libfacter-c-dev
+Section: libdevel
+Architecture: any
+Depends: libfacter-c0 (= ${binary:Version}), ${misc:Depends}
+Description: Fact collection library - development files
+ Development headers for libfacter_c.
+
+Package: puppetc
+Architecture: any
+Depends: libpuppetc0 (= ${binary:Version}),
+         ${shlibs:Depends},
+         ${misc:Depends}
+Description: Puppet manifest parser and debugger
+ Command-line tool for parsing, evaluating, and debugging
+ Puppet manifests. Useful for development and testing.
+
+Package: puppetc-server
+Architecture: any
+Depends: libpuppetc0 (= ${binary:Version}),
+         ${shlibs:Depends},
+         ${misc:Depends}
+Description: Puppet catalog compilation server
+ HTTP server that compiles Puppet catalogs for nodes.
+ Provides a REST API compatible with Puppet Server.
+
+Package: puppetc-agent
+Architecture: any
+Depends: libfacter-c0 (= ${binary:Version}),
+         ${shlibs:Depends},
+         ${misc:Depends}
+Description: Puppet agent client
+ Agent that collects system facts, requests catalogs from
+ puppetc-server, and applies resources to the system.

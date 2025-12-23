@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  server:
+    build:
+      context: .
+      target: server
+    image: puppetc-server:latest
+    container_name: puppetc-server
+    ports:
+      - "8140:8140"
+    volumes:
+      - ./docker/manifests:/etc/puppet/manifests:ro
+      - ./docker/modules:/etc/puppet/modules:ro
+      - ./docker/hiera:/etc/puppet/hiera:ro
+    networks:
+      - puppet
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8140/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  agent:
+    build:
+      context: .
+      target: agent
+    image: puppetc-agent:latest
+    container_name: puppetc-agent
+    depends_on:
+      server:
+        condition: service_healthy
+    networks:
+      - puppet
+    # Run agent once and exit
+    # Use -a to apply, -n for noop
+    command: ["-s", "http://server:8140", "-n", "-v"]
+
+networks:
+  puppet:
+    driver: bridge

@@ -1,0 +1,13 @@
+[Unit]
+Description=Puppet Catalog Compilation Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/puppetc-server -p 8140 /etc/puppet
+Restart=on-failure
+User=puppet
+Group=puppet
+
+[Install]
+WantedBy=multi-user.target
