@@ -20,7 +20,7 @@
 
 #define DEFAULT_SERVER "http://localhost:8140"
 #define DEFAULT_ENVIRONMENT "production"
-#define AGENT_VERSION "0.2.0"
+#define AGENT_VERSION "0.1.0"
 
 /* Response buffer for curl */
 typedef struct {
