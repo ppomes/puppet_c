@@ -83,4 +83,6 @@ RUN ln -s libfacter_c.so.0.0.0 /usr/lib/libfacter_c.so.0 && \
     ldconfig
 
 ENTRYPOINT ["puppetc-agent"]
-CMD ["-s", "http://server:8140", "-n"]
+# Default: noop mode. Use -a to apply.
+# Set PUPPET_SERVER env var or use -s to specify server.
+CMD ["-n"]
