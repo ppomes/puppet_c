@@ -77,6 +77,10 @@ puppet_value_t *puppet_func_basename(puppet_expr_list_t *args, puppet_env_t *env
 puppet_value_t *puppet_func_dirname(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_extname(puppet_expr_list_t *args, puppet_env_t *env);
 
+// Regex functions
+puppet_value_t *puppet_func_regsubst(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_match(puppet_expr_list_t *args, puppet_env_t *env);
+
 // Utility function to convert values to strings for logging
 char *puppet_value_to_display_string(puppet_value_t *value);
 

@@ -14,6 +14,7 @@
 #include <time.h>
 #include <ctype.h>
 #include <math.h>
+#include <regex.h>
 
 // Logging levels
 typedef enum {
@@ -2408,5 +2409,234 @@ puppet_value_t *puppet_func_extname(puppet_expr_list_t *args, puppet_env_t *env)
     }
 
     puppet_value_destroy(path_val);
+    return result;
+}
+
+/**
+ * @brief Puppet regsubst() function - regex substitution
+ *
+ * Usage: regsubst(string, pattern, replacement) or regsubst(string, pattern, replacement, flags)
+ * Returns string with pattern replaced by replacement
+ * Flags: 'g' for global replace, 'i' for case-insensitive
+ *
+ * Examples:
+ *   regsubst('hello world', 'world', 'puppet')    => 'hello puppet'
+ *   regsubst('foo bar foo', 'foo', 'baz', 'g')    => 'baz bar baz'
+ */
+puppet_value_t *puppet_func_regsubst(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 3) {
+        puppet_log(PUPPET_LOG_ERROR, "regsubst() requires 3 arguments: string, pattern, replacement");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *pattern_val = puppet_eval_expr(args->exprs[1], env);
+    puppet_value_t *repl_val = puppet_eval_expr(args->exprs[2], env);
+    puppet_value_t *flags_val = NULL;
+
+    if (args->count >= 4) {
+        flags_val = puppet_eval_expr(args->exprs[3], env);
+    }
+
+    if (!str_val || str_val->type != PUPPET_VALUE_STRING ||
+        !pattern_val || pattern_val->type != PUPPET_VALUE_STRING ||
+        !repl_val || repl_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "regsubst() arguments must be strings");
+        if (str_val) puppet_value_destroy(str_val);
+        if (pattern_val) puppet_value_destroy(pattern_val);
+        if (repl_val) puppet_value_destroy(repl_val);
+        if (flags_val) puppet_value_destroy(flags_val);
+        return puppet_value_create_undef();
+    }
+
+    /* Parse flags */
+    int global_replace = 0;
+    int cflags = REG_EXTENDED;
+
+    if (flags_val && flags_val->type == PUPPET_VALUE_STRING) {
+        for (size_t i = 0; i < flags_val->data.string.len; i++) {
+            char c = flags_val->data.string.data[i];
+            if (c == 'g' || c == 'G') global_replace = 1;
+            if (c == 'i' || c == 'I') cflags |= REG_ICASE;
+        }
+    }
+
+    /* Compile regex */
+    regex_t regex;
+    char *pattern_cstr = puppet_malloc(pattern_val->data.string.len + 1);
+    memcpy(pattern_cstr, pattern_val->data.string.data, pattern_val->data.string.len);
+    pattern_cstr[pattern_val->data.string.len] = '\0';
+
+    int ret = regcomp(&regex, pattern_cstr, cflags);
+    puppet_free(pattern_cstr);
+
+    if (ret != 0) {
+        puppet_log(PUPPET_LOG_ERROR, "regsubst() invalid regex pattern");
+        puppet_value_destroy(str_val);
+        puppet_value_destroy(pattern_val);
+        puppet_value_destroy(repl_val);
+        if (flags_val) puppet_value_destroy(flags_val);
+        return puppet_value_create_undef();
+    }
+
+    /* Build result with replacements */
+    const char *src = str_val->data.string.data;
+    size_t src_len = str_val->data.string.len;
+    const char *repl = repl_val->data.string.data;
+    size_t repl_len = repl_val->data.string.len;
+
+    /* Create null-terminated copy for regex */
+    char *src_cstr = puppet_malloc(src_len + 1);
+    memcpy(src_cstr, src, src_len);
+    src_cstr[src_len] = '\0';
+
+    /* Estimate result size and allocate */
+    size_t result_capacity = src_len * 2 + repl_len * 10;
+    char *result_str = puppet_malloc(result_capacity);
+    size_t result_len = 0;
+
+    regmatch_t match;
+    size_t offset = 0;
+
+    while (offset <= src_len) {
+        ret = regexec(&regex, src_cstr + offset, 1, &match, offset > 0 ? REG_NOTBOL : 0);
+        if (ret != 0) {
+            /* No more matches - copy rest of string */
+            size_t remaining = src_len - offset;
+            if (result_len + remaining >= result_capacity) {
+                result_capacity = result_len + remaining + 1;
+                result_str = puppet_realloc(result_str, result_capacity);
+            }
+            memcpy(result_str + result_len, src + offset, remaining);
+            result_len += remaining;
+            break;
+        }
+
+        /* Copy text before match */
+        size_t before_len = match.rm_so;
+        if (result_len + before_len >= result_capacity) {
+            result_capacity = (result_capacity + before_len) * 2;
+            result_str = puppet_realloc(result_str, result_capacity);
+        }
+        memcpy(result_str + result_len, src + offset, before_len);
+        result_len += before_len;
+
+        /* Copy replacement */
+        if (result_len + repl_len >= result_capacity) {
+            result_capacity = (result_capacity + repl_len) * 2;
+            result_str = puppet_realloc(result_str, result_capacity);
+        }
+        memcpy(result_str + result_len, repl, repl_len);
+        result_len += repl_len;
+
+        /* Move past match */
+        offset += match.rm_eo;
+        if (match.rm_eo == 0) offset++; /* Avoid infinite loop on zero-width match */
+
+        if (!global_replace) {
+            /* Copy rest of string */
+            size_t remaining = src_len - offset;
+            if (result_len + remaining >= result_capacity) {
+                result_capacity = result_len + remaining + 1;
+                result_str = puppet_realloc(result_str, result_capacity);
+            }
+            memcpy(result_str + result_len, src + offset, remaining);
+            result_len += remaining;
+            break;
+        }
+    }
+
+    result_str[result_len] = '\0';
+
+    puppet_free(src_cstr);
+    regfree(&regex);
+
+    puppet_value_t *result_final = puppet_value_create_string(result_str, result_len);
+    puppet_free(result_str);
+
+    puppet_value_destroy(str_val);
+    puppet_value_destroy(pattern_val);
+    puppet_value_destroy(repl_val);
+    if (flags_val) puppet_value_destroy(flags_val);
+
+    return result_final;
+}
+
+/**
+ * @brief Puppet match() function - regex matching
+ *
+ * Usage: match(string, pattern)
+ * Returns array of matches, or empty array if no match
+ *
+ * Examples:
+ *   match('hello world', 'w.*d')     => ['world']
+ *   match('foo 123 bar', '[0-9]+')   => ['123']
+ *   match('no match', 'xyz')         => []
+ */
+puppet_value_t *puppet_func_match(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log(PUPPET_LOG_ERROR, "match() requires 2 arguments: string, pattern");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *pattern_val = puppet_eval_expr(args->exprs[1], env);
+
+    if (!str_val || str_val->type != PUPPET_VALUE_STRING ||
+        !pattern_val || pattern_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "match() arguments must be strings");
+        if (str_val) puppet_value_destroy(str_val);
+        if (pattern_val) puppet_value_destroy(pattern_val);
+        return puppet_value_create_undef();
+    }
+
+    /* Compile regex */
+    regex_t regex;
+    char *pattern_cstr = puppet_malloc(pattern_val->data.string.len + 1);
+    memcpy(pattern_cstr, pattern_val->data.string.data, pattern_val->data.string.len);
+    pattern_cstr[pattern_val->data.string.len] = '\0';
+
+    int ret = regcomp(&regex, pattern_cstr, REG_EXTENDED);
+    puppet_free(pattern_cstr);
+
+    if (ret != 0) {
+        puppet_log(PUPPET_LOG_ERROR, "match() invalid regex pattern");
+        puppet_value_destroy(str_val);
+        puppet_value_destroy(pattern_val);
+        return puppet_value_create_undef();
+    }
+
+    /* Create null-terminated copy for regex */
+    char *src_cstr = puppet_malloc(str_val->data.string.len + 1);
+    memcpy(src_cstr, str_val->data.string.data, str_val->data.string.len);
+    src_cstr[str_val->data.string.len] = '\0';
+
+    /* Execute match - support up to 10 capture groups */
+    #define MAX_MATCHES 10
+    regmatch_t matches[MAX_MATCHES];
+
+    puppet_value_t *result = puppet_value_create_array();
+
+    ret = regexec(&regex, src_cstr, MAX_MATCHES, matches, 0);
+    if (ret == 0) {
+        /* Add matches to result array */
+        for (int i = 0; i < MAX_MATCHES && matches[i].rm_so != -1; i++) {
+            size_t match_len = matches[i].rm_eo - matches[i].rm_so;
+            char *match_str = puppet_malloc(match_len + 1);
+            memcpy(match_str, src_cstr + matches[i].rm_so, match_len);
+            match_str[match_len] = '\0';
+
+            puppet_array_append(result->data.array,
+                puppet_value_create_string(match_str, match_len));
+            puppet_free(match_str);
+        }
+    }
+
+    puppet_free(src_cstr);
+    regfree(&regex);
+
+    puppet_value_destroy(str_val);
+    puppet_value_destroy(pattern_val);
+
     return result;
 }

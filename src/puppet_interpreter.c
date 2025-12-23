@@ -463,6 +463,13 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "extname") == 0) {
                 return puppet_func_extname(&expr->data.funcall.args, env);
             }
+            // Regex functions
+            else if (strcmp(func_name, "regsubst") == 0) {
+                return puppet_func_regsubst(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "match") == 0) {
+                return puppet_func_match(&expr->data.funcall.args, env);
+            }
             else {
                 puppet_error("Unknown function: %s", func_name);
                 return puppet_value_create_undef();
