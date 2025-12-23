@@ -40,6 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 \
     libmicrohttpd12 \
     libruby3.1 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy binaries
