@@ -29,6 +29,9 @@ This implementation is feature-complete for core Puppet language parsing:
 - ✅ **Full Hiera support with YAML data backend**
 - ✅ **lookup() function for hierarchical data retrieval**
 - ✅ **Core Puppet functions (fail, notice, info, warning, debug, err, defined, tag, tagged)**
+- ✅ **Conditional statements (if/elsif/else, unless, case)**
+- ✅ **Ternary conditional expressions (`$x ? 'yes' : 'no'`)**
+- ✅ **Selector expressions (`$os ? { 'linux' => 'apt', default => 'unknown' }`)**
 - ⏳ Additional standard library functions (partial implementation)
 - ⏳ PuppetDB integration (not yet implemented)
 
@@ -300,6 +303,60 @@ This parser has been significantly enhanced and now successfully parses complex 
 - **Data Provider Interface**: Infrastructure ready for Hiera integration and external data sources
 - **Proper Git Hygiene**: Binary files removed from tracking, comprehensive .gitignore
 - **Organized Project Structure**: Tests properly organized with dedicated test runners
+
+## Known Limitations
+
+### Class Instantiation with Single Quotes
+
+Due to GLR parser ambiguity between class instantiation and resource declaration syntax, class instantiation using single-quoted class names may cause parse errors:
+
+```puppet
+# This may cause "syntax is ambiguous" error:
+class { 'apache': port => 80, }
+
+# Use double quotes instead:
+class { "apache": port => 80, }
+```
+
+This limitation only affects the `class { 'name': }` syntax. Class definitions, includes, and other features work normally with both quote styles.
+
+## Implemented Stdlib Functions
+
+### Core Functions
+- **Logging**: `notice`, `info`, `warning`, `debug`, `err`, `fail`
+- **Type Checking**: `defined`, `tag`, `tagged`, `realize`
+
+### String Functions
+- `capitalize`, `chomp`, `chop`, `downcase`, `upcase`
+- `lstrip`, `rstrip`, `strip`
+- `split`, `join`
+- `match`, `regsubst`
+
+### Array Functions
+- `concat`, `delete`, `delete_at`, `first`, `last`
+- `flatten`, `reverse`, `sort`, `unique`
+- `empty`, `length`, `size`, `member`
+- `range`
+
+### Hash Functions
+- `keys`, `values`, `has_key`, `merge`, `delete`
+
+### Numeric Functions
+- `abs`, `ceil`, `ceiling`, `floor`, `round`, `sqrt`
+- `max`, `min`
+
+### Type Inspection
+- `is_array`, `is_bool`, `is_boolean`, `is_float`
+- `is_hash`, `is_integer`, `is_numeric`, `is_string`
+
+### Path Functions
+- `basename`, `dirname`, `extname`
+
+### Crypto Functions
+- `sha1`, `md5`, `base64`
+
+### Data Functions
+- `lookup` (Hiera integration)
 
 ## Next Steps
 
