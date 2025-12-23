@@ -10,6 +10,7 @@ Prerequisites:
 - GCC, flex, bison
 - Ruby development headers (for ERB templates)
 - libyaml (for Hiera)
+- libssl/openssl (for crypto functions)
 - libmicrohttpd (for puppetc-server)
 - libcurl (for puppetc-agent)
 
