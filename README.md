@@ -69,14 +69,17 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 # Run agent (connects to localhost:8140)
 ./agent/puppetc-agent
 
+# Apply catalog resources
+./agent/puppetc-agent -a
+
+# No-op mode (show what would change)
+./agent/puppetc-agent -n
+
 # Specify server
-./agent/puppetc-agent -s http://puppet:8140
+./agent/puppetc-agent -s http://puppet:8140 -a
 
 # Just show collected facts
 ./agent/puppetc-agent -f
-
-# No-op mode (simulation)
-./agent/puppetc-agent -n
 ```
 
 ## What Works
@@ -155,4 +158,4 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 - [x] **Phase 3**: `puppetc-server` - HTTP API for catalog compilation
 - [x] **Phase 4**: `libfacter_c` - Native fact collection library
 - [x] **Phase 5**: `puppetc-agent` - Client that collects facts, requests catalog
-- [ ] **Phase 6**: Resource application (file, package, service...)
+- [x] **Phase 6**: Resource application (file, package, service...)
