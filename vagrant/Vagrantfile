@@ -1,0 +1,198 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+# Vagrant configuration for puppetc testing
+# Two Debian VMs: server and agent
+#
+# The puppetcode/ directory is shared with the server VM.
+# Edit .pp files there to test your Puppet manifests.
+
+Vagrant.configure("2") do |config|
+  # Use Debian 12 (Bookworm)
+  config.vm.box = "debian/bookworm64"
+
+  # Sync source code for building packages
+  config.vm.synced_folder "..", "/vagrant_src", type: "rsync",
+    rsync__exclude: [".git/", "*.o", "*.lo", ".libs/", "autom4te.cache/", "vagrant/"]
+
+  # Common provisioning for both VMs
+  config.vm.provision "shell", name: "common", inline: <<-SHELL
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+
+    # Update and install build dependencies
+    apt-get update
+    apt-get install -y \
+      build-essential \
+      autoconf \
+      automake \
+      libtool \
+      pkg-config \
+      bison \
+      flex \
+      libyaml-dev \
+      libssl-dev \
+      libmicrohttpd-dev \
+      libcurl4-openssl-dev \
+      ruby-dev \
+      devscripts \
+      debhelper \
+      dh-autoreconf
+
+    echo "Common packages installed."
+  SHELL
+
+  # ============================================================================
+  # Server VM
+  # ============================================================================
+  config.vm.define "server", primary: true do |server|
+    server.vm.hostname = "puppet-server"
+    server.vm.network "private_network", ip: "192.168.56.10"
+
+    # Share puppetcode directory for manifests
+    server.vm.synced_folder "puppetcode", "/etc/puppet/manifests",
+      owner: "root", group: "root"
+
+    server.vm.provider "virtualbox" do |vb|
+      vb.name = "puppetc-server"
+      vb.memory = "1024"
+      vb.cpus = 2
+    end
+
+    server.vm.provision "shell", name: "build-packages", inline: <<-SHELL
+      set -e
+
+      # Copy source to build directory (so .deb files go to /home/vagrant/)
+      rm -rf /home/vagrant/puppetc-build
+      cp -r /vagrant_src /home/vagrant/puppetc-build
+      cd /home/vagrant/puppetc-build
+
+      echo "Building debian packages..."
+
+      # Bootstrap autotools if needed
+      if [ ! -f configure ]; then
+        autoreconf -fi
+      fi
+
+      # Configure and build
+      ./configure
+      make clean || true
+      make -j$(nproc)
+
+      # Build debian packages (creates .deb in parent dir = /home/vagrant/)
+      dpkg-buildpackage -us -uc -b
+
+      echo ""
+      echo "Packages built successfully!"
+      ls -la /home/vagrant/*.deb
+    SHELL
+
+    server.vm.provision "shell", name: "install-server", inline: <<-SHELL
+      set -e
+      cd /home/vagrant
+
+      echo "Installing puppetc-server..."
+      apt-get install -y ./libpuppetc-common0_*.deb ./libpuppetc0_*.deb ./puppetc-server_*.deb
+
+      # Create additional directories
+      mkdir -p /etc/puppet/modules /etc/puppet/hiera
+
+      # Create systemd service for puppetc-server
+      cat > /etc/systemd/system/puppetc-server.service << 'EOF'
+[Unit]
+Description=Puppetc Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/puppetc-server -m /etc/puppet/manifests -p 8140
+Restart=always
+RestartSec=5
+Environment=LD_LIBRARY_PATH=/usr/lib
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+      systemctl daemon-reload
+      systemctl enable puppetc-server
+      systemctl start puppetc-server
+
+      echo ""
+      echo "=========================================="
+      echo "Puppetc server installed and started!"
+      echo "Server listening on http://192.168.56.10:8140"
+      echo ""
+      echo "Manifests: /etc/puppet/manifests (synced from vagrant/puppetcode/)"
+      echo "Edit vagrant/puppetcode/site.pp on your host to test!"
+      echo "=========================================="
+    SHELL
+  end
+
+  # ============================================================================
+  # Agent VM
+  # ============================================================================
+  config.vm.define "agent" do |agent|
+    agent.vm.hostname = "puppet-agent"
+    agent.vm.network "private_network", ip: "192.168.56.11"
+
+    agent.vm.provider "virtualbox" do |vb|
+      vb.name = "puppetc-agent"
+      vb.memory = "512"
+      vb.cpus = 1
+    end
+
+    agent.vm.provision "shell", name: "build-packages", inline: <<-SHELL
+      set -e
+
+      # Check if packages already exist (built by server)
+      if ls /home/vagrant/*.deb >/dev/null 2>&1; then
+        echo "Packages already available."
+        exit 0
+      fi
+
+      # Copy source to build directory
+      rm -rf /home/vagrant/puppetc-build
+      cp -r /vagrant_src /home/vagrant/puppetc-build
+      cd /home/vagrant/puppetc-build
+
+      echo "Building debian packages..."
+
+      if [ ! -f configure ]; then
+        autoreconf -fi
+      fi
+
+      ./configure
+      make clean || true
+      make -j$(nproc)
+      dpkg-buildpackage -us -uc -b
+
+      echo "Packages built!"
+      ls -la /home/vagrant/*.deb
+    SHELL
+
+    agent.vm.provision "shell", name: "install-agent", inline: <<-SHELL
+      set -e
+      cd /home/vagrant
+
+      echo "Installing puppetc-agent..."
+      apt-get install -y \
+        ./libpuppetc-common0_*.deb \
+        ./libfacter-c0_*.deb \
+        ./puppetc-agent_*.deb
+
+      # Configure agent to use server
+      echo 'PUPPET_SERVER="http://192.168.56.10:8140"' > /etc/default/puppetc-agent
+
+      echo ""
+      echo "=========================================="
+      echo "Puppetc agent installed!"
+      echo ""
+      echo "Test commands:"
+      echo "  puppetc-agent -s http://192.168.56.10:8140 -n    # noop mode"
+      echo "  puppetc-agent -s http://192.168.56.10:8140 -a    # apply mode"
+      echo "  puppetc-agent -s http://192.168.56.10:8140 -f    # show facts"
+      echo "=========================================="
+    SHELL
+  end
+end
