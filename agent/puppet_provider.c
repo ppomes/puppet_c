@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include "puppet_memory.h"
 #include "puppet_json_common.h"
+#include "color_output.h"
 #include <string.h>
 #include <stdarg.h>
 
@@ -302,17 +303,17 @@ static resource_t *parse_resource_from_json(json_value_t *res_obj) {
 int catalog_apply(const char *catalog_json, apply_context_t *ctx) {
     if (!catalog_json || !ctx) return -1;
 
-    printf("\n=== Applying Catalog ===\n");
+    print_info("Applying catalog");
 
     /* Parse the catalog JSON */
     json_value_t *catalog = json_parse(catalog_json);
     if (!catalog) {
-        printf("Failed to parse catalog JSON.\n");
+        print_error("Failed to parse catalog JSON");
         return -1;
     }
 
     if (!json_is_object(catalog)) {
-        printf("Catalog is not a JSON object.\n");
+        print_error("Catalog is not a JSON object");
         json_value_destroy(catalog);
         return -1;
     }
@@ -320,7 +321,7 @@ int catalog_apply(const char *catalog_json, apply_context_t *ctx) {
     /* Find resources array */
     json_value_t *resources = json_object_get(catalog, "resources");
     if (!resources || !json_is_array(resources)) {
-        printf("No resources in catalog.\n");
+        print_info("No resources in catalog");
         json_value_destroy(catalog);
         return 0;
     }
@@ -334,24 +335,25 @@ int catalog_apply(const char *catalog_json, apply_context_t *ctx) {
         resource_t *resource = parse_resource_from_json(res_obj);
 
         if (resource) {
-            printf("\n%s[%s]:\n", resource->type, resource->title);
-
             apply_result_t result = resource_apply(resource, ctx);
 
+            /* Only print status for non-changes in verbose mode */
             switch (result) {
                 case APPLY_SUCCESS:
                 case APPLY_NOOP:
-                    printf("  Status: OK (no changes needed)\n");
+                    if (ctx->verbose) {
+                        print_info("%s[%s]: OK (no changes needed)", resource->type, resource->title);
+                    }
                     break;
                 case APPLY_CHANGED:
-                    printf("  Status: CHANGED\n");
+                    /* Changes are printed by the provider itself */
                     break;
                 case APPLY_SKIPPED:
-                    printf("  Status: SKIPPED (noop mode)\n");
+                    /* Noop messages are printed by the provider itself */
                     break;
                 case APPLY_FAILED:
-                    printf("  Status: FAILED - %s\n",
-                           ctx->last_error ? ctx->last_error : "unknown error");
+                    print_resource_error(resource->type, resource->title,
+                                        "%s", ctx->last_error ? ctx->last_error : "unknown error");
                     break;
             }
 
@@ -362,11 +364,11 @@ int catalog_apply(const char *catalog_json, apply_context_t *ctx) {
 
     json_value_destroy(catalog);
 
-    printf("\n========================\n");
-    printf("Applied: %d resources\n", applied);
-    printf("Changed: %d\n", ctx->changes_made);
-    printf("Failed: %d\n", ctx->failures);
-    printf("========================\n\n");
+    /* Summary */
+    printf("\n");
+    print_notice("Applied catalog in %.2f seconds", 0.0);  /* TODO: add timing */
+    print_info("Resources: %d total, %d changed, %d failed",
+               applied, ctx->changes_made, ctx->failures);
 
     return ctx->failures;
 }

@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "puppet_memory.h"
+#include "color_output.h"
 #include <string.h>
 #include <stdbool.h>
 #include <getopt.h>
@@ -308,20 +309,23 @@ static void list_catalog_resources(const char *catalog_json) {
 static int run_agent(agent_config_t *config) {
     int result = 1;
 
-    printf("puppetc-agent v%s\n", AGENT_VERSION);
-    printf("Server: %s\n", config->server_url);
+    /* Initialize color output */
+    color_init();
+
+    print_info("puppetc-agent v%s", AGENT_VERSION);
+    print_info("Server: %s", config->server_url);
 
     /* Collect facts */
-    printf("\nCollecting facts...\n");
+    print_info("Collecting facts...");
 
     facter_ctx_t *facts = facter_create();
     if (!facts) {
-        fprintf(stderr, "Error: Failed to create facter context\n");
+        print_error("Failed to create facter context");
         return 1;
     }
 
     if (facter_collect(facts) != 0) {
-        fprintf(stderr, "Error: Failed to collect facts\n");
+        print_error("Failed to collect facts");
         facter_destroy(facts);
         return 1;
     }
@@ -339,11 +343,11 @@ static int run_agent(agent_config_t *config) {
         }
     }
 
-    printf("Certname: %s\n", config->certname);
+    print_info("Certname: %s", config->certname);
 
     size_t fact_count;
     facter_list(facts, &fact_count);
-    printf("Facts collected: %zu\n", fact_count);
+    print_info("Facts collected: %zu", fact_count);
 
     /* Show facts mode */
     if (config->show_facts) {
@@ -358,26 +362,26 @@ static int run_agent(agent_config_t *config) {
     }
 
     /* Check server status */
-    printf("\nConnecting to server...\n");
+    print_info("Connecting to server...");
     if (check_server_status(config->server_url, config->verbose) != 0) {
-        fprintf(stderr, "Error: Cannot connect to server at %s\n", config->server_url);
-        fprintf(stderr, "Make sure puppetc-server is running.\n");
+        print_error("Cannot connect to server at %s", config->server_url);
+        print_error("Make sure puppetc-server is running");
         facter_destroy(facts);
         return 1;
     }
-    printf("Server is available.\n");
+    print_info("Server is available");
 
     /* Build catalog request */
-    printf("\nRequesting catalog...\n");
+    print_info("Requesting catalog...");
     char *request_json = build_catalog_request(config->certname, config->environment, facts);
     if (!request_json) {
-        fprintf(stderr, "Error: Failed to build catalog request\n");
+        print_error("Failed to build catalog request");
         facter_destroy(facts);
         return 1;
     }
 
     if (config->verbose) {
-        fprintf(stderr, "[DEBUG] Request:\n%s\n", request_json);
+        print_debug("Request:\n%s", request_json);
     }
 
     /* Request catalog from server */
@@ -385,12 +389,12 @@ static int run_agent(agent_config_t *config) {
     puppet_free(request_json);
 
     if (!catalog_json) {
-        fprintf(stderr, "Error: Failed to receive catalog from server\n");
+        print_error("Failed to receive catalog from server");
         facter_destroy(facts);
         return 1;
     }
 
-    printf("Catalog received.\n");
+    print_info("Catalog received");
 
     /* Display catalog */
     if (config->show_catalog) {
@@ -406,10 +410,10 @@ static int run_agent(agent_config_t *config) {
         const char *os_family_str = facter_get_string(facts, "osfamily");
         os_family_t os_family = os_family_from_string(os_family_str);
 
-        printf("OS Family: %s\n", os_family_to_string(os_family));
+        print_info("OS Family: %s", os_family_to_string(os_family));
 
         if (config->noop) {
-            printf("Running in no-op mode - no changes will be made.\n");
+            print_info("Running in no-op mode - no changes will be made");
         }
 
         /* Initialize providers */
@@ -422,7 +426,7 @@ static int run_agent(agent_config_t *config) {
             int failures = catalog_apply(catalog_json, apply_ctx);
 
             if (failures > 0) {
-                fprintf(stderr, "Warning: %d resource(s) failed to apply\n", failures);
+                print_warning("%d resource(s) failed to apply", failures);
                 result = 1;
             } else {
                 result = 0;
@@ -433,7 +437,7 @@ static int run_agent(agent_config_t *config) {
 
         providers_shutdown();
     } else {
-        printf("\nNote: Use --apply to apply resources or --noop to simulate.\n");
+        print_info("Use --apply to apply resources or --noop to simulate");
         result = 0;
     }
 

@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include "puppet_memory.h"
 #include "puppet_json_common.h"
+#include "file_utils.h"
+#include "string_utils.h"
 #include <string.h>
 #include <stdbool.h>
 #include <unistd.h>
@@ -46,78 +48,6 @@ struct facter_ctx {
     const char *fact_names[MAX_FACTS];  /* For facter_list */
     bool collected;
 };
-
-/* ============================================================================
- * Helper Functions
- * ============================================================================ */
-
-static char *safe_strdup(const char *s) {
-    return s ? puppet_strdup(s) : NULL;
-}
-
-static char *trim_string(char *str) {
-    if (!str) return NULL;
-
-    /* Trim leading whitespace */
-    while (isspace((unsigned char)*str)) str++;
-
-    if (*str == 0) return str;
-
-    /* Trim trailing whitespace */
-    char *end = str + strlen(str) - 1;
-    while (end > str && isspace((unsigned char)*end)) end--;
-    end[1] = '\0';
-
-    return str;
-}
-
-static char *read_file_line(const char *path) {
-    FILE *f = fopen(path, "r");
-    if (!f) return NULL;
-
-    char *line = NULL;
-    size_t len = 0;
-    ssize_t read = getline(&line, &len, f);
-    fclose(f);
-
-    if (read <= 0) {
-        puppet_free(line);
-        return NULL;
-    }
-
-    /* Remove trailing newline */
-    if (read > 0 && line[read - 1] == '\n') {
-        line[read - 1] = '\0';
-    }
-
-    return line;
-}
-
-static char *read_file_contents(const char *path) {
-    FILE *f = fopen(path, "r");
-    if (!f) return NULL;
-
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    if (size <= 0 || size > 1024 * 1024) {  /* Limit to 1MB */
-        fclose(f);
-        return NULL;
-    }
-
-    char *content = puppet_malloc(size + 1);
-    if (!content) {
-        fclose(f);
-        return NULL;
-    }
-
-    size_t read = fread(content, 1, size, f);
-    content[read] = '\0';
-    fclose(f);
-
-    return content;
-}
 
 /* ============================================================================
  * Value Creation/Destruction
@@ -336,7 +266,7 @@ char *facter_architecture(void) {
 
 char *facter_os_name(void) {
     /* Try /etc/os-release first (modern distros) */
-    char *content = read_file_contents("/etc/os-release");
+    char *content = read_file_contents("/etc/os-release", 0);
     if (content) {
         char *line = strtok(content, "\n");
         while (line) {
@@ -365,7 +295,7 @@ char *facter_os_name(void) {
 }
 
 char *facter_os_family(void) {
-    char *content = read_file_contents("/etc/os-release");
+    char *content = read_file_contents("/etc/os-release", 0);
     if (content) {
         char *id_like = NULL;
         char *id = NULL;
@@ -419,7 +349,7 @@ char *facter_os_family(void) {
 }
 
 char *facter_os_release(void) {
-    char *content = read_file_contents("/etc/os-release");
+    char *content = read_file_contents("/etc/os-release", 0);
     if (content) {
         char *line = strtok(content, "\n");
         while (line) {
@@ -498,7 +428,7 @@ bool facter_is_virtual(void) {
     }
 
     /* Check cgroup for container indicators */
-    char *cgroup = read_file_contents("/proc/1/cgroup");
+    char *cgroup = read_file_contents("/proc/1/cgroup", 0);
     if (cgroup) {
         bool is_container = (strstr(cgroup, "docker") != NULL ||
                             strstr(cgroup, "lxc") != NULL ||
@@ -547,7 +477,7 @@ char *facter_virtual(void) {
     }
 
     /* Check cgroup for container */
-    char *cgroup = read_file_contents("/proc/1/cgroup");
+    char *cgroup = read_file_contents("/proc/1/cgroup", 0);
     if (cgroup) {
         if (strstr(cgroup, "docker")) {
             puppet_free(cgroup);
@@ -850,7 +780,7 @@ static void collect_processor_facts(facter_ctx_t *ctx) {
     facter_set_integer(ctx, "processors.count", count);
 
     /* Get processor model from /proc/cpuinfo */
-    char *cpuinfo = read_file_contents("/proc/cpuinfo");
+    char *cpuinfo = read_file_contents("/proc/cpuinfo", 0);
     if (cpuinfo) {
         char *line = strtok(cpuinfo, "\n");
         while (line) {

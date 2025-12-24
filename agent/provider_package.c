@@ -10,49 +10,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "puppet_memory.h"
+#include "exec_utils.h"
+#include "color_output.h"
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
 
 #include "puppet_provider.h"
-
-/* ============================================================================
- * Helper Functions
- * ============================================================================ */
-
-/**
- * @brief Run a command and capture output
- */
-static int run_command(const char *cmd, char *output, size_t output_size) {
-    FILE *fp = popen(cmd, "r");
-    if (!fp) return -1;
-
-    if (output && output_size > 0) {
-        output[0] = '\0';
-        size_t total = 0;
-        char buf[256];
-        while (fgets(buf, sizeof(buf), fp) && total < output_size - 1) {
-            size_t len = strlen(buf);
-            if (total + len < output_size - 1) {
-                strcat(output, buf);
-                total += len;
-            }
-        }
-    }
-
-    int status = pclose(fp);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-}
-
-/**
- * @brief Execute command with optional output
- */
-static int exec_command(const char *cmd, bool verbose) {
-    if (verbose) {
-        fprintf(stderr, "[EXEC] %s\n", cmd);
-    }
-    return system(cmd);
-}
 
 /* ============================================================================
  * APT Provider (Debian/Ubuntu)
@@ -107,7 +71,7 @@ static apply_result_t apt_apply(const resource_t *resource, apply_context_t *ctx
         }
 
         if (ctx->noop) {
-            printf("  Would remove package: %s\n", package);
+            print_resource_noop("Package", package, "ensure", "would be removed");
             return APPLY_SKIPPED;
         }
 
@@ -122,7 +86,7 @@ static apply_result_t apt_apply(const resource_t *resource, apply_context_t *ctx
             return APPLY_FAILED;
         }
 
-        printf("  Removed package: %s\n", package);
+        print_resource_change("Package", package, "ensure", "removed");
         return APPLY_CHANGED;
     }
 
@@ -164,8 +128,8 @@ static apply_result_t apt_apply(const resource_t *resource, apply_context_t *ctx
     }
 
     if (ctx->noop) {
-        printf("  Would %s package: %s\n",
-               need_upgrade ? "upgrade" : "install", package);
+        print_resource_noop("Package", package, "ensure",
+                           need_upgrade ? "would be upgraded" : "would be installed");
         return APPLY_SKIPPED;
     }
 
@@ -193,8 +157,8 @@ static apply_result_t apt_apply(const resource_t *resource, apply_context_t *ctx
         return APPLY_FAILED;
     }
 
-    printf("  %s package: %s\n",
-           need_upgrade ? "Upgraded" : "Installed", package);
+    print_resource_change("Package", package, "ensure",
+                         need_upgrade ? "upgraded" : "installed");
     return APPLY_CHANGED;
 }
 
@@ -248,7 +212,7 @@ static apply_result_t dnf_apply(const resource_t *resource, apply_context_t *ctx
         }
 
         if (ctx->noop) {
-            printf("  Would remove package: %s\n", package);
+            print_resource_noop("Package", package, "ensure", "would be removed");
             return APPLY_SKIPPED;
         }
 
@@ -260,7 +224,7 @@ static apply_result_t dnf_apply(const resource_t *resource, apply_context_t *ctx
             return APPLY_FAILED;
         }
 
-        printf("  Removed package: %s\n", package);
+        print_resource_change("Package", package, "ensure", "removed");
         return APPLY_CHANGED;
     }
 
@@ -300,8 +264,8 @@ static apply_result_t dnf_apply(const resource_t *resource, apply_context_t *ctx
     }
 
     if (ctx->noop) {
-        printf("  Would %s package: %s\n",
-               need_upgrade ? "upgrade" : "install", package);
+        print_resource_noop("Package", package, "ensure",
+                           need_upgrade ? "would be upgraded" : "would be installed");
         return APPLY_SKIPPED;
     }
 
@@ -322,8 +286,8 @@ static apply_result_t dnf_apply(const resource_t *resource, apply_context_t *ctx
         return APPLY_FAILED;
     }
 
-    printf("  %s package: %s\n",
-           need_upgrade ? "Upgraded" : "Installed", package);
+    print_resource_change("Package", package, "ensure",
+                         need_upgrade ? "upgraded" : "installed");
     return APPLY_CHANGED;
 }
 

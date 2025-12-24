@@ -9,43 +9,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "puppet_memory.h"
+#include "exec_utils.h"
+#include "color_output.h"
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
 
 #include "puppet_provider.h"
-
-/* ============================================================================
- * Helper Functions
- * ============================================================================ */
-
-static int run_command(const char *cmd, char *output, size_t output_size) {
-    FILE *fp = popen(cmd, "r");
-    if (!fp) return -1;
-
-    if (output && output_size > 0) {
-        output[0] = '\0';
-        size_t total = 0;
-        char buf[256];
-        while (fgets(buf, sizeof(buf), fp) && total < output_size - 1) {
-            size_t len = strlen(buf);
-            if (total + len < output_size - 1) {
-                strcat(output, buf);
-                total += len;
-            }
-        }
-    }
-
-    int status = pclose(fp);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-}
-
-static int exec_command(const char *cmd, bool verbose) {
-    if (verbose) {
-        fprintf(stderr, "[EXEC] %s\n", cmd);
-    }
-    return system(cmd);
-}
 
 /* ============================================================================
  * Systemd Service Functions
@@ -138,26 +108,26 @@ static apply_result_t systemd_apply(const resource_t *resource, apply_context_t 
     if (strcmp(ensure, "running") == 0) {
         if (!is_active) {
             if (ctx->noop) {
-                printf("  Would start service: %s\n", service);
+                print_resource_noop("Service", service, "ensure", "would be started");
             } else {
                 if (systemd_start(service, ctx->verbose) != 0) {
                     apply_context_set_error(ctx, "Failed to start service: %s", service);
                     return APPLY_FAILED;
                 }
-                printf("  Started service: %s\n", service);
+                print_resource_change("Service", service, "ensure", "started");
                 changed = true;
             }
         }
     } else if (strcmp(ensure, "stopped") == 0) {
         if (is_active) {
             if (ctx->noop) {
-                printf("  Would stop service: %s\n", service);
+                print_resource_noop("Service", service, "ensure", "would be stopped");
             } else {
                 if (systemd_stop(service, ctx->verbose) != 0) {
                     apply_context_set_error(ctx, "Failed to stop service: %s", service);
                     return APPLY_FAILED;
                 }
-                printf("  Stopped service: %s\n", service);
+                print_resource_change("Service", service, "ensure", "stopped");
                 changed = true;
             }
         }
@@ -169,24 +139,24 @@ static apply_result_t systemd_apply(const resource_t *resource, apply_context_t 
 
         if (want_enabled && !is_enabled) {
             if (ctx->noop) {
-                printf("  Would enable service: %s\n", service);
+                print_resource_noop("Service", service, "enable", "would be enabled");
             } else {
                 if (systemd_enable(service, ctx->verbose) != 0) {
                     apply_context_set_error(ctx, "Failed to enable service: %s", service);
                     return APPLY_FAILED;
                 }
-                printf("  Enabled service: %s\n", service);
+                print_resource_change("Service", service, "enable", "enabled");
                 changed = true;
             }
         } else if (!want_enabled && is_enabled) {
             if (ctx->noop) {
-                printf("  Would disable service: %s\n", service);
+                print_resource_noop("Service", service, "enable", "would be disabled");
             } else {
                 if (systemd_disable(service, ctx->verbose) != 0) {
                     apply_context_set_error(ctx, "Failed to disable service: %s", service);
                     return APPLY_FAILED;
                 }
-                printf("  Disabled service: %s\n", service);
+                print_resource_change("Service", service, "enable", "disabled");
                 changed = true;
             }
         }

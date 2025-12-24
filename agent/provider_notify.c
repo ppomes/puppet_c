@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "color_output.h"
 
 #include "puppet_provider.h"
 
@@ -23,11 +24,11 @@ static apply_result_t notify_apply(const resource_t *resource, apply_context_t *
     }
 
     if (ctx->noop) {
-        printf("  Would notify: %s\n", message);
+        print_resource_noop("Notify", resource->title, "message", message);
         return APPLY_SKIPPED;
     }
 
-    printf("  Notice: %s\n", message);
+    print_notice("%s", message);
     return APPLY_SUCCESS;
 }
 

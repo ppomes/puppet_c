@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "puppet_memory.h"
+#include "file_utils.h"
+#include "color_output.h"
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -19,69 +21,6 @@
 #include <grp.h>
 
 #include "puppet_provider.h"
-
-/* ============================================================================
- * Helper Functions
- * ============================================================================ */
-
-static bool file_exists(const char *path) {
-    struct stat st;
-    return stat(path, &st) == 0;
-}
-
-static bool is_directory(const char *path) {
-    struct stat st;
-    if (stat(path, &st) != 0) return false;
-    return S_ISDIR(st.st_mode);
-}
-
-static bool is_symlink(const char *path) {
-    struct stat st;
-    if (lstat(path, &st) != 0) return false;
-    return S_ISLNK(st.st_mode);
-}
-
-static char *read_file_contents(const char *path) {
-    FILE *f = fopen(path, "r");
-    if (!f) return NULL;
-
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    if (size < 0 || size > 10 * 1024 * 1024) {  /* Limit 10MB */
-        fclose(f);
-        return NULL;
-    }
-
-    char *content = puppet_malloc(size + 1);
-    if (!content) {
-        fclose(f);
-        return NULL;
-    }
-
-    size_t read = fread(content, 1, size, f);
-    content[read] = '\0';
-    fclose(f);
-
-    return content;
-}
-
-static int write_file_contents(const char *path, const char *content) {
-    FILE *f = fopen(path, "w");
-    if (!f) return -1;
-
-    if (content) {
-        size_t len = strlen(content);
-        if (fwrite(content, 1, len, f) != len) {
-            fclose(f);
-            return -1;
-        }
-    }
-
-    fclose(f);
-    return 0;
-}
 
 static uid_t get_uid(const char *owner) {
     if (!owner) return (uid_t)-1;
@@ -168,7 +107,7 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
     if (strcmp(ensure, "absent") == 0) {
         if (file_exists(path)) {
             if (ctx->noop) {
-                printf("  Would remove: %s\n", path);
+                print_resource_noop("File", path, "ensure", "would be removed");
                 return APPLY_SKIPPED;
             }
 
@@ -185,7 +124,7 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
                     return APPLY_FAILED;
                 }
             }
-            printf("  Removed: %s\n", path);
+            print_resource_change("File", path, "ensure", "removed");
             return APPLY_CHANGED;
         }
         return APPLY_NOOP;
@@ -195,7 +134,7 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
     if (strcmp(ensure, "directory") == 0) {
         if (!file_exists(path)) {
             if (ctx->noop) {
-                printf("  Would create directory: %s\n", path);
+                print_resource_noop("File", path, "ensure", "would be created as directory");
                 return APPLY_SKIPPED;
             }
 
@@ -204,7 +143,7 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
                                        path, strerror(errno));
                 return APPLY_FAILED;
             }
-            printf("  Created directory: %s\n", path);
+            print_resource_change("File", path, "ensure", "created as directory");
             changed = true;
         } else if (!is_directory(path)) {
             apply_context_set_error(ctx, "%s exists but is not a directory", path);
@@ -244,7 +183,7 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
 
         if (needs_create) {
             if (ctx->noop) {
-                printf("  Would create symlink: %s -> %s\n", path, target);
+                print_resource_noop("File", path, "ensure", "would be created as symlink");
                 return APPLY_SKIPPED;
             }
 
@@ -253,7 +192,7 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
                                        path, target, strerror(errno));
                 return APPLY_FAILED;
             }
-            printf("  Created symlink: %s -> %s\n", path, target);
+            print_resource_change("File", path, "ensure", "created as symlink -> %s", target);
             changed = true;
         }
     }
@@ -261,7 +200,7 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
     else {
         if (!file_exists(path)) {
             if (ctx->noop) {
-                printf("  Would create file: %s\n", path);
+                print_resource_noop("File", path, "ensure", "would be created");
                 return APPLY_SKIPPED;
             }
 
@@ -270,15 +209,15 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
                                        path, strerror(errno));
                 return APPLY_FAILED;
             }
-            printf("  Created file: %s\n", path);
+            print_resource_change("File", path, "ensure", "created");
             changed = true;
         } else if (content) {
             /* Check if content needs updating */
-            char *current = read_file_contents(path);
+            char *current = read_file_contents(path, 0);
             if (current) {
                 if (strcmp(current, content) != 0) {
                     if (ctx->noop) {
-                        printf("  Would update content: %s\n", path);
+                        print_resource_noop("File", path, "content", "would be updated");
                         puppet_free(current);
                         return APPLY_SKIPPED;
                     }
@@ -289,7 +228,7 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
                         puppet_free(current);
                         return APPLY_FAILED;
                     }
-                    printf("  Updated content: %s\n", path);
+                    print_resource_change("File", path, "content", "updated");
                     changed = true;
                 }
                 puppet_free(current);
@@ -298,16 +237,16 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
 
         /* Handle source parameter (copy from source) */
         if (source && !content) {
-            char *source_content = read_file_contents(source);
+            char *source_content = read_file_contents(source, 0);
             if (!source_content) {
                 apply_context_set_error(ctx, "Cannot read source file: %s", source);
                 return APPLY_FAILED;
             }
 
-            char *current = read_file_contents(path);
+            char *current = read_file_contents(path, 0);
             if (!current || strcmp(current, source_content) != 0) {
                 if (ctx->noop) {
-                    printf("  Would copy from: %s\n", source);
+                    print_resource_noop("File", path, "content", "would be copied from source");
                     puppet_free(source_content);
                     puppet_free(current);
                     return APPLY_SKIPPED;
@@ -320,7 +259,7 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
                     puppet_free(current);
                     return APPLY_FAILED;
                 }
-                printf("  Copied from: %s\n", source);
+                print_resource_change("File", path, "content", "copied from %s", source);
                 changed = true;
             }
             puppet_free(source_content);
@@ -342,14 +281,14 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
 
                 if (needs_chown) {
                     if (ctx->noop) {
-                        printf("  Would change ownership: %s\n", path);
+                        print_resource_noop("File", path, "owner", "would be changed");
                     } else {
                         if (chown(path, uid, gid) != 0) {
                             apply_context_set_error(ctx, "Failed to chown %s: %s",
                                                    path, strerror(errno));
                             return APPLY_FAILED;
                         }
-                        printf("  Changed ownership: %s\n", path);
+                        print_resource_change("File", path, "owner", "changed");
                         changed = true;
                     }
                 }
@@ -366,14 +305,16 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
                 mode_t current_mode = st.st_mode & 07777;
                 if (current_mode != new_mode) {
                     if (ctx->noop) {
-                        printf("  Would change mode to %04o: %s\n", new_mode, path);
+                        char msg[64];
+                        snprintf(msg, sizeof(msg), "would be changed to %04o", new_mode);
+                        print_resource_noop("File", path, "mode", msg);
                     } else {
                         if (chmod(path, new_mode) != 0) {
                             apply_context_set_error(ctx, "Failed to chmod %s: %s",
                                                    path, strerror(errno));
                             return APPLY_FAILED;
                         }
-                        printf("  Changed mode to %04o: %s\n", new_mode, path);
+                        print_resource_change("File", path, "mode", "changed to %04o", new_mode);
                         changed = true;
                     }
                 }
