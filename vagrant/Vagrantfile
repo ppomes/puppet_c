@@ -8,8 +8,14 @@
 # Edit .pp files there to test your Puppet manifests.
 
 Vagrant.configure("2") do |config|
-  # Use Debian 12 (Bookworm)
-  config.vm.box = "debian/bookworm64"
+  # Use generic Debian 12 box (more reliable than debian/bookworm64)
+  config.vm.box = "generic/debian12"
+
+  # Increase boot timeout for slower machines
+  config.vm.boot_timeout = 600
+
+  # Disable default synced folder (causes issues with some boxes)
+  config.vm.synced_folder ".", "/vagrant", disabled: true
 
   # Sync source code for building packages
   config.vm.synced_folder "..", "/vagrant_src", type: "rsync",
@@ -57,6 +63,9 @@ Vagrant.configure("2") do |config|
       vb.name = "puppetc-server"
       vb.memory = "1024"
       vb.cpus = 2
+      # Uncomment to see VM console for debugging boot issues:
+      # vb.gui = true
+      vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
     end
 
     server.vm.provision "shell", name: "build-packages", inline: <<-SHELL
@@ -140,6 +149,9 @@ EOF
       vb.name = "puppetc-agent"
       vb.memory = "512"
       vb.cpus = 1
+      # Uncomment to see VM console for debugging boot issues:
+      # vb.gui = true
+      vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
     end
 
     agent.vm.provision "shell", name: "build-packages", inline: <<-SHELL
