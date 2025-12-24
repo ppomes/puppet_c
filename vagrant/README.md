@@ -27,18 +27,21 @@ puppetc-agent -s http://192.168.56.10:8140 -a   # apply
 vagrant/
 ├── Vagrantfile
 ├── README.md
-├── puppetcode/           # Shared with server as /etc/puppet/manifests
-│   └── site.pp           # Edit this to test your Puppet code!
+├── puppetcode/           # Shared with server as /etc/puppet/
+│   ├── manifests/        # -> /etc/puppet/manifests
+│   │   └── site.pp       # Edit this to test your Puppet code!
+│   ├── modules/          # -> /etc/puppet/modules
+│   └── hiera/            # -> /etc/puppet/hiera
 └── .gitignore
 ```
 
 ## Testing Puppet Code
 
-Edit `puppetcode/site.pp` on your host - changes are immediately available on the server!
+Edit `puppetcode/manifests/site.pp` on your host - changes are immediately available on the server!
 
 ```bash
 # Edit manifest on host
-vim puppetcode/site.pp
+vim puppetcode/manifests/site.pp
 
 # Test on agent (no need to restart server)
 vagrant ssh agent -c "puppetc-agent -s http://192.168.56.10:8140 -n"

@@ -4,8 +4,10 @@
 # Vagrant configuration for puppetc testing
 # Two Debian VMs: server and agent
 #
-# The puppetcode/ directory is shared with the server VM.
-# Edit .pp files there to test your Puppet manifests.
+# The puppetcode/ directory structure mirrors /etc/puppet on the server:
+#   puppetcode/manifests/ -> /etc/puppet/manifests
+#   puppetcode/modules/   -> /etc/puppet/modules
+#   puppetcode/hiera/     -> /etc/puppet/hiera
 
 Vagrant.configure("2") do |config|
   # Use generic Debian 12 box (more reliable than debian/bookworm64)
@@ -55,8 +57,12 @@ Vagrant.configure("2") do |config|
     server.vm.hostname = "puppet-server"
     server.vm.network "private_network", ip: "192.168.56.10"
 
-    # Share puppetcode directory for manifests
-    server.vm.synced_folder "puppetcode", "/etc/puppet/manifests",
+    # Share puppetcode subdirectories with server
+    server.vm.synced_folder "puppetcode/manifests", "/etc/puppet/manifests",
+      owner: "root", group: "root"
+    server.vm.synced_folder "puppetcode/modules", "/etc/puppet/modules",
+      owner: "root", group: "root"
+    server.vm.synced_folder "puppetcode/hiera", "/etc/puppet/hiera",
       owner: "root", group: "root"
 
     server.vm.provider "virtualbox" do |vb|
@@ -98,9 +104,6 @@ Vagrant.configure("2") do |config|
 
       echo "Installing puppetc-server..."
       apt-get install -y ./libpuppetc-common0_*.deb ./libpuppetc0_*.deb ./puppetc-server_*.deb
-
-      # Create additional directories
-      mkdir -p /etc/puppet/modules /etc/puppet/hiera
 
       # Create systemd service for puppetc-server
       cat > /etc/systemd/system/puppetc-server.service << 'EOF'
