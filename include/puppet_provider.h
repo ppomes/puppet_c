@@ -258,6 +258,11 @@ void provider_service_register(void);
  */
 void provider_notify_register(void);
 
+/**
+ * @brief Register exec provider
+ */
+void provider_exec_register(void);
+
 #ifdef __cplusplus
 }
 #endif

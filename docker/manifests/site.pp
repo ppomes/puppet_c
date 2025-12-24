@@ -18,3 +18,15 @@ file { '/tmp/puppet-dir':
 notify { 'puppet-hello':
   message => 'Hello from puppetc-server!',
 }
+
+# Exec resource - creates a file only if it doesn't exist
+exec { 'create_exec_marker':
+  command => '/bin/touch /tmp/exec-marker',
+  creates => '/tmp/exec-marker',
+}
+
+# Exec with onlyif condition
+exec { 'echo_hostname':
+  command => '/bin/hostname > /tmp/hostname.txt',
+  onlyif  => '/bin/test -d /tmp',
+}
