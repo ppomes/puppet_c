@@ -113,7 +113,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/puppetc-server -p 8140 -m /etc/puppet/modules /etc/puppet/manifests
+ExecStart=/usr/bin/puppetc-server -p 8140 -m /etc/puppet/modules -D /etc/puppet/hiera /etc/puppet
 Restart=always
 RestartSec=5
 Environment=LD_LIBRARY_PATH=/usr/lib
