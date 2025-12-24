@@ -78,12 +78,8 @@ Vagrant.configure("2") do |config|
 
       echo "Building debian packages..."
 
-      # Bootstrap autotools if needed
-      if [ ! -f configure ]; then
-        autoreconf -fi
-      fi
-
-      # Configure and build
+      # Always regenerate autotools to ensure correct paths in VM
+      ./autogen.sh
       ./configure
       make clean || true
       make -j$(nproc)
@@ -114,7 +110,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/puppetc-server -m /etc/puppet/manifests -p 8140
+ExecStart=/usr/bin/puppetc-server -p 8140 -m /etc/puppet/modules /etc/puppet/manifests
 Restart=always
 RestartSec=5
 Environment=LD_LIBRARY_PATH=/usr/lib
@@ -170,10 +166,8 @@ EOF
 
       echo "Building debian packages..."
 
-      if [ ! -f configure ]; then
-        autoreconf -fi
-      fi
-
+      # Always regenerate autotools to ensure correct paths in VM
+      ./autogen.sh
       ./configure
       make clean || true
       make -j$(nproc)
