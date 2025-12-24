@@ -86,11 +86,8 @@ Vagrant.configure("2") do |config|
 
       # Always regenerate autotools to ensure correct paths in VM
       ./autogen.sh
-      ./configure
-      make clean || true
-      make -j$(nproc)
 
-      # Build debian packages (creates .deb in parent dir = /home/vagrant/)
+      # Build debian packages (runs configure and make via debian/rules)
       dpkg-buildpackage -us -uc -b
 
       echo ""
@@ -171,9 +168,8 @@ EOF
 
       # Always regenerate autotools to ensure correct paths in VM
       ./autogen.sh
-      ./configure
-      make clean || true
-      make -j$(nproc)
+
+      # Build debian packages (runs configure and make via debian/rules)
       dpkg-buildpackage -us -uc -b
 
       echo "Packages built!"
