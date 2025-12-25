@@ -1,10 +1,19 @@
 # Sample site.pp for docker testing
 # This manifest demonstrates basic resource types
 
+# Test $facts hash access
+$os_family = $facts['os']['family']
+$hostname = $facts['hostname']
+$ip = $facts['networking']['ip']
+
+notify { 'facts_test':
+  message => "Host: ${hostname}, IP: ${ip}, OS: ${os_family}",
+}
+
 # Create a test file
 file { '/tmp/puppet-managed':
   ensure  => present,
-  content => 'This file is managed by puppetc!\n',
+  content => "Managed by puppetc!\nHostname: ${hostname}\nOS: ${os_family}\n",
   mode    => '0644',
 }
 

@@ -611,6 +611,38 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             return result ? result : puppet_value_create_undef();
         }
 
+        case PUPPET_EXPR_INDEX: {
+            /* Array/hash indexing: obj[key] */
+            puppet_value_t *obj = puppet_eval_expr(expr->data.index.object, env);
+            puppet_value_t *key = puppet_eval_expr(expr->data.index.index, env);
+            puppet_value_t *result = NULL;
+
+            if (obj && key) {
+                if (obj->type == PUPPET_VALUE_HASH && key->type == PUPPET_VALUE_STRING) {
+                    /* Hash access */
+                    puppet_value_t *val = puppet_hash_get(obj->data.hash,
+                        key->data.string.data, key->data.string.len);
+                    result = val ? puppet_value_copy(val) : puppet_value_create_undef();
+                } else if (obj->type == PUPPET_VALUE_ARRAY && key->type == PUPPET_VALUE_NUMBER) {
+                    /* Array access */
+                    size_t idx = (size_t)key->data.number;
+                    if (idx < obj->data.array->count) {
+                        result = puppet_value_copy(obj->data.array->items[idx]);
+                    } else {
+                        result = puppet_value_create_undef();
+                    }
+                } else {
+                    result = puppet_value_create_undef();
+                }
+            } else {
+                result = puppet_value_create_undef();
+            }
+
+            puppet_value_destroy(obj);
+            puppet_value_destroy(key);
+            return result;
+        }
+
         default:
             puppet_warn("Unimplemented expression type: %d", expr->type);
             return puppet_value_create_undef();
@@ -1425,8 +1457,14 @@ puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name
         if (value) return value;
     }
     
-    // 5. Facts lookup (check for direct fact access)
+    // 5. Facts lookup
     if (env->facts_db) {
+        // Special handling for $facts - return the whole facts hash
+        if (strcmp(name, "facts") == 0) {
+            value = puppet_facts_get_all_as_hash(env);
+            if (value) return value;
+        }
+        // Direct fact access (e.g., $hostname, $operatingsystem)
         value = puppet_facts_get(env, name);
         if (value) return value;
     }
@@ -1920,6 +1958,71 @@ puppet_value_t *puppet_facts_get(puppet_env_t *env, const char *fact_name) {
         default:
             return puppet_value_create_undef();
     }
+}
+
+/**
+ * @brief Get all facts as a nested hash for $facts access
+ */
+puppet_value_t *puppet_facts_get_all_as_hash(puppet_env_t *env) {
+    if (!env || !env->facts_db) {
+        return NULL;
+    }
+
+    puppet_facts_db_t *facts_db = env->facts_db;
+    if (!facts_db->current_node) return NULL;
+
+    /* Find current node */
+    puppet_value_t *index_value = puppet_hash_get(facts_db->node_index,
+        facts_db->current_node, strlen(facts_db->current_node));
+    if (!index_value || index_value->type != PUPPET_VALUE_NUMBER) return NULL;
+
+    size_t index = (size_t)index_value->data.number;
+    if (index >= facts_db->node_count) return NULL;
+
+    puppet_node_facts_t *node = &facts_db->nodes[index];
+    if (!node->facts) return NULL;
+
+    /* Create root hash for $facts */
+    puppet_value_t *root = puppet_value_create_hash();
+
+    /* Iterate through all facts and build nested structure */
+    for (size_t i = 0; i < node->facts->bucket_count; i++) {
+        puppet_hash_entry_t *entry = node->facts->buckets[i];
+        while (entry) {
+            const char *fact_name = entry->key.data;
+            puppet_value_t *fact_value = entry->value;
+
+            /* Split dotted name and create nested hashes */
+            puppet_value_t *current = root;
+            char *name_copy = puppet_strdup(fact_name);
+            char *token = strtok(name_copy, ".");
+            char *next_token = strtok(NULL, ".");
+
+            while (token) {
+                if (!next_token) {
+                    /* Last token - set the value */
+                    puppet_value_t *val_copy = puppet_value_copy(fact_value);
+                    puppet_hash_set(current->data.hash, token, strlen(token), val_copy);
+                } else {
+                    /* Intermediate token - get or create nested hash */
+                    puppet_value_t *nested = puppet_hash_get(current->data.hash,
+                        token, strlen(token));
+                    if (!nested || nested->type != PUPPET_VALUE_HASH) {
+                        nested = puppet_value_create_hash();
+                        puppet_hash_set(current->data.hash, token, strlen(token), nested);
+                    }
+                    current = nested;
+                }
+                token = next_token;
+                next_token = strtok(NULL, ".");
+            }
+
+            puppet_free(name_copy);
+            entry = entry->next;
+        }
+    }
+
+    return root;
 }
 
 int puppet_env_set_facts_db(puppet_env_t *env, puppet_facts_db_t *facts_db) {

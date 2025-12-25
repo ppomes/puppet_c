@@ -16,8 +16,8 @@ $debug_mode = true
 class base_config {
   # Use facts for system-aware configuration
   $os_family = $facts['os']['family']
-  $hostname = $facts['networking']['hostname']
-  $fqdn = $facts['networking']['fqdn']
+  $hostname = $facts['hostname']
+  $fqdn = $facts['fqdn']
   $ip = $facts['networking']['ip']
   $memory_mb = $facts['memory']['system']['total_bytes']
 
@@ -150,7 +150,7 @@ class file_examples {
   }
 
   # File with interpolated facts
-  $hostname = $facts['networking']['hostname']
+  $hostname = $facts['hostname']
   file { '/tmp/puppetc-demo/hostname.txt':
     ensure  => present,
     content => "This host is: ${hostname}\n",
