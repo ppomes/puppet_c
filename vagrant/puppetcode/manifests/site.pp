@@ -168,12 +168,29 @@ class file_examples {
 # ============================================================================
 # Node definitions
 # ============================================================================
+
+# Vagrant agent node
+node 'puppet-agent' {
+  notify { 'welcome':
+    message => "Configuring puppet-agent with puppetc - App: ${app_name} v${app_version}",
+  }
+
+  include base_config
+  include app_config
+  include exec_examples
+  include file_examples
+
+  notify { 'complete':
+    message => 'Puppet run completed successfully!',
+  }
+}
+
+# Default node - catches any unmatched node names
 node default {
   notify { 'welcome':
     message => "Configuring node with puppetc - App: ${app_name} v${app_version}",
   }
 
-  # Include all classes
   include base_config
   include app_config
   include exec_examples
