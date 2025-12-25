@@ -212,6 +212,8 @@ puppet_stmt_t *puppet_find_class_def(puppet_env_t *env, const char *class_name);
 puppet_facts_db_t *puppet_facts_db_create(void);
 void puppet_facts_db_destroy(puppet_facts_db_t *facts_db);
 int puppet_facts_db_load_file(puppet_facts_db_t *facts_db, const char *filepath);
+int puppet_facts_db_load_json(puppet_facts_db_t *facts_db, const char *certname,
+                               void *facts_json);  /* json_value_t* */
 int puppet_facts_db_set_current_node(puppet_facts_db_t *facts_db, const char *certname);
 puppet_value_t *puppet_facts_get(puppet_env_t *env, const char *fact_name);
 int puppet_env_set_facts_db(puppet_env_t *env, puppet_facts_db_t *facts_db);

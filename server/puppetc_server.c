@@ -102,7 +102,7 @@ struct connection_info {
  * @brief Compile a catalog for the given request
  */
 static char *compile_catalog(const char *certname, const char *environment,
-                             puppet_hash_t *facts) {
+                             json_value_t *facts_json) {
     puppet_program_t *program = NULL;
     puppet_loader_t *loader = NULL;
     char *catalog_json = NULL;
@@ -147,10 +147,19 @@ static char *compile_catalog(const char *certname, const char *environment,
     puppet_env_enable_catalog(env, certname, environment ? environment : DEFAULT_ENVIRONMENT);
 
     /* Set facts if provided */
-    if (facts) {
+    if (facts_json && facts_json->type == JSON_VALUE_OBJECT) {
         puppet_facts_db_t *facts_db = puppet_facts_db_create();
-        /* TODO: Convert facts hash to facts_db format */
-        puppet_env_set_facts_db(env, facts_db);
+        if (puppet_facts_db_load_json(facts_db, certname, facts_json) == 0) {
+            puppet_env_set_facts_db(env, facts_db);
+            if (verbose) {
+                fprintf(stderr, "[INFO] Loaded facts for node: %s\n", certname);
+            }
+        } else {
+            puppet_facts_db_destroy(facts_db);
+            if (verbose) {
+                fprintf(stderr, "[WARN] Failed to load facts for node: %s\n", certname);
+            }
+        }
     }
 
     /* Execute program */
@@ -225,16 +234,17 @@ static enum MHD_Result handle_catalog(struct MHD_Connection *connection,
         environment = env_json->data.string_value;
     }
 
-    /* Extract facts (optional) - TODO: convert to puppet_hash_t */
-    puppet_hash_t *facts = NULL;
+    /* Extract facts (optional) */
+    json_value_t *facts_json = json_object_get(request, "facts");
 
     if (verbose) {
-        fprintf(stderr, "[INFO] Compiling catalog for node: %s (env: %s)\n",
-                certname, environment ? environment : DEFAULT_ENVIRONMENT);
+        fprintf(stderr, "[INFO] Compiling catalog for node: %s (env: %s, facts: %s)\n",
+                certname, environment ? environment : DEFAULT_ENVIRONMENT,
+                facts_json ? "yes" : "no");
     }
 
     /* Compile catalog */
-    char *catalog_json = compile_catalog(certname, environment, facts);
+    char *catalog_json = compile_catalog(certname, environment, facts_json);
 
     json_value_destroy(request);
 

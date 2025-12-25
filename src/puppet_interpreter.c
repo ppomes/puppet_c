@@ -1832,6 +1832,29 @@ int puppet_facts_db_load_file(puppet_facts_db_t *facts_db, const char *filepath)
     return result;
 }
 
+int puppet_facts_db_load_json(puppet_facts_db_t *facts_db, const char *certname,
+                               void *facts_json_ptr) {
+    json_value_t *facts_json = (json_value_t *)facts_json_ptr;
+    if (!facts_db || !certname || !facts_json || facts_json->type != JSON_VALUE_OBJECT) {
+        return -1;
+    }
+
+    /* Add node with the given certname */
+    if (puppet_facts_db_add_node(facts_db, certname, NULL) < 0) {
+        return -1;
+    }
+
+    puppet_node_facts_t *node = &facts_db->nodes[facts_db->node_count - 1];
+
+    /* Process all facts from the JSON object */
+    puppet_facts_process_object(node, NULL, facts_json);
+
+    /* Set as current node */
+    puppet_facts_db_set_current_node(facts_db, certname);
+
+    return 0;
+}
+
 int puppet_facts_db_set_current_node(puppet_facts_db_t *facts_db, const char *certname) {
     if (!facts_db || !certname) return -1;
     
