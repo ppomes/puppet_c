@@ -10,8 +10,7 @@
 #   puppetcode/hiera/     -> /etc/puppet/hiera
 
 Vagrant.configure("2") do |config|
-  # Use generic Debian 12 box (more reliable than debian/bookworm64)
-  config.vm.box = "generic/debian12"
+  config.vm.box = "bento/ubuntu-24.04"
 
   # Increase boot timeout for slower machines
   config.vm.boot_timeout = 600
