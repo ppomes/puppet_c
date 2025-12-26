@@ -244,23 +244,72 @@ puppet_value_t *puppet_func_defined(puppet_expr_list_t *args, puppet_env_t *env)
     
     if (arg->type == PUPPET_VALUE_STRING) {
         const char *name = arg->data.string.data;
-        
-        // Check if it's a class name (simplified - just check if loader exists)
-        // TODO: Add proper class checking when loader API is exposed
-        if (env->loader) {
-            // For now, we can't check loaded classes without loader API
-            // This would need puppet_loader_is_class_loaded() function
+
+        // Check if it's a class that's been loaded
+        if (env->loader && puppet_loader_is_class_loaded(env->loader, name)) {
+            is_defined = true;
         }
-        
-        // Check defined resources
+
+        // Check if it's a class definition in the registry
+        if (!is_defined && puppet_find_class_def(env, name)) {
+            is_defined = true;
+        }
+
+        // Check defined resources (by type::title format)
         if (!is_defined && env->defined_resources) {
             puppet_value_t *resource_val = puppet_hash_get(env->defined_resources, name, strlen(name));
             if (resource_val) {
                 is_defined = true;
             }
         }
+
+        // Check resource catalog (type::title format)
+        if (!is_defined && env->resource_catalog) {
+            puppet_value_t *catalog_val = puppet_hash_get(env->resource_catalog, name, strlen(name));
+            if (catalog_val) {
+                is_defined = true;
+            }
+        }
+
+        // Handle resource reference format like File['/etc/motd']
+        if (!is_defined) {
+            const char *bracket = strchr(name, '[');
+            if (bracket && name[strlen(name) - 1] == ']') {
+                // Extract type and title
+                size_t type_len = bracket - name;
+                char *type = puppet_malloc(type_len + 1);
+                memcpy(type, name, type_len);
+                type[type_len] = '\0';
+
+                size_t title_len = strlen(name) - type_len - 2;  // -2 for [ and ]
+                char *title = puppet_malloc(title_len + 1);
+                memcpy(title, bracket + 1, title_len);
+                title[title_len] = '\0';
+
+                // Remove quotes from title if present
+                if (title_len >= 2 && (title[0] == '\'' || title[0] == '"')) {
+                    memmove(title, title + 1, title_len - 2);
+                    title[title_len - 2] = '\0';
+                }
+
+                // Build catalog key (lowercase type::title)
+                char catalog_key[512];
+                snprintf(catalog_key, sizeof(catalog_key), "%s::%s", type, title);
+                // Convert type to lowercase for lookup
+                for (char *p = catalog_key; *p && *p != ':'; p++) {
+                    *p = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
+                }
+
+                if (env->resource_catalog) {
+                    puppet_value_t *val = puppet_hash_get(env->resource_catalog, catalog_key, strlen(catalog_key));
+                    if (val) is_defined = true;
+                }
+
+                puppet_free(type);
+                puppet_free(title);
+            }
+        }
     }
-    // TODO: Handle resource reference format like File['/etc/motd']
     
     puppet_value_destroy(arg);
     return puppet_value_create_bool(is_defined);
