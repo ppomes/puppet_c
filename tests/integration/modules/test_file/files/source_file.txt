@@ -1,0 +1,2 @@
+This file was served via puppet:/// URL
+Integration test successful!

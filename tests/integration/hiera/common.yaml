@@ -1,0 +1,3 @@
+---
+# Common hiera data for integration tests
+test_value: "hiera lookup works"

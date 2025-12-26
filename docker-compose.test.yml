@@ -1,0 +1,40 @@
+# Docker Compose for integration tests
+# Uses test manifests from tests/integration/
+
+services:
+  test-server:
+    build:
+      context: .
+      target: server
+    image: puppetc-server:latest
+    container_name: puppetc-test-server
+    ports:
+      - "8141:8140"
+    volumes:
+      - ./tests/integration/manifests:/etc/puppet/manifests:ro
+      - ./tests/integration/modules:/etc/puppet/modules:ro
+      - ./tests/integration/hiera:/etc/puppet/hiera:ro
+    networks:
+      - puppet-test
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8140/status"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  test-agent:
+    build:
+      context: .
+      target: agent
+    image: puppetc-agent:latest
+    depends_on:
+      test-server:
+        condition: service_healthy
+    environment:
+      - PUPPET_SERVER=http://test-server:8140
+    networks:
+      - puppet-test
+
+networks:
+  puppet-test:
+    driver: bridge

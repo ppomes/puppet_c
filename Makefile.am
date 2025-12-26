@@ -23,3 +23,8 @@ check-syntax:
 		$(CC) $(CFLAGS) $(CPPFLAGS) -fsyntax-only $$file || exit 1; \
 	done
 	@echo "All syntax checks passed."
+
+.PHONY: integration-test
+integration-test:
+	@echo "Running integration tests..."
+	@./tests/integration/run_tests.sh
