@@ -131,15 +131,29 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 
 ## Known Limitations
 
+### Parser Limitations
+
 - Class instantiation with single quotes may fail due to parser ambiguity:
   ```puppet
   # Use double quotes:
   class { "apache": }
   ```
-- No resource catalog generation
-- No PuppetDB support
-- Incomplete stdlib coverage
-- Many edge cases not handled
+- **Lambda expressions**: Lambda blocks (`|$x| { ... }`) are parsed but statement-to-expression conversion is incomplete
+- **Parameterized types**: Type parameters like `Array[String]` or `Optional[Integer]` are not yet implemented
+
+### Feature Limitations
+
+- **Virtual resources**: The `@resource` syntax for virtual resources is not supported. The `realize()` function exists but cannot realize virtual resources
+- **Resource collectors**: The `<| |>` and `<<| |>>` collector syntax is not implemented
+- **Resource relationships**: Chaining arrows (`->`, `~>`) have limited support
+- **No PuppetDB support**: No integration with PuppetDB for exported resources or queries
+- **Incomplete stdlib coverage**: Many stdlib functions are implemented but not all
+
+### Runtime Limitations
+
+- **No pluginsync**: Custom facts and functions must be pre-installed
+- **Limited error messages**: Parse and runtime errors may not always point to exact location
+- **Single-threaded server**: The catalog server handles requests sequentially
 
 ## Implemented Functions
 
