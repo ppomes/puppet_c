@@ -31,28 +31,37 @@ static int run_check_command(const char *cmd) {
 }
 
 /**
- * @brief Run command as a different user
+ * @brief Run command as a different user with optional environment
  */
-static int run_as_user(const char *cmd, const char *user, const char *cwd, bool verbose) {
-    char full_cmd[4096];
+static int run_as_user(const char *cmd, const char *user, const char *cwd,
+                       const char *environment, bool verbose) {
+    char full_cmd[8192];
+    char env_prefix[4096] = "";
+
+    /* Build environment variable prefix if specified */
+    if (environment && strlen(environment) > 0) {
+        /* Environment can be a single VAR=value or space-separated list */
+        /* We prefix the command with export statements */
+        snprintf(env_prefix, sizeof(env_prefix), "export %s && ", environment);
+    }
 
     if (user) {
         if (cwd) {
             snprintf(full_cmd, sizeof(full_cmd),
-                     "su -s /bin/sh -c 'cd \"%s\" && %s' %s 2>&1",
-                     cwd, cmd, user);
+                     "su -s /bin/sh -c 'cd \"%s\" && %s%s' %s 2>&1",
+                     cwd, env_prefix, cmd, user);
         } else {
             snprintf(full_cmd, sizeof(full_cmd),
-                     "su -s /bin/sh -c '%s' %s 2>&1",
-                     cmd, user);
+                     "su -s /bin/sh -c '%s%s' %s 2>&1",
+                     env_prefix, cmd, user);
         }
     } else {
         if (cwd) {
             snprintf(full_cmd, sizeof(full_cmd),
-                     "cd \"%s\" && %s 2>&1",
-                     cwd, cmd);
+                     "cd \"%s\" && %s%s 2>&1",
+                     cwd, env_prefix, cmd);
         } else {
-            snprintf(full_cmd, sizeof(full_cmd), "%s 2>&1", cmd);
+            snprintf(full_cmd, sizeof(full_cmd), "%s%s 2>&1", env_prefix, cmd);
         }
     }
 
@@ -83,6 +92,7 @@ static apply_result_t exec_apply(const resource_t *resource, apply_context_t *ct
     const char *onlyif_cmd = resource_get_param(resource, "onlyif");
     const char *cwd = resource_get_param(resource, "cwd");
     const char *user = resource_get_param(resource, "user");
+    const char *environment = resource_get_param(resource, "environment");
     const char *returns_str = resource_get_param(resource, "returns");
 
     /* Default expected return code */
@@ -130,9 +140,12 @@ static apply_result_t exec_apply(const resource_t *resource, apply_context_t *ct
     /* Execute the command */
     if (ctx->verbose) {
         print_info("Exec[%s]: Running '%s'", resource->title, command);
+        if (environment) {
+            print_info("Exec[%s]: With environment: %s", resource->title, environment);
+        }
     }
 
-    int ret = run_as_user(command, user, cwd, ctx->verbose);
+    int ret = run_as_user(command, user, cwd, environment, ctx->verbose);
 
     /* Check return code */
     /* Note: system() returns the full status, we need WEXITSTATUS for the actual exit code */

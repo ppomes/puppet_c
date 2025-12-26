@@ -30,4 +30,11 @@ class test_exec {
     command => "/bin/date > /tmp/test_exec_date.txt",
     creates => "/tmp/test_exec_date.txt",
   }
+
+  # Test 6: Exec with environment variable
+  exec { "exec_env_test":
+    command     => "/bin/sh -c 'echo $MY_TEST_VAR > /tmp/test_exec_env.txt'",
+    environment => "MY_TEST_VAR=environment_works",
+    creates     => "/tmp/test_exec_env.txt",
+  }
 }

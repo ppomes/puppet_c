@@ -167,6 +167,8 @@ docker-compose -f docker-compose.test.yml run --rm --entrypoint /bin/sh test-age
     check_file "/tmp/test_exec_cwd.txt"
     check_file_content "/tmp/test_exec_cwd.txt" "/tmp"
     check_file "/tmp/test_exec_date.txt"
+    check_file "/tmp/test_exec_env.txt"
+    check_file_content "/tmp/test_exec_env.txt" "environment_works"
 
     echo ""
     echo "--- Host Provider Tests ---"
