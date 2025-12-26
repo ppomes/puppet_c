@@ -121,6 +121,7 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 - Hiera lookups (YAML backend)
 - Module autoloading
 - Many stdlib functions (see below)
+- Resource providers for: file, package, service, exec, cron, host, group, user
 
 ## Known Limitations
 
@@ -167,6 +168,22 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 **Crypto**: sha1, md5, base64
 
 **Data**: lookup
+
+## Implemented Resources
+
+The agent supports the following resource types:
+
+| Resource | Description |
+|----------|-------------|
+| file | Manage files, directories, and symlinks. Supports `puppet:///` URLs |
+| package | Install/remove packages (apt, dnf) |
+| service | Manage systemd services |
+| exec | Execute commands with conditions |
+| cron | Manage cron jobs |
+| host | Manage /etc/hosts entries |
+| group | Manage system groups |
+| user | Manage system users |
+| notify | Log messages during catalog application |
 
 ## Roadmap
 
