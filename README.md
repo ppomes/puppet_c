@@ -25,37 +25,30 @@ make check
 
 Build and run using Docker (no dependencies needed on host).
 
-Sample manifests, modules, and hiera data are provided in `docker/`.
+Sample manifests, modules, and hiera data are provided in `puppetcode/` (shared with Vagrant).
 
 ```bash
 # Build images
-docker build --target server -t puppetc-server .
-docker build --target agent -t puppetc-agent .
+docker-compose build
 
-# Run server with sample manifests
-docker run -d -p 8140:8140 \
-    -v ./docker/manifests:/etc/puppet/manifests:ro \
-    puppetc-server
-
-# Run agent (noop mode)
-docker run --rm --network host puppetc-agent -n
-
-# Run agent (apply mode)
-docker run --rm --network host puppetc-agent -a
-```
-
-Or use docker-compose (uses `docker/` sample data):
-
-```bash
 # Start server
 docker-compose up -d server
 
-# Run agent in noop mode
-docker-compose run agent
+# Run agent once (noop mode)
+docker-compose run --rm agent
 
-# Run agent in apply mode
-docker-compose run agent -a
+# Run agent once (apply mode)
+docker-compose run --rm agent -a
+
+# Interactive shell for multiple agent runs
+docker-compose up -d agent-shell
+docker-compose exec agent-shell bash
+# Inside container:
+#   puppetc-agent -n    # noop mode
+#   puppetc-agent -a    # apply mode
 ```
+
+Edit `puppetcode/manifests/site.pp` on your host - changes are reflected immediately in the server.
 
 ## Usage
 

@@ -4,7 +4,7 @@
 # Vagrant configuration for puppetc testing
 # Two Debian VMs: server and agent
 #
-# The puppetcode/ directory structure mirrors /etc/puppet on the server:
+# The ../puppetcode/ directory (shared with Docker) mirrors /etc/puppet on the server:
 #   puppetcode/manifests/ -> /etc/puppet/manifests
 #   puppetcode/modules/   -> /etc/puppet/modules
 #   puppetcode/hiera/     -> /etc/puppet/hiera
@@ -56,12 +56,12 @@ Vagrant.configure("2") do |config|
     server.vm.hostname = "puppet-server"
     server.vm.network "private_network", ip: "192.168.56.10"
 
-    # Share puppetcode subdirectories with server
-    server.vm.synced_folder "puppetcode/manifests", "/etc/puppet/manifests",
+    # Share puppetcode subdirectories with server (from project root)
+    server.vm.synced_folder "../puppetcode/manifests", "/etc/puppet/manifests",
       owner: "root", group: "root"
-    server.vm.synced_folder "puppetcode/modules", "/etc/puppet/modules",
+    server.vm.synced_folder "../puppetcode/modules", "/etc/puppet/modules",
       owner: "root", group: "root"
-    server.vm.synced_folder "puppetcode/hiera", "/etc/puppet/hiera",
+    server.vm.synced_folder "../puppetcode/hiera", "/etc/puppet/hiera",
       owner: "root", group: "root"
 
     server.vm.provider "virtualbox" do |vb|
@@ -127,8 +127,8 @@ EOF
       echo "Puppetc server installed and started!"
       echo "Server listening on http://192.168.56.10:8140"
       echo ""
-      echo "Manifests: /etc/puppet/manifests (synced from vagrant/puppetcode/)"
-      echo "Edit vagrant/puppetcode/site.pp on your host to test!"
+      echo "Manifests: /etc/puppet/manifests (synced from puppetcode/)"
+      echo "Edit puppetcode/manifests/site.pp on your host to test!"
       echo "=========================================="
     SHELL
   end
