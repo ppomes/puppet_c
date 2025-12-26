@@ -31,6 +31,7 @@ node default {
   include app_config
   include exec_examples
   include file_examples
+  include cron_examples
 
   notify { 'complete':
     message => 'Puppet run completed successfully!',

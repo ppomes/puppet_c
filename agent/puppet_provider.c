@@ -65,6 +65,7 @@ void providers_init(os_family_t os_family) {
     provider_service_register();
     provider_notify_register();
     provider_exec_register();
+    provider_cron_register();
 }
 
 void providers_shutdown(void) {
