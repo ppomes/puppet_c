@@ -75,6 +75,7 @@ FROM debian:bookworm-slim AS agent
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4 \
     ca-certificates \
+    cron \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install packages
