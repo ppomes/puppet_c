@@ -150,9 +150,17 @@ void *puppet_value_to_ruby(puppet_value_t *value, puppet_ruby_context_t *ctx) {
         }
             
         case PUPPET_VALUE_HASH: {
-            // Create Ruby hash (TODO: implement hash iteration)
             VALUE hash = rb_hash_new();
-            // TODO: Iterate over hash entries and convert
+            /* Iterate over all buckets and entries */
+            for (size_t i = 0; i < value->data.hash->bucket_count; i++) {
+                puppet_hash_entry_t *entry = value->data.hash->buckets[i];
+                while (entry) {
+                    VALUE key = rb_str_new(entry->key.data, entry->key.len);
+                    VALUE val = (VALUE)puppet_value_to_ruby(entry->value, ctx);
+                    rb_hash_aset(hash, key, val);
+                    entry = entry->next;
+                }
+            }
             return (void*)hash;
         }
             

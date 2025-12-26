@@ -66,7 +66,7 @@ The architecture includes comprehensive type mapping between Puppet and Ruby:
 | `PUPPET_VALUE_STRING` | `rb_str_new()` | Length-aware string creation |
 | `PUPPET_VALUE_NUMBER` | `LONG2NUM()`/`rb_float_new()` | Preserves integer vs float |
 | `PUPPET_VALUE_ARRAY` | `rb_ary_new()` | Recursive conversion |
-| `PUPPET_VALUE_HASH` | `rb_hash_new()` | Hash conversion (TODO) |
+| `PUPPET_VALUE_HASH` | `rb_hash_new()` | Recursive key/value conversion |
 
 #### Puppet String Conversion for Templates:
 
