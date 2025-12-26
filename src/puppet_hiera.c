@@ -248,15 +248,130 @@ char *puppet_hiera_interpolate(const char *template, puppet_hiera_context_t *con
 }
 
 /**
- * @brief Simple merge - just returns first value
+ * @brief Check if array contains a value (for unique merge)
+ */
+static bool array_contains_value(puppet_array_t *array, puppet_value_t *value) {
+    if (!array || !value) return false;
+
+    for (size_t i = 0; i < array->count; i++) {
+        puppet_value_t *item = array->items[i];
+        if (!item) continue;
+
+        /* Simple equality check for strings */
+        if (item->type == PUPPET_VALUE_STRING && value->type == PUPPET_VALUE_STRING) {
+            if (item->data.string.len == value->data.string.len &&
+                memcmp(item->data.string.data, value->data.string.data, item->data.string.len) == 0) {
+                return true;
+            }
+        }
+        /* Simple equality check for numbers */
+        else if (item->type == PUPPET_VALUE_NUMBER && value->type == PUPPET_VALUE_NUMBER) {
+            if (item->data.number == value->data.number) {
+                return true;
+            }
+        }
+        /* Simple equality check for booleans */
+        else if (item->type == PUPPET_VALUE_BOOL && value->type == PUPPET_VALUE_BOOL) {
+            if (item->data.boolean == value->data.boolean) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief Deep merge two hash values recursively
+ */
+static puppet_value_t *deep_merge_hashes(puppet_value_t *base, puppet_value_t *overlay) {
+    if (!base || base->type != PUPPET_VALUE_HASH) {
+        return overlay ? puppet_value_copy(overlay) : NULL;
+    }
+    if (!overlay || overlay->type != PUPPET_VALUE_HASH) {
+        return puppet_value_copy(base);
+    }
+
+    puppet_value_t *result = puppet_value_copy(base);
+
+    /* Iterate over overlay hash and merge into result */
+    for (size_t i = 0; i < overlay->data.hash->bucket_count; i++) {
+        puppet_hash_entry_t *entry = overlay->data.hash->buckets[i];
+        while (entry) {
+            puppet_value_t *existing = puppet_hash_get(result->data.hash,
+                                                        entry->key.data, entry->key.len);
+
+            if (existing && existing->type == PUPPET_VALUE_HASH &&
+                entry->value->type == PUPPET_VALUE_HASH) {
+                /* Recursively merge nested hashes */
+                puppet_value_t *merged = deep_merge_hashes(existing, entry->value);
+                puppet_hash_set(result->data.hash, entry->key.data, entry->key.len, merged);
+            } else {
+                /* Overlay value wins */
+                puppet_hash_set(result->data.hash, entry->key.data, entry->key.len,
+                               puppet_value_copy(entry->value));
+            }
+            entry = entry->next;
+        }
+    }
+
+    return result;
+}
+
+/**
+ * @brief Merge values according to strategy
  */
 puppet_value_t *puppet_hiera_merge_values(
     puppet_value_t *existing,
     puppet_value_t *new,
     puppet_hiera_merge_t strategy
 ) {
-    (void)strategy;
-    (void)new;
+    if (!new) return existing;
+    if (!existing) return puppet_value_copy(new);
+
+    switch (strategy) {
+        case HIERA_MERGE_FIRST:
+            /* First value wins - existing is already first */
+            return existing;
+
+        case HIERA_MERGE_UNIQUE:
+            /* Array merge with unique values */
+            if (existing->type == PUPPET_VALUE_ARRAY && new->type == PUPPET_VALUE_ARRAY) {
+                for (size_t i = 0; i < new->data.array->count; i++) {
+                    puppet_value_t *item = new->data.array->items[i];
+                    if (item && !array_contains_value(existing->data.array, item)) {
+                        puppet_array_append(existing->data.array, puppet_value_copy(item));
+                    }
+                }
+            }
+            return existing;
+
+        case HIERA_MERGE_HASH:
+            /* Shallow hash merge - overlay keys on existing */
+            if (existing->type == PUPPET_VALUE_HASH && new->type == PUPPET_VALUE_HASH) {
+                for (size_t i = 0; i < new->data.hash->bucket_count; i++) {
+                    puppet_hash_entry_t *entry = new->data.hash->buckets[i];
+                    while (entry) {
+                        /* Only add if key doesn't exist in existing */
+                        if (!puppet_hash_get(existing->data.hash, entry->key.data, entry->key.len)) {
+                            puppet_hash_set(existing->data.hash, entry->key.data, entry->key.len,
+                                           puppet_value_copy(entry->value));
+                        }
+                        entry = entry->next;
+                    }
+                }
+            }
+            return existing;
+
+        case HIERA_MERGE_DEEP:
+            /* Deep hash merge */
+            if (existing->type == PUPPET_VALUE_HASH && new->type == PUPPET_VALUE_HASH) {
+                puppet_value_t *merged = deep_merge_hashes(existing, new);
+                puppet_value_destroy(existing);
+                return merged;
+            }
+            return existing;
+    }
+
     return existing;
 }
 
@@ -269,51 +384,56 @@ puppet_value_t *puppet_hiera_lookup(
     puppet_value_t *default_value,
     puppet_hiera_merge_t merge_strategy
 ) {
-    (void)merge_strategy; /* Currently unused - TODO: implement merging */
     if (!context || !key) return default_value;
-    
+
     // Check cache first
     puppet_value_t *cached = puppet_hash_get(context->config->cache->data.hash, key, strlen(key));
     if (cached) {
         return cached;
     }
-    
+
     puppet_value_t *result = NULL;
-    
-    // Try to load common.yaml
+
+    // Iterate through hierarchy levels
     for (puppet_hiera_level_t *level = context->config->hierarchy; level; level = level->next) {
         char fullpath[1024];
         snprintf(fullpath, sizeof(fullpath), "%s/%s", level->datadir, level->path_template);
-        
+
         struct stat st;
         if (stat(fullpath, &st) != 0 || !S_ISREG(st.st_mode)) {
             continue;
         }
-        
+
         puppet_value_t *data = puppet_hiera_load_yaml(fullpath);
         if (data && data->type == PUPPET_VALUE_HASH) {
             puppet_value_t *value = puppet_hash_get(data->data.hash, key, strlen(key));
-            
+
             if (value) {
-                result = puppet_value_copy(value);
-                puppet_value_destroy(data);
-                break;
+                if (merge_strategy == HIERA_MERGE_FIRST) {
+                    /* First match wins - return immediately */
+                    result = puppet_value_copy(value);
+                    puppet_value_destroy(data);
+                    break;
+                } else {
+                    /* Merge with existing result */
+                    result = puppet_hiera_merge_values(result, value, merge_strategy);
+                }
             }
-            
+
             puppet_value_destroy(data);
         }
     }
-    
+
     // Use default if nothing found
     if (!result && default_value) {
         result = puppet_value_copy(default_value);
     }
-    
+
     // Cache the result
     if (result) {
         puppet_hash_set(context->config->cache->data.hash, key, strlen(key), puppet_value_copy(result));
     }
-    
+
     return result;
 }
 
