@@ -273,6 +273,11 @@ void provider_cron_register(void);
  */
 void provider_host_register(void);
 
+/**
+ * @brief Register group provider
+ */
+void provider_group_register(void);
+
 #ifdef __cplusplus
 }
 #endif

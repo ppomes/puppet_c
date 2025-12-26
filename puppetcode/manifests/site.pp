@@ -33,6 +33,7 @@ node default {
   include file_examples
   include cron_examples
   include host_examples
+  include group_examples
 
   notify { 'complete':
     message => 'Puppet run completed successfully!',
