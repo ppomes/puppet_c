@@ -401,8 +401,10 @@ static int run_agent(agent_config_t *config) {
         printf("\n=== Catalog JSON ===\n%s\n", catalog_json);
     }
 
-    display_catalog_summary(catalog_json);
-    list_catalog_resources(catalog_json);
+    if (config->verbose) {
+        display_catalog_summary(catalog_json);
+        list_catalog_resources(catalog_json);
+    }
 
     /* Apply catalog */
     if (config->apply_catalog || config->noop) {
