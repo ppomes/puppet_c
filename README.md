@@ -183,6 +183,8 @@ The agent supports the following resource types:
 | host | Manage /etc/hosts entries |
 | group | Manage system groups |
 | user | Manage system users |
+| sysctl | Manage kernel parameters via /proc/sys and /etc/sysctl.d |
+| mount | Manage filesystem mounts and /etc/fstab |
 | notify | Log messages during catalog application |
 
 ## Roadmap

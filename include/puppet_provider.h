@@ -288,6 +288,11 @@ void provider_user_register(void);
  */
 void provider_sysctl_register(void);
 
+/**
+ * @brief Register mount provider
+ */
+void provider_mount_register(void);
+
 #ifdef __cplusplus
 }
 #endif
