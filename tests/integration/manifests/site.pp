@@ -15,6 +15,8 @@ node default {
   include test_user
   include test_sysctl
   include test_mount
+  include test_package
+  include test_service
 
   notify { 'test_end':
     message => 'Integration tests completed',

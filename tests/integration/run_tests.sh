@@ -290,6 +290,56 @@ docker-compose -f docker-compose.test.yml run --rm --entrypoint /bin/sh test-age
         fi
     }
 
+    check_package_installed() {
+        if dpkg -l "$1" 2>/dev/null | grep -q "^ii"; then
+            echo "PASS: Package installed: $1"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: Package not installed: $1"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
+    check_package_absent() {
+        if ! dpkg -l "$1" 2>/dev/null | grep -q "^ii"; then
+            echo "PASS: Package correctly absent: $1"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: Package should be absent: $1"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
+    check_service_running() {
+        if systemctl is-active "$1" >/dev/null 2>&1; then
+            echo "PASS: Service running: $1"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: Service not running: $1"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
+    check_service_enabled() {
+        if systemctl is-enabled "$1" >/dev/null 2>&1; then
+            echo "PASS: Service enabled: $1"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: Service not enabled: $1"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
+    check_service_stopped() {
+        if ! systemctl is-active "$1" >/dev/null 2>&1; then
+            echo "PASS: Service stopped: $1"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: Service should be stopped: $1"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
     check_file_absent() {
         if [ ! -f "$1" ]; then
             echo "PASS: File correctly absent: $1"
@@ -372,6 +422,16 @@ docker-compose -f docker-compose.test.yml run --rm --entrypoint /bin/sh test-age
     check_mount_absent "/mnt/test_defined"
     check_mount_absent "/mnt/test_absent"
     check_fstab_absent "/mnt/test_absent"
+
+    echo ""
+    echo "--- Package Provider Tests ---"
+    check_package_installed "nano"
+    check_package_installed "tree"
+    check_package_absent "telnet"
+
+    echo ""
+    echo "--- Service Provider Tests ---"
+    echo "SKIP: Service tests not available in Docker (no systemd)"
 
     echo ""
     echo "================================"
