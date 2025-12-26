@@ -172,7 +172,12 @@ static void build_cron_time(const char *minute, const char *hour,
                             const char *weekday, const char *special,
                             char *buffer, size_t bufsize) {
     if (special && strlen(special) > 0) {
-        snprintf(buffer, bufsize, "%s", special);
+        /* Special schedules need @ prefix if not already present */
+        if (special[0] == '@') {
+            snprintf(buffer, bufsize, "%s", special);
+        } else {
+            snprintf(buffer, bufsize, "@%s", special);
+        }
     } else {
         snprintf(buffer, bufsize, "%s %s %s %s %s",
                  minute ? minute : "*",

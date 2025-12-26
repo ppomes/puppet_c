@@ -10,6 +10,7 @@ node default {
   include test_exec
   include test_host
   include test_notify
+  include test_cron
 
   notify { 'test_end':
     message => 'Integration tests completed',

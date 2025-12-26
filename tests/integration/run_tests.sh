@@ -136,6 +136,26 @@ docker-compose -f docker-compose.test.yml run --rm --entrypoint /bin/sh test-age
         fi
     }
 
+    check_cron_entry() {
+        if crontab -l 2>/dev/null | grep -q "$1"; then
+            echo "PASS: Cron entry exists: $1"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: Cron entry missing: $1"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
+    check_cron_absent() {
+        if ! crontab -l 2>/dev/null | grep -q "$1"; then
+            echo "PASS: Cron entry correctly absent: $1"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: Cron entry should be absent: $1"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
     check_file_absent() {
         if [ ! -f "$1" ]; then
             echo "PASS: File correctly absent: $1"
@@ -175,6 +195,16 @@ docker-compose -f docker-compose.test.yml run --rm --entrypoint /bin/sh test-age
     check_host_entry "testhost.example.com"
     check_host_entry "192.168.100.100"
     check_host_entry "another.example.com"
+
+    echo ""
+    echo "--- Cron Provider Tests ---"
+    check_cron_entry "test_cron_simple"
+    check_cron_entry "0 3"
+    check_cron_entry "test_cron_full"
+    check_cron_entry "30 2 15 6 1"
+    check_cron_entry "test_cron_special"
+    check_cron_entry "@daily"
+    check_cron_absent "should_not_exist"
 
     echo ""
     echo "================================"
