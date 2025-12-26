@@ -19,6 +19,12 @@ bool file_exists(const char *path) {
     return stat(path, &st) == 0;
 }
 
+bool path_exists(const char *path) {
+    if (!path) return false;
+    struct stat st;
+    return lstat(path, &st) == 0;  /* Does not follow symlinks */
+}
+
 bool is_directory(const char *path) {
     if (!path) return false;
     struct stat st;

@@ -13,11 +13,18 @@
 #include <stddef.h>
 
 /**
- * @brief Check if a file or directory exists
+ * @brief Check if a file or directory exists (follows symlinks)
  * @param path Path to check
  * @return true if exists, false otherwise
  */
 bool file_exists(const char *path);
+
+/**
+ * @brief Check if path exists (does not follow symlinks)
+ * @param path Path to check
+ * @return true if path itself exists, false otherwise
+ */
+bool path_exists(const char *path);
 
 /**
  * @brief Check if path is a directory

@@ -81,7 +81,7 @@ static resource_state_t file_check(const resource_t *resource, apply_context_t *
     }
 
     if (strcmp(ensure, "link") == 0) {
-        if (!file_exists(path)) return RESOURCE_STATE_ABSENT;
+        if (!path_exists(path)) return RESOURCE_STATE_ABSENT;
         return is_symlink(path) ? RESOURCE_STATE_PRESENT : RESOURCE_STATE_ABSENT;
     }
 
@@ -159,7 +159,7 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
 
         bool needs_create = false;
 
-        if (file_exists(path)) {
+        if (path_exists(path)) {
             if (is_symlink(path)) {
                 char current_target[1024];
                 ssize_t len = readlink(path, current_target, sizeof(current_target) - 1);
