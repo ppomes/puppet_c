@@ -2,7 +2,7 @@
 # vi: set ft=ruby :
 
 # Vagrant configuration for puppetc testing
-# Two Debian VMs: server and agent
+# Two Ubuntu VMs: server and agent
 #
 # The ../puppetcode/ directory (shared with Docker) mirrors /etc/puppet on the server:
 #   puppetcode/manifests/ -> /etc/puppet/manifests
@@ -10,7 +10,7 @@
 #   puppetcode/hiera/     -> /etc/puppet/hiera
 
 Vagrant.configure("2") do |config|
-  config.vm.box = "bento/ubuntu-24.04"
+  config.vm.box = "bento/ubuntu-22.04"
 
   # Increase boot timeout for slower machines
   config.vm.boot_timeout = 600
@@ -143,7 +143,7 @@ EOF
     agent.vm.provider "virtualbox" do |vb|
       vb.name = "puppetc-agent"
       vb.memory = "512"
-      vb.cpus = 1
+      vb.cpus = 2
       # Uncomment to see VM console for debugging boot issues:
       # vb.gui = true
       vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
