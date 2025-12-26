@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #include "puppet_memory.h"
 #include "puppet_json_common.h"
 #include "color_output.h"
@@ -304,6 +305,10 @@ static resource_t *parse_resource_from_json(json_value_t *res_obj) {
 int catalog_apply(const char *catalog_json, apply_context_t *ctx) {
     if (!catalog_json || !ctx) return -1;
 
+    /* Start timing */
+    struct timespec start_time, end_time;
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
+
     print_info("Applying catalog");
 
     /* Parse the catalog JSON */
@@ -367,7 +372,10 @@ int catalog_apply(const char *catalog_json, apply_context_t *ctx) {
 
     /* Summary */
     printf("\n");
-    print_notice("Applied catalog in %.2f seconds", 0.0);  /* TODO: add timing */
+    clock_gettime(CLOCK_MONOTONIC, &end_time);
+    double elapsed = (end_time.tv_sec - start_time.tv_sec) +
+                     (end_time.tv_nsec - start_time.tv_nsec) / 1e9;
+    print_notice("Applied catalog in %.2f seconds", elapsed);
     print_info("Resources: %d total, %d changed, %d failed",
                applied, ctx->changes_made, ctx->failures);
 
