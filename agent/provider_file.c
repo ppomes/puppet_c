@@ -4,6 +4,8 @@
  *
  * Manages file resources: create, modify content, set permissions, delete.
  * Generic implementation works on all platforms.
+ *
+ * Supports puppet:/// URLs for sourcing files from the Puppet server.
  */
 
 #include <stdio.h>
@@ -19,8 +21,126 @@
 #include <errno.h>
 #include <pwd.h>
 #include <grp.h>
+#include <curl/curl.h>
 
 #include "puppet_provider.h"
+
+/* Server URL from environment or default */
+static const char *get_puppet_server(void) {
+    const char *server = getenv("PUPPET_SERVER");
+    return server ? server : "http://localhost:8140";
+}
+
+/* ============================================================================
+ * Puppet URL Handling (puppet:///modules/...)
+ * ============================================================================ */
+
+/**
+ * @brief Buffer for HTTP response
+ */
+struct http_response_buffer {
+    char *data;
+    size_t size;
+};
+
+/**
+ * @brief Curl write callback
+ */
+static size_t http_write_callback(void *contents, size_t size, size_t nmemb,
+                                   void *userp) {
+    size_t realsize = size * nmemb;
+    struct http_response_buffer *buf = (struct http_response_buffer *)userp;
+
+    char *ptr = puppet_realloc(buf->data, buf->size + realsize + 1);
+    if (!ptr) return 0;
+
+    buf->data = ptr;
+    memcpy(&(buf->data[buf->size]), contents, realsize);
+    buf->size += realsize;
+    buf->data[buf->size] = '\0';
+
+    return realsize;
+}
+
+/**
+ * @brief Check if source is a puppet:/// URL
+ */
+static bool is_puppet_url(const char *source) {
+    return source && strncmp(source, "puppet:///", 10) == 0;
+}
+
+/**
+ * @brief Fetch file content from puppet:/// URL
+ *
+ * Converts puppet:///modules/<module>/<path> to
+ * http://<server>/puppet/v3/file_content/modules/<module>/<path>
+ *
+ * @param source The puppet:/// URL
+ * @param size_out Output: size of fetched content
+ * @return Allocated buffer with content, or NULL on error
+ */
+static char *fetch_puppet_url(const char *source, size_t *size_out) {
+    if (!source || strncmp(source, "puppet:///", 10) != 0) {
+        return NULL;
+    }
+
+    /* Extract path after puppet:/// */
+    const char *path = source + 10;  /* Skip "puppet:///" */
+
+    /* Only support modules/ mount point */
+    if (strncmp(path, "modules/", 8) != 0) {
+        fprintf(stderr, "Error: Only puppet:///modules/ URLs are supported\n");
+        return NULL;
+    }
+
+    /* Build HTTP URL */
+    const char *server = get_puppet_server();
+    char url[4096];
+    snprintf(url, sizeof(url), "%s/puppet/v3/file_content/%s", server, path);
+
+    /* Initialize curl */
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        fprintf(stderr, "Error: Failed to initialize curl\n");
+        return NULL;
+    }
+
+    struct http_response_buffer response = {0};
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+
+    CURLcode res = curl_easy_perform(curl);
+
+    if (res != CURLE_OK) {
+        fprintf(stderr, "Error: Failed to fetch %s: %s\n",
+                url, curl_easy_strerror(res));
+        curl_easy_cleanup(curl);
+        puppet_free(response.data);
+        return NULL;
+    }
+
+    /* Check HTTP status */
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    curl_easy_cleanup(curl);
+
+    if (http_code != 200) {
+        fprintf(stderr, "Error: Server returned HTTP %ld for %s\n",
+                http_code, url);
+        puppet_free(response.data);
+        return NULL;
+    }
+
+    if (size_out) {
+        *size_out = response.size;
+    }
+
+    return response.data;
+}
 
 static uid_t get_uid(const char *owner) {
     if (!owner) return (uid_t)-1;
@@ -235,12 +355,24 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
             }
         }
 
-        /* Handle source parameter (copy from source) */
+        /* Handle source parameter (copy from source or puppet:/// URL) */
         if (source && !content) {
-            char *source_content = read_file_contents(source, 0);
-            if (!source_content) {
-                apply_context_set_error(ctx, "Cannot read source file: %s", source);
-                return APPLY_FAILED;
+            char *source_content = NULL;
+
+            if (is_puppet_url(source)) {
+                /* Fetch from puppet server */
+                source_content = fetch_puppet_url(source, NULL);
+                if (!source_content) {
+                    apply_context_set_error(ctx, "Cannot fetch puppet URL: %s", source);
+                    return APPLY_FAILED;
+                }
+            } else {
+                /* Read from local file */
+                source_content = read_file_contents(source, 0);
+                if (!source_content) {
+                    apply_context_set_error(ctx, "Cannot read source file: %s", source);
+                    return APPLY_FAILED;
+                }
             }
 
             char *current = read_file_contents(path, 0);

@@ -91,6 +91,138 @@ static enum MHD_Result handle_status(struct MHD_Connection *connection) {
 }
 
 /**
+ * @brief Send raw file content response
+ */
+static enum MHD_Result send_file_response(struct MHD_Connection *connection,
+                                          unsigned int status_code,
+                                          const char *content,
+                                          size_t content_len) {
+    struct MHD_Response *response;
+    enum MHD_Result ret;
+
+    response = MHD_create_response_from_buffer(content_len,
+                                                (void *)content,
+                                                MHD_RESPMEM_MUST_COPY);
+    if (!response) return MHD_NO;
+
+    MHD_add_response_header(response, "Content-Type", "application/octet-stream");
+    MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
+
+    ret = MHD_queue_response(connection, status_code, response);
+    MHD_destroy_response(response);
+
+    return ret;
+}
+
+/**
+ * @brief Handle GET /puppet/v3/file_content/modules/<module>/<path>
+ *
+ * Serves files from module fileserver:
+ *   puppet:///modules/mymodule/myfile.txt
+ *   -> GET /puppet/v3/file_content/modules/mymodule/myfile.txt
+ *   -> reads <modules_path>/mymodule/files/myfile.txt
+ */
+static enum MHD_Result handle_file_content(struct MHD_Connection *connection,
+                                           const char *url) {
+    /* URL format: /puppet/v3/file_content/modules/<module>/<path> */
+    const char *prefix = "/puppet/v3/file_content/modules/";
+    size_t prefix_len = strlen(prefix);
+
+    if (strncmp(url, prefix, prefix_len) != 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST,
+                         "Invalid file_content URL format");
+    }
+
+    const char *module_and_path = url + prefix_len;
+
+    /* Extract module name (up to first /) */
+    const char *slash = strchr(module_and_path, '/');
+    if (!slash || slash == module_and_path) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST,
+                         "Missing module name or file path");
+    }
+
+    size_t module_len = slash - module_and_path;
+    char module_name[256];
+    if (module_len >= sizeof(module_name)) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST,
+                         "Module name too long");
+    }
+    strncpy(module_name, module_and_path, module_len);
+    module_name[module_len] = '\0';
+
+    const char *file_path = slash + 1;
+    if (strlen(file_path) == 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST,
+                         "Missing file path");
+    }
+
+    /* Security: reject paths with .. */
+    if (strstr(file_path, "..") != NULL || strstr(module_name, "..") != NULL) {
+        return send_error(connection, MHD_HTTP_FORBIDDEN,
+                         "Path traversal not allowed");
+    }
+
+    /* Build full path: <modules_path>/<module>/files/<path> */
+    if (!modules_path) {
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                         "Modules path not configured");
+    }
+
+    char full_path[4096];
+    snprintf(full_path, sizeof(full_path), "%s/%s/files/%s",
+             modules_path, module_name, file_path);
+
+    if (verbose) {
+        fprintf(stderr, "[INFO] Fileserver request: %s -> %s\n", url, full_path);
+    }
+
+    /* Read file */
+    FILE *fp = fopen(full_path, "rb");
+    if (!fp) {
+        if (verbose) {
+            fprintf(stderr, "[WARN] File not found: %s\n", full_path);
+        }
+        return send_error(connection, MHD_HTTP_NOT_FOUND,
+                         "File not found");
+    }
+
+    /* Get file size */
+    fseek(fp, 0, SEEK_END);
+    long file_size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    if (file_size < 0 || file_size > 100 * 1024 * 1024) { /* 100MB limit */
+        fclose(fp);
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                         "File too large or invalid");
+    }
+
+    /* Read content */
+    char *content = puppet_malloc(file_size + 1);
+    if (!content) {
+        fclose(fp);
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                         "Memory allocation failed");
+    }
+
+    size_t bytes_read = fread(content, 1, file_size, fp);
+    fclose(fp);
+
+    if (bytes_read != (size_t)file_size) {
+        puppet_free(content);
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                         "Failed to read file");
+    }
+
+    enum MHD_Result ret = send_file_response(connection, MHD_HTTP_OK,
+                                              content, bytes_read);
+    puppet_free(content);
+
+    return ret;
+}
+
+/**
  * @brief Connection info for POST data accumulation
  */
 struct connection_info {
@@ -303,6 +435,9 @@ static enum MHD_Result request_handler(void *cls,
 
     if (strcmp(method, "GET") == 0 && strcmp(url, "/status") == 0) {
         ret = handle_status(connection);
+    } else if (strcmp(method, "GET") == 0 &&
+               strncmp(url, "/puppet/v3/file_content/", 24) == 0) {
+        ret = handle_file_content(connection, url);
     } else if (strcmp(method, "POST") == 0 &&
                strcmp(url, "/puppet/v4/catalog") == 0) {
         ret = handle_catalog(connection, con_info->post_data);
@@ -353,8 +488,9 @@ static void print_usage(const char *program_name) {
     printf("  -v, --verbose         Enable verbose output\n");
     printf("  -h, --help            Show this help message\n");
     printf("\nAPI Endpoints:\n");
-    printf("  GET  /status              Health check\n");
-    printf("  POST /puppet/v4/catalog   Compile catalog\n");
+    printf("  GET  /status                                Health check\n");
+    printf("  POST /puppet/v4/catalog                     Compile catalog\n");
+    printf("  GET  /puppet/v3/file_content/modules/<m>/<p>  Serve file from module\n");
     printf("\nExample:\n");
     printf("  %s -p 8140 /etc/puppet\n", program_name);
     printf("\n  curl -X POST http://localhost:8140/puppet/v4/catalog \\\n");

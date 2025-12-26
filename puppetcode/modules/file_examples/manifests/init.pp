@@ -24,4 +24,12 @@ class file_examples {
     ensure => link,
     target => '/tmp/puppetc-demo',
   }
+
+  # File sourced from puppet fileserver
+  file { '/tmp/puppetc-demo/motd':
+    ensure  => present,
+    source  => 'puppet:///modules/file_examples/motd',
+    mode    => '0644',
+    require => File['/tmp/puppetc-demo'],
+  }
 }
