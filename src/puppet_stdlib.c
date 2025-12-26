@@ -317,27 +317,39 @@ puppet_value_t *puppet_func_defined(puppet_expr_list_t *args, puppet_env_t *env)
 
 /**
  * realize() - Realize virtual resources
- * 
+ *
  * Usage: realize(User['john'], User['jane'])
+ *
+ * Note: Virtual resources (@resource syntax) are not yet fully supported.
+ * This function logs the resources that would be realized but does not
+ * actually move them from virtual to realized state.
  */
 puppet_value_t *puppet_func_realize(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count == 0) {
         puppet_log(PUPPET_LOG_ERROR, "realize() requires at least one argument");
         return puppet_value_create_undef();
     }
-    
-    // TODO: Implement virtual resource realization
-    // For now, just log that we would realize resources
+
+    /* Log each resource that would be realized */
     for (size_t i = 0; i < args->count; i++) {
         puppet_value_t *val = puppet_eval_expr(args->exprs[i], env);
-        char *str = puppet_value_to_display_string(val);
-        char message[256];
-        snprintf(message, sizeof(message), "Would realize virtual resource: %s", str);
-        puppet_log(PUPPET_LOG_DEBUG, message);
-        puppet_free(str);
+        char message[512];
+
+        if (val->type == PUPPET_VALUE_STRING) {
+            /* Resource reference passed as string */
+            snprintf(message, sizeof(message), "realize: %s (virtual resources not yet implemented)",
+                    val->data.string.data);
+        } else {
+            /* Other expression type */
+            char *str = puppet_value_to_display_string(val);
+            snprintf(message, sizeof(message), "realize: %s (virtual resources not yet implemented)", str);
+            puppet_free(str);
+        }
+        puppet_log(PUPPET_LOG_INFO, message);
+
         puppet_value_destroy(val);
     }
-    
+
     return puppet_value_create_undef();
 }
 
