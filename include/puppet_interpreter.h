@@ -118,6 +118,8 @@ typedef struct puppet_env {
     struct puppet_loader *loader;   /**< Module loader for includes */
     char *node_name;               /**< Current node name (for filtering) */
     bool execute_all_nodes;        /**< Execute all nodes regardless of name */
+    bool node_matched;             /**< Whether a matching node was found/executed */
+    puppet_stmt_t *default_node;   /**< Pointer to 'default' node for fallback */
     
     /* Enhanced variable system */
     puppet_data_provider_t **data_providers;  /**< External data providers (Hiera, etc.) */

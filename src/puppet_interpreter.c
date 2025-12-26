@@ -42,6 +42,8 @@ puppet_env_t *puppet_env_create(void) {
     env->loader = NULL;  /* Loader is optional, set separately */
     env->node_name = NULL;  /* No node filtering by default */
     env->execute_all_nodes = false;
+    env->node_matched = false;
+    env->default_node = NULL;
     
     /* Initialize enhanced variable system */
     env->data_provider_capacity = 4;
@@ -1108,7 +1110,22 @@ void puppet_exec_class_def(puppet_stmt_t *class_stmt, puppet_env_t *env) {
 }
 
 void puppet_exec_program(puppet_program_t *program, puppet_env_t *env) {
+    /* Reset node matching state */
+    env->node_matched = false;
+    env->default_node = NULL;
+
+    /* Execute all statements */
     puppet_exec_stmt_list(&program->statements, env);
+
+    /* Fallback to default node if specific node was requested but not found */
+    if (env->node_name && !env->node_matched && env->default_node) {
+        puppet_debug("Node '%s' not found, falling back to 'default' node", env->node_name);
+        /* Temporarily allow default node execution */
+        char *saved_node_name = env->node_name;
+        env->node_name = NULL;
+        puppet_exec_node(env->default_node, env);
+        env->node_name = saved_node_name;
+    }
 }
 
 void puppet_exec_include(puppet_stmt_t *include_stmt, puppet_env_t *env) {
@@ -1145,25 +1162,32 @@ void puppet_env_set_loader(puppet_env_t *env, puppet_loader_t *loader) {
 
 void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
     if (!node_stmt || node_stmt->type != PUPPET_STMT_NODE) return;
-    
+
     const char *node_name = node_stmt->data.node.name.data;
-    
+    bool is_default = (strcmp(node_name, "default") == 0);
+
+    /* Store default node for potential fallback */
+    if (is_default) {
+        env->default_node = node_stmt;
+    }
+
     /* Check if we should execute this node */
     bool should_execute = false;
-    
+
     if (env->execute_all_nodes) {
         /* Execute all nodes when --all-nodes is specified */
         should_execute = true;
     } else if (!env->node_name) {
         /* No node specified - only execute 'default' node */
-        should_execute = (strcmp(node_name, "default") == 0);
+        should_execute = is_default;
     } else {
-        /* Specific node requested - check for match */
-        should_execute = (strcmp(node_name, env->node_name) == 0);
+        /* Specific node requested - check for exact match (not default) */
+        should_execute = !is_default && (strcmp(node_name, env->node_name) == 0);
     }
     
     if (should_execute) {
         puppet_debug("Executing node: %s", node_name);
+        env->node_matched = true;
 
         /* Clear resource catalog for this node (each node has its own catalog) */
         if (env->resource_catalog) {
