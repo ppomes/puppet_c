@@ -283,6 +283,11 @@ void provider_group_register(void);
  */
 void provider_user_register(void);
 
+/**
+ * @brief Register sysctl provider
+ */
+void provider_sysctl_register(void);
+
 #ifdef __cplusplus
 }
 #endif
