@@ -430,6 +430,11 @@ attribute:
         $$->name = puppet_string_create("before");
         $$->value = $3;
     }
+    | UNLESS FARROW expression {
+        $$ = puppet_calloc(1, sizeof(puppet_attribute_t));
+        $$->name = puppet_string_create("unless");
+        $$->value = $3;
+    }
     ;
 
 resource_default:
