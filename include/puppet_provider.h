@@ -278,6 +278,11 @@ void provider_host_register(void);
  */
 void provider_group_register(void);
 
+/**
+ * @brief Register user provider
+ */
+void provider_user_register(void);
+
 #ifdef __cplusplus
 }
 #endif
