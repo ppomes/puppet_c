@@ -156,6 +156,79 @@ docker-compose -f docker-compose.test.yml run --rm --entrypoint /bin/sh test-age
         fi
     }
 
+    check_group_exists() {
+        if getent group "$1" >/dev/null 2>&1; then
+            echo "PASS: Group exists: $1"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: Group missing: $1"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
+    check_group_gid() {
+        local gid=$(getent group "$1" 2>/dev/null | cut -d: -f3)
+        if [ "$gid" = "$2" ]; then
+            echo "PASS: Group $1 has GID $2"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: Group $1 has GID $gid, expected $2"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
+    check_group_absent() {
+        if ! getent group "$1" >/dev/null 2>&1; then
+            echo "PASS: Group correctly absent: $1"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: Group should be absent: $1"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
+    check_user_exists() {
+        if getent passwd "$1" >/dev/null 2>&1; then
+            echo "PASS: User exists: $1"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: User missing: $1"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
+    check_user_uid() {
+        local uid=$(getent passwd "$1" 2>/dev/null | cut -d: -f3)
+        if [ "$uid" = "$2" ]; then
+            echo "PASS: User $1 has UID $2"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: User $1 has UID $uid, expected $2"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
+    check_user_shell() {
+        local shell=$(getent passwd "$1" 2>/dev/null | cut -d: -f7)
+        if [ "$shell" = "$2" ]; then
+            echo "PASS: User $1 has shell $2"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: User $1 has shell $shell, expected $2"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
+    check_user_absent() {
+        if ! getent passwd "$1" >/dev/null 2>&1; then
+            echo "PASS: User correctly absent: $1"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: User should be absent: $1"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
     check_file_absent() {
         if [ ! -f "$1" ]; then
             echo "PASS: File correctly absent: $1"
@@ -205,6 +278,23 @@ docker-compose -f docker-compose.test.yml run --rm --entrypoint /bin/sh test-age
     check_cron_entry "test_cron_special"
     check_cron_entry "@daily"
     check_cron_absent "should_not_exist"
+
+    echo ""
+    echo "--- Group Provider Tests ---"
+    check_group_exists "testgroup1"
+    check_group_exists "testgroup2"
+    check_group_gid "testgroup2" "5001"
+    check_group_absent "testgroup_absent"
+
+    echo ""
+    echo "--- User Provider Tests ---"
+    check_user_exists "testuser1"
+    check_user_uid "testuser1" "5001"
+    check_user_shell "testuser1" "/bin/bash"
+    check_user_exists "testuser2"
+    check_user_uid "testuser2" "5002"
+    check_user_shell "testuser2" "/bin/sh"
+    check_user_absent "testuser_absent"
 
     echo ""
     echo "================================"
