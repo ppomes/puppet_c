@@ -37,11 +37,24 @@ puppet_value_t *json_value_to_puppet_value(json_value_t *json_val) {
         case JSON_VALUE_NULL:
             return puppet_value_create_undef();
 
-        case JSON_VALUE_ARRAY:
-        case JSON_VALUE_OBJECT:
-            /* Complex types are serialized as string representation */
-            /* TODO: Implement proper array/hash conversion when needed */
-            return puppet_value_create_string("(complex)", 9);
+        case JSON_VALUE_ARRAY: {
+            puppet_value_t *arr = puppet_value_create_array();
+            for (size_t i = 0; i < json_val->data.array.count; i++) {
+                puppet_value_t *elem = json_value_to_puppet_value(json_val->data.array.elements[i]);
+                puppet_array_append(arr->data.array, elem);
+            }
+            return arr;
+        }
+
+        case JSON_VALUE_OBJECT: {
+            puppet_value_t *hash = puppet_value_create_hash();
+            for (size_t i = 0; i < json_val->data.object.count; i++) {
+                const char *key = json_val->data.object.keys[i];
+                puppet_value_t *val = json_value_to_puppet_value(json_val->data.object.values[i]);
+                puppet_hash_set(hash->data.hash, key, strlen(key), val);
+            }
+            return hash;
+        }
 
         default:
             return puppet_value_create_undef();
