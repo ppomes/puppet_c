@@ -229,6 +229,67 @@ docker-compose -f docker-compose.test.yml run --rm --entrypoint /bin/sh test-age
         fi
     }
 
+    check_sysctl_value() {
+        local current=$(cat /proc/sys/$(echo "$1" | tr . /) 2>/dev/null)
+        if [ "$current" = "$2" ]; then
+            echo "PASS: Sysctl $1 = $2"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: Sysctl $1 = $current, expected $2"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
+    check_sysctl_permanent() {
+        if ls /etc/sysctl.d/*puppet*"$1"* >/dev/null 2>&1; then
+            echo "PASS: Sysctl $1 has permanent config"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: Sysctl $1 missing permanent config"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
+    check_mount_exists() {
+        if mount | grep -q "$1"; then
+            echo "PASS: Mount exists: $1"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: Mount missing: $1"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
+    check_mount_absent() {
+        if ! mount | grep -q "$1"; then
+            echo "PASS: Mount correctly absent: $1"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: Mount should be absent: $1"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
+    check_fstab_entry() {
+        if grep -q "$1" /etc/fstab; then
+            echo "PASS: Fstab entry exists: $1"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: Fstab entry missing: $1"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
+    check_fstab_absent() {
+        if ! grep -q "$1" /etc/fstab; then
+            echo "PASS: Fstab entry correctly absent: $1"
+            PASS=$((PASS + 1))
+        else
+            echo "FAIL: Fstab entry should be absent: $1"
+            FAIL=$((FAIL + 1))
+        fi
+    }
+
     check_file_absent() {
         if [ ! -f "$1" ]; then
             echo "PASS: File correctly absent: $1"
@@ -295,6 +356,22 @@ docker-compose -f docker-compose.test.yml run --rm --entrypoint /bin/sh test-age
     check_user_uid "testuser2" "5002"
     check_user_shell "testuser2" "/bin/sh"
     check_user_absent "testuser_absent"
+
+    echo ""
+    echo "--- Sysctl Provider Tests ---"
+    check_sysctl_value "kernel.hostname" "puppetc-test-host"
+    check_sysctl_value "vm.swappiness" "10"
+    check_sysctl_permanent "vm-swappiness"
+    check_sysctl_value "net.core.somaxconn" "1024"
+
+    echo ""
+    echo "--- Mount Provider Tests ---"
+    check_mount_exists "/mnt/test_tmpfs"
+    check_fstab_entry "/mnt/test_tmpfs"
+    check_fstab_entry "/mnt/test_defined"
+    check_mount_absent "/mnt/test_defined"
+    check_mount_absent "/mnt/test_absent"
+    check_fstab_absent "/mnt/test_absent"
 
     echo ""
     echo "================================"

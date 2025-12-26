@@ -27,6 +27,7 @@ services:
       context: .
       target: agent
     image: puppetc-agent:latest
+    privileged: true
     depends_on:
       test-server:
         condition: service_healthy

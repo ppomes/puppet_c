@@ -13,6 +13,8 @@ node default {
   include test_cron
   include test_group
   include test_user
+  include test_sysctl
+  include test_mount
 
   notify { 'test_end':
     message => 'Integration tests completed',
