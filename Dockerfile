@@ -65,7 +65,7 @@ RUN mkdir -p /etc/puppet/manifests /etc/puppet/modules /etc/puppet/hiera
 EXPOSE 8140
 
 ENTRYPOINT ["puppetc-server"]
-CMD ["-v", "/etc/puppet"]
+CMD ["-v", "-m", "/etc/puppet/modules", "-D", "/etc/puppet/hiera", "/etc/puppet"]
 
 # =============================================================================
 # Agent image
