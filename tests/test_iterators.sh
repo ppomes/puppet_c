@@ -90,6 +90,41 @@ else
     ((FAILED++))
 fi
 
+# Test 6: map with array
+echo "Test 6: map() with array"
+if echo "$OUTPUT" | grep -q "Mapping 1" && \
+   echo "$OUTPUT" | grep -q "Mapping 2" && \
+   echo "$OUTPUT" | grep -q "Mapping 3"; then
+    echo -e "${GREEN}✓${NC} map() with array works"
+    ((PASSED++))
+else
+    echo -e "${RED}✗${NC} map() with array failed"
+    ((FAILED++))
+fi
+
+# Test 7: map with hash
+echo "Test 7: map() with hash"
+if echo "$OUTPUT" | grep -q "Port http: 80" && \
+   echo "$OUTPUT" | grep -q "Port https: 443"; then
+    echo -e "${GREEN}✓${NC} map() with hash works"
+    ((PASSED++))
+else
+    echo -e "${RED}✗${NC} map() with hash failed"
+    ((FAILED++))
+fi
+
+# Test 8: filter with array
+echo "Test 8: filter() with array"
+if echo "$OUTPUT" | grep -q "Filtering: one" && \
+   echo "$OUTPUT" | grep -q "Filtering: two" && \
+   echo "$OUTPUT" | grep -q "Filtering: three"; then
+    echo -e "${GREEN}✓${NC} filter() with array works"
+    ((PASSED++))
+else
+    echo -e "${RED}✗${NC} filter() with array failed"
+    ((FAILED++))
+fi
+
 echo
 echo "================================"
 echo "Iterator Tests: $PASSED passed, $FAILED failed"

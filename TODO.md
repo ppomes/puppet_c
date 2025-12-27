@@ -44,7 +44,8 @@
 - [x] ~50 built-in functions implemented
 - [ ] Custom function definitions
 - [x] `each()` iterator
-- [ ] `map()`, `filter()`, `reduce()` iterators
+- [x] `map()`, `filter()` iterators
+- [ ] `reduce()` iterator
 - [ ] `with()` function
 - [ ] `assert_type()` function
 - [ ] `new()` function for type instantiation

@@ -1202,6 +1202,7 @@ lambda_expression:
             puppet_free($2);
         }
         lambda->body = $5;
+        lambda->expr_body = NULL;
         $$->data.lambda = lambda;
     }
     ;

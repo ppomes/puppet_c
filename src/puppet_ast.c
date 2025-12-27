@@ -338,6 +338,9 @@ void puppet_expr_destroy(puppet_expr_t *expr) {
                     puppet_free(expr->data.lambda->body->stmts);
                     puppet_free(expr->data.lambda->body);
                 }
+                if (expr->data.lambda->expr_body) {
+                    puppet_expr_destroy(expr->data.lambda->expr_body);
+                }
                 puppet_free(expr->data.lambda);
             }
             break;

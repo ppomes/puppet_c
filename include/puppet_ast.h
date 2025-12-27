@@ -250,7 +250,8 @@ typedef struct puppet_stmt_list puppet_stmt_list_t;
 
 typedef struct {
     puppet_param_list_t params;
-    puppet_stmt_list_t *body;
+    puppet_stmt_list_t *body;      /* Statement body (may be NULL if expr_body is set) */
+    struct puppet_expr *expr_body; /* Single expression body (for |$x| { expr }) */
 } puppet_lambda_t;
 
 struct puppet_expr {

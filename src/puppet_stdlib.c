@@ -53,6 +53,18 @@ static void puppet_log(puppet_log_level_t level, const char *message) {
     fprintf(stderr, "[%s] %s: %s\n", time_buffer, level_str, message);
 }
 
+// Check if a value is truthy (false and undef are falsy, everything else is truthy)
+static bool puppet_value_is_truthy(puppet_value_t *value) {
+    if (!value) return false;
+    if (value->type == PUPPET_VALUE_UNDEF) return false;
+    if (value->type == PUPPET_VALUE_BOOL) return value->data.boolean;
+    return true;
+}
+
+// Forward declarations for iterator helpers
+static void exec_lambda_body(puppet_lambda_t *lambda, puppet_env_t *env);
+static puppet_value_t *exec_lambda_with_result(puppet_lambda_t *lambda, puppet_env_t *env);
+
 // Convert Puppet value to display string for logging
 char *puppet_value_to_display_string(puppet_value_t *value) {
     if (!value) return puppet_strdup("(null)");
@@ -2936,7 +2948,7 @@ puppet_value_t *puppet_func_each(puppet_expr_t *expr, puppet_env_t *env) {
             }
 
             /* Execute the lambda body */
-            puppet_exec_stmt_list(lambda->body, env);
+            exec_lambda_body(lambda, env);
         }
     } else if (collection->type == PUPPET_VALUE_HASH) {
         puppet_hash_t *hash = collection->data.hash;
@@ -2974,7 +2986,7 @@ puppet_value_t *puppet_func_each(puppet_expr_t *expr, puppet_env_t *env) {
                 }
 
                 /* Execute the lambda body */
-                puppet_exec_stmt_list(lambda->body, env);
+                exec_lambda_body(lambda, env);
 
                 entry = entry->next;
             }
@@ -2987,4 +2999,346 @@ puppet_value_t *puppet_func_each(puppet_expr_t *expr, puppet_env_t *env) {
 
     /* Return the original collection */
     return collection;
+}
+
+/*
+ * Helper: Execute lambda body (either statement list or expression)
+ */
+static void exec_lambda_body(puppet_lambda_t *lambda, puppet_env_t *env) {
+    if (!lambda) return;
+
+    if (lambda->expr_body) {
+        puppet_value_t *result = puppet_eval_expr(lambda->expr_body, env);
+        puppet_value_destroy(result);
+    } else if (lambda->body) {
+        puppet_exec_stmt_list(lambda->body, env);
+    }
+}
+
+/*
+ * Helper: Execute lambda body and return value of last expression
+ * In Puppet, the lambda implicitly returns the last expression's value.
+ */
+static puppet_value_t *exec_lambda_with_result(puppet_lambda_t *lambda, puppet_env_t *env) {
+    if (!lambda) {
+        return puppet_value_create_undef();
+    }
+
+    /* If lambda has an expression body, evaluate and return it */
+    if (lambda->expr_body) {
+        return puppet_eval_expr(lambda->expr_body, env);
+    }
+
+    /* Otherwise, execute statement body */
+    puppet_stmt_list_t *body = lambda->body;
+    if (!body || body->count == 0) {
+        return puppet_value_create_undef();
+    }
+
+    /* Execute all statements except the last */
+    for (size_t i = 0; i + 1 < body->count; i++) {
+        puppet_exec_stmt(body->stmts[i], env);
+    }
+
+    /* For the last statement, try to get its value */
+    puppet_stmt_t *last_stmt = body->stmts[body->count - 1];
+    if (!last_stmt) {
+        return puppet_value_create_undef();
+    }
+
+    /* If last statement is a function call or has an expression, evaluate it */
+    if (last_stmt->type == PUPPET_STMT_FUNCTION_CALL && last_stmt->data.expr) {
+        return puppet_eval_expr(last_stmt->data.expr, env);
+    }
+
+    /* Otherwise just execute and return undef */
+    puppet_exec_stmt(last_stmt, env);
+    return puppet_value_create_undef();
+}
+
+/*
+ * map($collection) |$item| { expr }
+ * map($collection) |$index, $item| { expr }
+ *
+ * Transforms each element using the lambda and returns a new array.
+ */
+puppet_value_t *puppet_func_map(puppet_expr_t *expr, puppet_env_t *env) {
+    if (!expr || expr->type != PUPPET_EXPR_FUNCALL) {
+        puppet_log(PUPPET_LOG_ERROR, "map() internal error: invalid expression");
+        return puppet_value_create_undef();
+    }
+
+    puppet_lambda_t *lambda = expr->data.funcall.lambda;
+    if (!lambda || !lambda->body) {
+        puppet_log(PUPPET_LOG_ERROR, "map() requires a lambda block");
+        return puppet_value_create_undef();
+    }
+
+    if (expr->data.funcall.args.count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "map() requires a collection argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *collection = puppet_eval_expr(expr->data.funcall.args.exprs[0], env);
+    if (!collection) {
+        return puppet_value_create_undef();
+    }
+
+    /* Get lambda parameter names */
+    size_t param_count = lambda->params.count;
+    const char *param1_name = NULL;
+    const char *param2_name = NULL;
+
+    if (param_count >= 1 && lambda->params.params[0].name.data) {
+        param1_name = lambda->params.params[0].name.data;
+    }
+    if (param_count >= 2 && lambda->params.params[1].name.data) {
+        param2_name = lambda->params.params[1].name.data;
+    }
+
+    /* Create result array */
+    puppet_array_t *result = puppet_calloc(1, sizeof(puppet_array_t));
+    result->count = 0;
+    result->capacity = 8;
+    result->items = puppet_malloc(result->capacity * sizeof(puppet_value_t*));
+
+    if (collection->type == PUPPET_VALUE_ARRAY) {
+        puppet_array_t *arr = collection->data.array;
+        for (size_t i = 0; i < arr->count; i++) {
+            /* Set parameter variables */
+            if (param_count == 1) {
+                if (param1_name) {
+                    puppet_value_t *item_copy = puppet_value_copy(arr->items[i]);
+                    puppet_env_set_var(env, param1_name, item_copy);
+                }
+            } else if (param_count >= 2) {
+                if (param1_name) {
+                    puppet_value_t *index_val = puppet_value_create_number((double)i);
+                    puppet_env_set_var(env, param1_name, index_val);
+                }
+                if (param2_name) {
+                    puppet_value_t *item_copy = puppet_value_copy(arr->items[i]);
+                    puppet_env_set_var(env, param2_name, item_copy);
+                }
+            }
+
+            /* Execute lambda and collect result */
+            puppet_value_t *mapped = exec_lambda_with_result(lambda, env);
+
+            /* Add to result array */
+            if (result->count >= result->capacity) {
+                result->capacity *= 2;
+                result->items = puppet_realloc(result->items, result->capacity * sizeof(puppet_value_t*));
+            }
+            result->items[result->count++] = mapped;
+        }
+    } else if (collection->type == PUPPET_VALUE_HASH) {
+        puppet_hash_t *hash = collection->data.hash;
+
+        for (size_t b = 0; b < hash->bucket_count; b++) {
+            puppet_hash_entry_t *entry = hash->buckets[b];
+            while (entry) {
+                if (param_count == 1) {
+                    if (param1_name) {
+                        /* Create [key, value] pair */
+                        puppet_array_t *pair = puppet_calloc(1, sizeof(puppet_array_t));
+                        pair->count = 2;
+                        pair->capacity = 2;
+                        pair->items = puppet_malloc(2 * sizeof(puppet_value_t*));
+                        pair->items[0] = puppet_value_create_string(entry->key.data, entry->key.len);
+                        pair->items[1] = puppet_value_copy(entry->value);
+
+                        puppet_value_t *pair_val = puppet_calloc(1, sizeof(puppet_value_t));
+                        pair_val->type = PUPPET_VALUE_ARRAY;
+                        pair_val->data.array = pair;
+                        puppet_env_set_var(env, param1_name, pair_val);
+                    }
+                } else if (param_count >= 2) {
+                    if (param1_name) {
+                        puppet_value_t *key_val = puppet_value_create_string(entry->key.data, entry->key.len);
+                        puppet_env_set_var(env, param1_name, key_val);
+                    }
+                    if (param2_name) {
+                        puppet_value_t *val_copy = puppet_value_copy(entry->value);
+                        puppet_env_set_var(env, param2_name, val_copy);
+                    }
+                }
+
+                puppet_value_t *mapped = exec_lambda_with_result(lambda, env);
+
+                if (result->count >= result->capacity) {
+                    result->capacity *= 2;
+                    result->items = puppet_realloc(result->items, result->capacity * sizeof(puppet_value_t*));
+                }
+                result->items[result->count++] = mapped;
+
+                entry = entry->next;
+            }
+        }
+    } else {
+        puppet_log(PUPPET_LOG_ERROR, "map() requires an array or hash");
+        puppet_value_destroy(collection);
+        puppet_free(result->items);
+        puppet_free(result);
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_destroy(collection);
+
+    puppet_value_t *result_val = puppet_calloc(1, sizeof(puppet_value_t));
+    result_val->type = PUPPET_VALUE_ARRAY;
+    result_val->data.array = result;
+    return result_val;
+}
+
+/*
+ * filter($collection) |$item| { condition }
+ * filter($collection) |$index, $item| { condition }
+ *
+ * Returns elements where the lambda returns a truthy value.
+ * Also available as select() for Puppet compatibility.
+ */
+puppet_value_t *puppet_func_filter(puppet_expr_t *expr, puppet_env_t *env) {
+    if (!expr || expr->type != PUPPET_EXPR_FUNCALL) {
+        puppet_log(PUPPET_LOG_ERROR, "filter() internal error: invalid expression");
+        return puppet_value_create_undef();
+    }
+
+    puppet_lambda_t *lambda = expr->data.funcall.lambda;
+    if (!lambda || !lambda->body) {
+        puppet_log(PUPPET_LOG_ERROR, "filter() requires a lambda block");
+        return puppet_value_create_undef();
+    }
+
+    if (expr->data.funcall.args.count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "filter() requires a collection argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *collection = puppet_eval_expr(expr->data.funcall.args.exprs[0], env);
+    if (!collection) {
+        return puppet_value_create_undef();
+    }
+
+    size_t param_count = lambda->params.count;
+    const char *param1_name = NULL;
+    const char *param2_name = NULL;
+
+    if (param_count >= 1 && lambda->params.params[0].name.data) {
+        param1_name = lambda->params.params[0].name.data;
+    }
+    if (param_count >= 2 && lambda->params.params[1].name.data) {
+        param2_name = lambda->params.params[1].name.data;
+    }
+
+    /* Create result array */
+    puppet_array_t *result = puppet_calloc(1, sizeof(puppet_array_t));
+    result->count = 0;
+    result->capacity = 8;
+    result->items = puppet_malloc(result->capacity * sizeof(puppet_value_t*));
+
+    if (collection->type == PUPPET_VALUE_ARRAY) {
+        puppet_array_t *arr = collection->data.array;
+        for (size_t i = 0; i < arr->count; i++) {
+            if (param_count == 1) {
+                if (param1_name) {
+                    puppet_value_t *item_copy = puppet_value_copy(arr->items[i]);
+                    puppet_env_set_var(env, param1_name, item_copy);
+                }
+            } else if (param_count >= 2) {
+                if (param1_name) {
+                    puppet_value_t *index_val = puppet_value_create_number((double)i);
+                    puppet_env_set_var(env, param1_name, index_val);
+                }
+                if (param2_name) {
+                    puppet_value_t *item_copy = puppet_value_copy(arr->items[i]);
+                    puppet_env_set_var(env, param2_name, item_copy);
+                }
+            }
+
+            /* Execute lambda and check if result is truthy */
+            puppet_value_t *cond = exec_lambda_with_result(lambda, env);
+            bool keep = puppet_value_is_truthy(cond);
+            puppet_value_destroy(cond);
+
+            if (keep) {
+                if (result->count >= result->capacity) {
+                    result->capacity *= 2;
+                    result->items = puppet_realloc(result->items, result->capacity * sizeof(puppet_value_t*));
+                }
+                result->items[result->count++] = puppet_value_copy(arr->items[i]);
+            }
+        }
+    } else if (collection->type == PUPPET_VALUE_HASH) {
+        puppet_hash_t *hash = collection->data.hash;
+
+        for (size_t b = 0; b < hash->bucket_count; b++) {
+            puppet_hash_entry_t *entry = hash->buckets[b];
+            while (entry) {
+                if (param_count == 1) {
+                    if (param1_name) {
+                        puppet_array_t *pair = puppet_calloc(1, sizeof(puppet_array_t));
+                        pair->count = 2;
+                        pair->capacity = 2;
+                        pair->items = puppet_malloc(2 * sizeof(puppet_value_t*));
+                        pair->items[0] = puppet_value_create_string(entry->key.data, entry->key.len);
+                        pair->items[1] = puppet_value_copy(entry->value);
+
+                        puppet_value_t *pair_val = puppet_calloc(1, sizeof(puppet_value_t));
+                        pair_val->type = PUPPET_VALUE_ARRAY;
+                        pair_val->data.array = pair;
+                        puppet_env_set_var(env, param1_name, pair_val);
+                    }
+                } else if (param_count >= 2) {
+                    if (param1_name) {
+                        puppet_value_t *key_val = puppet_value_create_string(entry->key.data, entry->key.len);
+                        puppet_env_set_var(env, param1_name, key_val);
+                    }
+                    if (param2_name) {
+                        puppet_value_t *val_copy = puppet_value_copy(entry->value);
+                        puppet_env_set_var(env, param2_name, val_copy);
+                    }
+                }
+
+                puppet_value_t *cond = exec_lambda_with_result(lambda, env);
+                bool keep = puppet_value_is_truthy(cond);
+                puppet_value_destroy(cond);
+
+                if (keep) {
+                    /* For hash, add [key, value] pair to result */
+                    puppet_array_t *pair = puppet_calloc(1, sizeof(puppet_array_t));
+                    pair->count = 2;
+                    pair->capacity = 2;
+                    pair->items = puppet_malloc(2 * sizeof(puppet_value_t*));
+                    pair->items[0] = puppet_value_create_string(entry->key.data, entry->key.len);
+                    pair->items[1] = puppet_value_copy(entry->value);
+
+                    puppet_value_t *pair_val = puppet_calloc(1, sizeof(puppet_value_t));
+                    pair_val->type = PUPPET_VALUE_ARRAY;
+                    pair_val->data.array = pair;
+
+                    if (result->count >= result->capacity) {
+                        result->capacity *= 2;
+                        result->items = puppet_realloc(result->items, result->capacity * sizeof(puppet_value_t*));
+                    }
+                    result->items[result->count++] = pair_val;
+                }
+
+                entry = entry->next;
+            }
+        }
+    } else {
+        puppet_log(PUPPET_LOG_ERROR, "filter() requires an array or hash");
+        puppet_value_destroy(collection);
+        puppet_free(result->items);
+        puppet_free(result);
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_destroy(collection);
+
+    puppet_value_t *result_val = puppet_calloc(1, sizeof(puppet_value_t));
+    result_val->type = PUPPET_VALUE_ARRAY;
+    result_val->data.array = result;
+    return result_val;
 }

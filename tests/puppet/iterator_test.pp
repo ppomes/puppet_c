@@ -44,4 +44,30 @@ each($matrix) |$row_idx, $row| {
   }
 }
 
+# Test 6: map with function call in lambda
+$numbers = [1, 2, 3]
+notice("Test 6: map with array")
+map($numbers) |$n| {
+  notice("Mapping ${n}")
+}
+notice("Map complete")
+
+# Test 7: map with hash
+$ports = {
+  'http' => 80,
+  'https' => 443
+}
+notice("Test 7: map over hash")
+map($ports) |$name, $port| {
+  notice("Port ${name}: ${port}")
+}
+
+# Test 8: filter with function call
+# (Expression-body lambdas like |$v| { $v } not yet supported)
+$values = ['one', 'two', 'three']
+notice("Test 8: filter test")
+filter($values) |$v| {
+  notice("Filtering: ${v}")
+}
+
 notice("=== Iterator Tests Complete ===")
