@@ -37,6 +37,7 @@ node default {
   include user_examples
   include sysctl_examples
   include mount_examples
+  include virtual_examples
 
   notify { 'complete':
     message => 'Puppet run completed successfully!',

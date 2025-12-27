@@ -434,6 +434,14 @@ docker-compose -f docker-compose.test.yml run --rm --entrypoint /bin/sh test-age
     echo "SKIP: Service tests not available in Docker (no systemd)"
 
     echo ""
+    echo "--- Virtual Resource Tests ---"
+    check_file "/tmp/virtual_realized"
+    check_file_content "/tmp/virtual_realized" "This virtual file was realized"
+    check_file_absent "/tmp/virtual_not_realized"
+    check_file "/tmp/virtual_test_marker"
+    check_file_content "/tmp/virtual_test_marker" "Virtual resource test completed"
+
+    echo ""
     echo "================================"
     echo "Verification: $PASS passed, $FAIL failed"
     echo "================================"

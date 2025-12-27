@@ -64,7 +64,12 @@ puppet_env_t *puppet_env_create(void) {
     env->resource_catalog = puppet_calloc(1, sizeof(puppet_hash_t));
     env->resource_catalog->bucket_count = 64;  /* Start with reasonable size */
     env->resource_catalog->buckets = puppet_calloc(env->resource_catalog->bucket_count, sizeof(puppet_hash_entry_t*));
-    
+
+    /* Initialize virtual resources storage */
+    env->virtual_resources = puppet_calloc(1, sizeof(puppet_hash_t));
+    env->virtual_resources->bucket_count = 64;
+    env->virtual_resources->buckets = puppet_calloc(env->virtual_resources->bucket_count, sizeof(puppet_hash_entry_t*));
+
     /* Initialize template output */
     env->template_output_target = NULL;
     env->template_output_found = false;
@@ -145,7 +150,23 @@ void puppet_env_destroy(puppet_env_t *env) {
         puppet_free(env->resource_catalog->buckets);
         puppet_free(env->resource_catalog);
     }
-    
+
+    // Clean up virtual resources
+    if (env->virtual_resources) {
+        for (size_t i = 0; i < env->virtual_resources->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->virtual_resources->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                /* Note: value points to AST stmt, don't free it here */
+                puppet_free(entry);
+                entry = next;
+            }
+        }
+        puppet_free(env->virtual_resources->buckets);
+        puppet_free(env->virtual_resources);
+    }
+
     puppet_free(env->scope_stack);
     puppet_free(env->node_name);
     puppet_free(env->template_output_target);
@@ -870,21 +891,60 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
 
         case PUPPET_STMT_RESOURCE:
             puppet_debug("Executing resource: %s", stmt->data.resource.type.data);
-            
+
+            // Handle virtual resources - store but don't apply
+            if (stmt->data.resource.style == PUPPET_RES_VIRTUAL) {
+                for (size_t i = 0; i < stmt->data.resource.instance_count; i++) {
+                    puppet_resource_instance_t *instance = &stmt->data.resource.instances[i];
+                    if (instance->title) {
+                        puppet_value_t *title_val = puppet_eval_expr(instance->title, env);
+                        const char *title_str = puppet_value_to_string(title_val);
+
+                        // Build resource identifier
+                        size_t res_id_len = strlen(stmt->data.resource.type.data) + strlen(title_str) + 3;
+                        char *resource_id = puppet_malloc(res_id_len);
+                        snprintf(resource_id, res_id_len, "%s[%s]", stmt->data.resource.type.data, title_str);
+
+                        // Check for duplicate virtual resource
+                        puppet_value_t *existing = puppet_hash_get(env->virtual_resources,
+                                                                   resource_id, strlen(resource_id));
+                        if (existing) {
+                            puppet_debug("Virtual resource %s already declared", resource_id);
+                            puppet_free(resource_id);
+                            puppet_value_destroy(title_val);
+                            continue;
+                        }
+
+                        // Store in virtual resources (value is pointer to statement - don't free)
+                        puppet_value_t *stmt_ptr = puppet_calloc(1, sizeof(puppet_value_t));
+                        stmt_ptr->type = PUPPET_VALUE_UNDEF;  /* Use as opaque pointer */
+                        stmt_ptr->data.string.data = (char*)stmt;  /* Store stmt pointer */
+                        stmt_ptr->data.string.len = i;  /* Store instance index */
+                        puppet_hash_set(env->virtual_resources, resource_id, strlen(resource_id), stmt_ptr);
+
+                        puppet_debug("Stored virtual resource: %s", resource_id);
+                        puppet_free(resource_id);
+                        puppet_value_destroy(title_val);
+                    }
+                }
+                break;  /* Virtual resources are not applied now */
+            }
+
+            // Normal resource execution
             // Evaluate resource titles and check for duplicates
             for (size_t i = 0; i < stmt->data.resource.instance_count; i++) {
                 puppet_resource_instance_t *instance = &stmt->data.resource.instances[i];
                 if (instance->title) {
                     puppet_value_t *title_val = puppet_eval_expr(instance->title, env);
                     const char *title_str = puppet_value_to_string(title_val);
-                    
+
                     // Build resource identifier (type::title)
                     size_t res_id_len = strlen(stmt->data.resource.type.data) + strlen(title_str) + 3;
                     char *resource_id = puppet_malloc(res_id_len);
                     snprintf(resource_id, res_id_len, "%s[%s]", stmt->data.resource.type.data, title_str);
-                    
+
                     // Check for duplicate resource
-                    puppet_value_t *existing = puppet_hash_get(env->resource_catalog, 
+                    puppet_value_t *existing = puppet_hash_get(env->resource_catalog,
                                                                resource_id, strlen(resource_id));
                     if (existing) {
                         fprintf(stderr, "Error: Duplicate declaration - %s is already declared\n", resource_id);
@@ -893,7 +953,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         puppet_value_destroy(title_val);
                         continue;  // Skip this duplicate resource
                     }
-                    
+
                     // Add to duplicate detection catalog
                     puppet_value_t *marker = puppet_value_create_bool(true);
                     puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);

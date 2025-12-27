@@ -1,5 +1,1 @@
-# Static libraries (not needed for runtime)
-usr/lib/*/lib*.a
-
-# Generated parser header (internal use only)
-usr/include/puppetc/puppet.tab.h
+# Documentation files are not installed

@@ -19,8 +19,8 @@
 - [ ] `PUPPET_STMT_TAG` - `tag 'tagname'`
 
 ### Virtual and Exported Resources
-- [ ] Virtual resources (`@resource` syntax)
-- [ ] `realize()` function (stub exists)
+- [x] Virtual resources (`@resource` syntax)
+- [x] `realize()` function
 - [ ] Exported resources (`@@resource` syntax)
 - [ ] Resource collection from PuppetDB
 

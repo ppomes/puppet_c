@@ -138,6 +138,9 @@ typedef struct puppet_env {
     
     /* Resource catalog for duplicate detection */
     puppet_hash_t *resource_catalog;          /**< Track declared resources (type::title → true) */
+
+    /* Virtual resources storage */
+    puppet_hash_t *virtual_resources;         /**< Virtual resources awaiting realization (type::title → stmt) */
     
     /* Template output mode */
     char *template_output_target;             /**< Resource title to output template for (NULL = disabled) */

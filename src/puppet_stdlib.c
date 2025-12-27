@@ -328,13 +328,89 @@ puppet_value_t *puppet_func_defined(puppet_expr_list_t *args, puppet_env_t *env)
 }
 
 /**
+ * Helper function to apply a single virtual resource
+ */
+static void realize_single_resource(puppet_stmt_t *stmt, size_t instance_idx, puppet_env_t *env) {
+    if (!stmt || stmt->type != PUPPET_STMT_RESOURCE) {
+        return;
+    }
+
+    if (instance_idx >= stmt->data.resource.instance_count) {
+        return;
+    }
+
+    puppet_resource_instance_t *instance = &stmt->data.resource.instances[instance_idx];
+    if (!instance->title) {
+        return;
+    }
+
+    puppet_value_t *title_val = puppet_eval_expr(instance->title, env);
+    char *title_str = puppet_value_to_display_string(title_val);
+
+    /* Build resource identifier */
+    size_t res_id_len = strlen(stmt->data.resource.type.data) + strlen(title_str) + 3;
+    char *resource_id = puppet_malloc(res_id_len);
+    snprintf(resource_id, res_id_len, "%s[%s]", stmt->data.resource.type.data, title_str);
+
+    /* Check for duplicate resource */
+    puppet_value_t *existing = puppet_hash_get(env->resource_catalog, resource_id, strlen(resource_id));
+    if (existing) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "Duplicate declaration - %s is already declared", resource_id);
+        puppet_log(PUPPET_LOG_ERROR, msg);
+        puppet_free(resource_id);
+        puppet_free(title_str);
+        puppet_value_destroy(title_val);
+        return;
+    }
+
+    /* Add to duplicate detection catalog */
+    puppet_value_t *marker = puppet_value_create_bool(true);
+    puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);
+
+    puppet_debug("Realizing virtual resource: %s", resource_id);
+
+    /* Collect parameters for catalog */
+    puppet_catalog_param_t *params = NULL;
+    size_t param_count = instance->attr_count;
+    if (env->build_catalog && param_count > 0) {
+        params = puppet_calloc(param_count, sizeof(puppet_catalog_param_t));
+    }
+
+    /* Process attributes */
+    for (size_t j = 0; j < instance->attr_count; j++) {
+        puppet_value_t *attr_val = puppet_eval_expr(instance->attributes[j].value, env);
+
+        /* Store in catalog params if building catalog */
+        if (env->build_catalog && params) {
+            params[j].name = puppet_strdup(instance->attributes[j].name.data);
+            params[j].value = puppet_value_copy(attr_val);
+        }
+
+        puppet_value_destroy(attr_val);
+    }
+
+    /* Add to resource catalog if building */
+    if (env->build_catalog && env->catalog) {
+        puppet_catalog_add_resource(env->catalog,
+                                    stmt->data.resource.type.data,
+                                    title_str,
+                                    params,
+                                    param_count);
+    }
+
+    puppet_free(resource_id);
+    puppet_free(title_str);
+    puppet_value_destroy(title_val);
+}
+
+/**
  * realize() - Realize virtual resources
  *
  * Usage: realize(User['john'], User['jane'])
  *
- * Note: Virtual resources (@resource syntax) are not yet fully supported.
- * This function logs the resources that would be realized but does not
- * actually move them from virtual to realized state.
+ * Materializes virtual resources (@resource syntax) into the catalog.
+ * Virtual resources must be declared before they can be realized.
  */
 puppet_value_t *puppet_func_realize(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count == 0) {
@@ -342,23 +418,58 @@ puppet_value_t *puppet_func_realize(puppet_expr_list_t *args, puppet_env_t *env)
         return puppet_value_create_undef();
     }
 
-    /* Log each resource that would be realized */
+    /* Process each resource reference */
     for (size_t i = 0; i < args->count; i++) {
         puppet_value_t *val = puppet_eval_expr(args->exprs[i], env);
-        char message[512];
+        char *ref_str = NULL;
+        bool needs_free = false;
 
         if (val->type == PUPPET_VALUE_STRING) {
-            /* Resource reference passed as string */
-            snprintf(message, sizeof(message), "realize: %s (virtual resources not yet implemented)",
-                    val->data.string.data);
+            ref_str = val->data.string.data;
         } else {
-            /* Other expression type */
-            char *str = puppet_value_to_display_string(val);
-            snprintf(message, sizeof(message), "realize: %s (virtual resources not yet implemented)", str);
-            puppet_free(str);
+            ref_str = puppet_value_to_display_string(val);
+            needs_free = true;
         }
-        puppet_log(PUPPET_LOG_INFO, message);
 
+        /* Normalize reference to lowercase for lookup
+         * Virtual resources are stored with lowercase type (e.g., "user[name]")
+         * but resource references use capitalized type (e.g., "User['name']")
+         */
+        char *lookup_key = puppet_strdup(ref_str);
+        for (char *p = lookup_key; *p && *p != '['; p++) {
+            *p = tolower((unsigned char)*p);
+        }
+        /* Also handle quoted titles: User['name'] -> user[name] */
+        char *src = lookup_key, *dst = lookup_key;
+        while (*src) {
+            if (*src != '\'') {
+                *dst++ = *src;
+            }
+            src++;
+        }
+        *dst = '\0';
+
+        /* Look up virtual resource */
+        puppet_value_t *stored = puppet_hash_get(env->virtual_resources, lookup_key, strlen(lookup_key));
+        if (stored) {
+            /* Extract stored stmt pointer and instance index */
+            puppet_stmt_t *stmt = (puppet_stmt_t *)stored->data.string.data;
+            size_t instance_idx = (size_t)stored->data.string.len;
+
+            realize_single_resource(stmt, instance_idx, env);
+            char msg[512];
+            snprintf(msg, sizeof(msg), "Realized: %s", ref_str);
+            puppet_log(PUPPET_LOG_INFO, msg);
+        } else {
+            char msg[512];
+            snprintf(msg, sizeof(msg), "realize: %s is not a virtual resource", ref_str);
+            puppet_log(PUPPET_LOG_WARNING, msg);
+        }
+
+        puppet_free(lookup_key);
+        if (needs_free) {
+            puppet_free(ref_str);
+        }
         puppet_value_destroy(val);
     }
 

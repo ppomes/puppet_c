@@ -17,6 +17,7 @@ node default {
   include test_mount
   include test_package
   include test_service
+  include test_virtual
 
   notify { 'test_end':
     message => 'Integration tests completed',
