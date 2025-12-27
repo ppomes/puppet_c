@@ -149,6 +149,39 @@ else
     ((FAILED++))
 fi
 
+# Test 11: Expression-body map (arithmetic)
+echo "Test 11: map() with expression body"
+if echo "$OUTPUT" | grep -q "Doubled: 2" && \
+   echo "$OUTPUT" | grep -q "Doubled: 4" && \
+   echo "$OUTPUT" | grep -q "Doubled: 6"; then
+    echo -e "${GREEN}✓${NC} map() with expression body works"
+    ((PASSED++))
+else
+    echo -e "${RED}✗${NC} map() with expression body failed"
+    ((FAILED++))
+fi
+
+# Test 12: Expression-body reduce (sum)
+echo "Test 12: reduce() with expression body"
+if echo "$OUTPUT" | grep -q "reduce sum = 60"; then
+    echo -e "${GREEN}✓${NC} reduce() with expression body works"
+    ((PASSED++))
+else
+    echo -e "${RED}✗${NC} reduce() with expression body failed"
+    ((FAILED++))
+fi
+
+# Test 13: Expression-body filter (comparison)
+echo "Test 13: filter() with expression body"
+if echo "$OUTPUT" | grep -q "Big: 5" && \
+   echo "$OUTPUT" | grep -q "Big: 8"; then
+    echo -e "${GREEN}✓${NC} filter() with expression body works"
+    ((PASSED++))
+else
+    echo -e "${RED}✗${NC} filter() with expression body failed"
+    ((FAILED++))
+fi
+
 echo
 echo "================================"
 echo "Iterator Tests: $PASSED passed, $FAILED failed"

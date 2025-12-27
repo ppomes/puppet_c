@@ -2896,7 +2896,7 @@ puppet_value_t *puppet_func_each(puppet_expr_t *expr, puppet_env_t *env) {
 
     /* Get the lambda */
     puppet_lambda_t *lambda = expr->data.funcall.lambda;
-    if (!lambda || !lambda->body) {
+    if (!lambda || (!lambda->body && !lambda->expr_body)) {
         puppet_log(PUPPET_LOG_ERROR, "each() requires a lambda block");
         return puppet_value_create_undef();
     }
@@ -3046,8 +3046,11 @@ static puppet_value_t *exec_lambda_with_result(puppet_lambda_t *lambda, puppet_e
         return puppet_value_create_undef();
     }
 
-    /* If last statement is a function call or has an expression, evaluate it */
+    /* If last statement is a function call or expression, evaluate and return it */
     if (last_stmt->type == PUPPET_STMT_FUNCTION_CALL && last_stmt->data.expr) {
+        return puppet_eval_expr(last_stmt->data.expr, env);
+    }
+    if (last_stmt->type == PUPPET_STMT_EXPRESSION && last_stmt->data.expr) {
         return puppet_eval_expr(last_stmt->data.expr, env);
     }
 
@@ -3069,7 +3072,7 @@ puppet_value_t *puppet_func_map(puppet_expr_t *expr, puppet_env_t *env) {
     }
 
     puppet_lambda_t *lambda = expr->data.funcall.lambda;
-    if (!lambda || !lambda->body) {
+    if (!lambda || (!lambda->body && !lambda->expr_body)) {
         puppet_log(PUPPET_LOG_ERROR, "map() requires a lambda block");
         return puppet_value_create_undef();
     }
@@ -3205,7 +3208,7 @@ puppet_value_t *puppet_func_filter(puppet_expr_t *expr, puppet_env_t *env) {
     }
 
     puppet_lambda_t *lambda = expr->data.funcall.lambda;
-    if (!lambda || !lambda->body) {
+    if (!lambda || (!lambda->body && !lambda->expr_body)) {
         puppet_log(PUPPET_LOG_ERROR, "filter() requires a lambda block");
         return puppet_value_create_undef();
     }
@@ -3359,7 +3362,7 @@ puppet_value_t *puppet_func_reduce(puppet_expr_t *expr, puppet_env_t *env) {
     }
 
     puppet_lambda_t *lambda = expr->data.funcall.lambda;
-    if (!lambda || !lambda->body) {
+    if (!lambda || (!lambda->body && !lambda->expr_body)) {
         puppet_log(PUPPET_LOG_ERROR, "reduce() requires a lambda block");
         return puppet_value_create_undef();
     }

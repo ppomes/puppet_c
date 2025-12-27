@@ -84,4 +84,31 @@ reduce($letters, 0) |$memo, $idx, $letter| {
   notice("Reduce: memo=${memo}, idx=${idx}, letter=${letter}")
 }
 
+# Test 11: Expression-body lambda with map (arithmetic)
+$nums = [1, 2, 3]
+notice("Test 11: map with expression body")
+$doubled = map($nums) |$n| {
+  $n * 2
+}
+each($doubled) |$v| {
+  notice("Doubled: ${v}")
+}
+
+# Test 12: Expression-body lambda with reduce (sum)
+$to_sum = [10, 20, 30]
+$total = reduce($to_sum, 0) |$memo, $n| {
+  $memo + $n
+}
+notice("Test 12: reduce sum = ${total}")
+
+# Test 13: Expression-body lambda with filter (comparison)
+$all_values = [1, 5, 2, 8, 3]
+$big_values = filter($all_values) |$v| {
+  $v > 3
+}
+notice("Test 13: filter big values")
+each($big_values) |$v| {
+  notice("Big: ${v}")
+}
+
 notice("=== Iterator Tests Complete ===")

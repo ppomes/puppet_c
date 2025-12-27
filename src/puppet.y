@@ -128,7 +128,7 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 %}
 
 %glr-parser
-%expect 64
+%expect 68
 %expect-rr 6
 
 %union {
@@ -1193,7 +1193,7 @@ selector_case:
     ;
 
 lambda_expression:
-    '|' parameter_list '|' '{' statement_list '}' {
+    '|' parameter_list '|' '{' statement_list '}' %dprec 2 {
         $$ = puppet_calloc(1, sizeof(puppet_expr_t));
         $$->type = PUPPET_EXPR_LAMBDA;
         puppet_lambda_t *lambda = puppet_calloc(1, sizeof(puppet_lambda_t));
@@ -1203,6 +1203,18 @@ lambda_expression:
         }
         lambda->body = $5;
         lambda->expr_body = NULL;
+        $$->data.lambda = lambda;
+    }
+    | '|' parameter_list '|' '{' expression '}' %dprec 1 {
+        $$ = puppet_calloc(1, sizeof(puppet_expr_t));
+        $$->type = PUPPET_EXPR_LAMBDA;
+        puppet_lambda_t *lambda = puppet_calloc(1, sizeof(puppet_lambda_t));
+        if ($2) {
+            lambda->params = *$2;
+            puppet_free($2);
+        }
+        lambda->body = NULL;
+        lambda->expr_body = $5;
         $$->data.lambda = lambda;
     }
     ;

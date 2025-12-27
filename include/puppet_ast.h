@@ -342,7 +342,8 @@ typedef enum {
     PUPPET_STMT_REQUIRE,            /**< Class requirement (require class) */
     PUPPET_STMT_CONTAIN,            /**< Class containment (contain class) */
     PUPPET_STMT_TAG,                /**< Tag declaration (tag 'name') */
-    PUPPET_STMT_IMPORT              /**< File import (import 'file') */
+    PUPPET_STMT_IMPORT,             /**< File import (import 'file') */
+    PUPPET_STMT_EXPRESSION          /**< Expression statement (bare expression) */
 } puppet_stmt_type_t;
 
 typedef struct puppet_stmt puppet_stmt_t;

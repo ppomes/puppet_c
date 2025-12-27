@@ -859,7 +859,15 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                 puppet_value_destroy(result);
             }
             break;
-            
+
+        case PUPPET_STMT_EXPRESSION:
+            // Execute bare expression statement
+            if (stmt->data.expr) {
+                puppet_value_t *result = puppet_eval_expr(stmt->data.expr, env);
+                puppet_value_destroy(result);
+            }
+            break;
+
         case PUPPET_STMT_RESOURCE:
             puppet_debug("Executing resource: %s", stmt->data.resource.type.data);
             
