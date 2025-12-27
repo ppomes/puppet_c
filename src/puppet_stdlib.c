@@ -3342,3 +3342,141 @@ puppet_value_t *puppet_func_filter(puppet_expr_t *expr, puppet_env_t *env) {
     result_val->data.array = result;
     return result_val;
 }
+
+/*
+ * reduce(collection, initial) |$memo, $value| { ... }
+ * reduce(collection, initial) |$memo, $index, $value| { ... }  (for arrays)
+ * reduce(collection, initial) |$memo, $key, $value| { ... }    (for hashes)
+ *
+ * Reduces a collection to a single value by iteratively applying a lambda.
+ * The lambda receives the accumulated value (memo) and each element.
+ * Returns the final accumulated value.
+ */
+puppet_value_t *puppet_func_reduce(puppet_expr_t *expr, puppet_env_t *env) {
+    if (!expr || expr->type != PUPPET_EXPR_FUNCALL) {
+        puppet_log(PUPPET_LOG_ERROR, "reduce() internal error: invalid expression");
+        return puppet_value_create_undef();
+    }
+
+    puppet_lambda_t *lambda = expr->data.funcall.lambda;
+    if (!lambda || !lambda->body) {
+        puppet_log(PUPPET_LOG_ERROR, "reduce() requires a lambda block");
+        return puppet_value_create_undef();
+    }
+
+    /* reduce requires 2 arguments: collection and initial value */
+    if (expr->data.funcall.args.count < 2) {
+        puppet_log(PUPPET_LOG_ERROR, "reduce() requires a collection and an initial value");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *collection = puppet_eval_expr(expr->data.funcall.args.exprs[0], env);
+    if (!collection) {
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *memo = puppet_eval_expr(expr->data.funcall.args.exprs[1], env);
+    if (!memo) {
+        puppet_value_destroy(collection);
+        return puppet_value_create_undef();
+    }
+
+    /* Get lambda parameter names */
+    size_t param_count = lambda->params.count;
+    const char *memo_name = NULL;
+    const char *param2_name = NULL;
+    const char *param3_name = NULL;
+
+    if (param_count >= 1 && lambda->params.params[0].name.data) {
+        memo_name = lambda->params.params[0].name.data;
+    }
+    if (param_count >= 2 && lambda->params.params[1].name.data) {
+        param2_name = lambda->params.params[1].name.data;
+    }
+    if (param_count >= 3 && lambda->params.params[2].name.data) {
+        param3_name = lambda->params.params[2].name.data;
+    }
+
+    if (collection->type == PUPPET_VALUE_ARRAY) {
+        puppet_array_t *arr = collection->data.array;
+        for (size_t i = 0; i < arr->count; i++) {
+            /* Set memo variable */
+            if (memo_name) {
+                puppet_env_set_var(env, memo_name, memo);
+            }
+
+            if (param_count == 2) {
+                /* |$memo, $value| */
+                if (param2_name) {
+                    puppet_value_t *item_copy = puppet_value_copy(arr->items[i]);
+                    puppet_env_set_var(env, param2_name, item_copy);
+                }
+            } else if (param_count >= 3) {
+                /* |$memo, $index, $value| */
+                if (param2_name) {
+                    puppet_value_t *index_val = puppet_value_create_number((double)i);
+                    puppet_env_set_var(env, param2_name, index_val);
+                }
+                if (param3_name) {
+                    puppet_value_t *item_copy = puppet_value_copy(arr->items[i]);
+                    puppet_env_set_var(env, param3_name, item_copy);
+                }
+            }
+
+            /* Execute lambda and get new memo value */
+            memo = exec_lambda_with_result(lambda, env);
+        }
+    } else if (collection->type == PUPPET_VALUE_HASH) {
+        puppet_hash_t *hash = collection->data.hash;
+
+        for (size_t b = 0; b < hash->bucket_count; b++) {
+            puppet_hash_entry_t *entry = hash->buckets[b];
+            while (entry) {
+                /* Set memo variable */
+                if (memo_name) {
+                    puppet_env_set_var(env, memo_name, memo);
+                }
+
+                if (param_count == 2) {
+                    /* |$memo, $value| - value is [key, value] pair */
+                    if (param2_name) {
+                        puppet_array_t *pair = puppet_calloc(1, sizeof(puppet_array_t));
+                        pair->count = 2;
+                        pair->capacity = 2;
+                        pair->items = puppet_malloc(2 * sizeof(puppet_value_t*));
+                        pair->items[0] = puppet_value_create_string(entry->key.data, entry->key.len);
+                        pair->items[1] = puppet_value_copy(entry->value);
+
+                        puppet_value_t *pair_val = puppet_calloc(1, sizeof(puppet_value_t));
+                        pair_val->type = PUPPET_VALUE_ARRAY;
+                        pair_val->data.array = pair;
+                        puppet_env_set_var(env, param2_name, pair_val);
+                    }
+                } else if (param_count >= 3) {
+                    /* |$memo, $key, $value| */
+                    if (param2_name) {
+                        puppet_value_t *key_val = puppet_value_create_string(entry->key.data, entry->key.len);
+                        puppet_env_set_var(env, param2_name, key_val);
+                    }
+                    if (param3_name) {
+                        puppet_value_t *val_copy = puppet_value_copy(entry->value);
+                        puppet_env_set_var(env, param3_name, val_copy);
+                    }
+                }
+
+                /* Execute lambda and get new memo value */
+                memo = exec_lambda_with_result(lambda, env);
+
+                entry = entry->next;
+            }
+        }
+    } else {
+        puppet_log(PUPPET_LOG_ERROR, "reduce() requires an array or hash");
+        puppet_value_destroy(collection);
+        puppet_value_destroy(memo);
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_destroy(collection);
+    return memo;
+}

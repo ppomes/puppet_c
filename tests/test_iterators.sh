@@ -125,6 +125,30 @@ else
     ((FAILED++))
 fi
 
+# Test 9: reduce with array (2 params)
+echo "Test 9: reduce() with array (memo, value)"
+if echo "$OUTPUT" | grep -q "Reduce: memo=start, item=a" && \
+   echo "$OUTPUT" | grep -q "item=b" && \
+   echo "$OUTPUT" | grep -q "item=c"; then
+    echo -e "${GREEN}✓${NC} reduce() with array works"
+    ((PASSED++))
+else
+    echo -e "${RED}✗${NC} reduce() with array failed"
+    ((FAILED++))
+fi
+
+# Test 10: reduce with array (3 params)
+echo "Test 10: reduce() with array (memo, index, value)"
+if echo "$OUTPUT" | grep -q "idx=0, letter=x" && \
+   echo "$OUTPUT" | grep -q "idx=1, letter=y" && \
+   echo "$OUTPUT" | grep -q "idx=2, letter=z"; then
+    echo -e "${GREEN}✓${NC} reduce() with index works"
+    ((PASSED++))
+else
+    echo -e "${RED}✗${NC} reduce() with index failed"
+    ((FAILED++))
+fi
+
 echo
 echo "================================"
 echo "Iterator Tests: $PASSED passed, $FAILED failed"

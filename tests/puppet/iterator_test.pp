@@ -70,4 +70,18 @@ filter($values) |$v| {
   notice("Filtering: ${v}")
 }
 
+# Test 9: reduce with array (2 params: memo, value)
+$items = ['a', 'b', 'c']
+notice("Test 9: reduce with array")
+reduce($items, 'start') |$memo, $item| {
+  notice("Reduce: memo=${memo}, item=${item}")
+}
+
+# Test 10: reduce with array (3 params: memo, index, value)
+$letters = ['x', 'y', 'z']
+notice("Test 10: reduce with index")
+reduce($letters, 0) |$memo, $idx, $letter| {
+  notice("Reduce: memo=${memo}, idx=${idx}, letter=${letter}")
+}
+
 notice("=== Iterator Tests Complete ===")

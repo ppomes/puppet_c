@@ -499,6 +499,9 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "filter") == 0 || strcmp(func_name, "select") == 0) {
                 return puppet_func_filter(expr, env);
             }
+            else if (strcmp(func_name, "reduce") == 0) {
+                return puppet_func_reduce(expr, env);
+            }
             else {
                 puppet_error("Unknown function: %s", func_name);
                 return puppet_value_create_undef();
