@@ -802,6 +802,10 @@ puppet_value_t *puppet_eval_unop(puppet_unop_t op, puppet_value_t *operand) {
     return puppet_value_create_undef();
 }
 
+/* Forward declarations */
+void puppet_exec_require(puppet_stmt_t *require_stmt, puppet_env_t *env);
+void puppet_exec_contain(puppet_stmt_t *contain_stmt, puppet_env_t *env);
+
 void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
     if (!stmt) return;
     
@@ -826,7 +830,15 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
         case PUPPET_STMT_INCLUDE:
             puppet_exec_include(stmt, env);
             break;
-            
+
+        case PUPPET_STMT_REQUIRE:
+            puppet_exec_require(stmt, env);
+            break;
+
+        case PUPPET_STMT_CONTAIN:
+            puppet_exec_contain(stmt, env);
+            break;
+
         case PUPPET_STMT_FUNCTION_CALL:
             // Execute function call statement (stored as expression)
             if (stmt->data.expr) {
@@ -1153,26 +1165,87 @@ void puppet_exec_program(puppet_program_t *program, puppet_env_t *env) {
 
 void puppet_exec_include(puppet_stmt_t *include_stmt, puppet_env_t *env) {
     if (!include_stmt || include_stmt->type != PUPPET_STMT_INCLUDE) return;
-    
+
     /* Check if loader is available */
     if (!env->loader) {
         puppet_warn("Include statements require a module loader to be configured");
         return;
     }
-    
+
     /* Process each included class */
     for (size_t i = 0; i < include_stmt->data.names.count; i++) {
         puppet_expr_t *name_expr = include_stmt->data.names.exprs[i];
-        
+
         /* Extract class name from expression */
         if (name_expr && name_expr->type == PUPPET_EXPR_VALUE &&
             name_expr->data.value->type == PUPPET_VALUE_STRING) {
-            
+
             const char *class_name = name_expr->data.value->data.string.data;
-            
+
             /* Include the class using the loader */
             if (!puppet_loader_include_class(env->loader, class_name, env)) {
                 puppet_warn("Failed to include class '%s'", class_name);
+            }
+        }
+    }
+}
+
+void puppet_exec_require(puppet_stmt_t *require_stmt, puppet_env_t *env) {
+    if (!require_stmt || require_stmt->type != PUPPET_STMT_REQUIRE) return;
+
+    /*
+     * 'require' is like 'include' but also creates an ordering dependency:
+     * all resources in the current scope will require (depend on) the
+     * required class. For now, we just include the class.
+     * TODO: Add dependency tracking for proper ordering.
+     */
+
+    if (!env->loader) {
+        puppet_warn("Require statements require a module loader to be configured");
+        return;
+    }
+
+    for (size_t i = 0; i < require_stmt->data.names.count; i++) {
+        puppet_expr_t *name_expr = require_stmt->data.names.exprs[i];
+
+        if (name_expr && name_expr->type == PUPPET_EXPR_VALUE &&
+            name_expr->data.value->type == PUPPET_VALUE_STRING) {
+
+            const char *class_name = name_expr->data.value->data.string.data;
+
+            if (!puppet_loader_include_class(env->loader, class_name, env)) {
+                puppet_warn("Failed to require class '%s'", class_name);
+            }
+        }
+    }
+}
+
+void puppet_exec_contain(puppet_stmt_t *contain_stmt, puppet_env_t *env) {
+    if (!contain_stmt || contain_stmt->type != PUPPET_STMT_CONTAIN) return;
+
+    /*
+     * 'contain' is like 'include' but the contained class's dependencies
+     * become dependencies of the containing class. This is important for
+     * proper ordering when classes are used in dependency chains.
+     * For now, we just include the class.
+     * TODO: Add containment tracking for proper dependency propagation.
+     */
+
+    if (!env->loader) {
+        puppet_warn("Contain statements require a module loader to be configured");
+        return;
+    }
+
+    for (size_t i = 0; i < contain_stmt->data.names.count; i++) {
+        puppet_expr_t *name_expr = contain_stmt->data.names.exprs[i];
+
+        if (name_expr && name_expr->type == PUPPET_EXPR_VALUE &&
+            name_expr->data.value->type == PUPPET_VALUE_STRING) {
+
+            const char *class_name = name_expr->data.value->data.string.data;
+
+            if (!puppet_loader_include_class(env->loader, class_name, env)) {
+                puppet_warn("Failed to contain class '%s'", class_name);
             }
         }
     }

@@ -13,8 +13,8 @@
 - [ ] `PUPPET_STMT_RESOURCE_COLLECTOR` - Collectors (`File <| tag == 'foo' |>`)
 - [ ] `PUPPET_STMT_RESOURCE_CHAIN` - Ordering arrows (`Package['x'] -> Service['y']`)
 - [ ] `PUPPET_STMT_APPEND` - Array append (`$arr += ['value']`)
-- [ ] `PUPPET_STMT_REQUIRE` - `require class_name`
-- [ ] `PUPPET_STMT_CONTAIN` - `contain class_name`
+- [x] `PUPPET_STMT_REQUIRE` - `require class_name`
+- [x] `PUPPET_STMT_CONTAIN` - `contain class_name`
 - [ ] `PUPPET_STMT_TAG` - `tag 'tagname'`
 
 ### Virtual and Exported Resources
