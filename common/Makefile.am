@@ -7,7 +7,8 @@ libpuppetc_common_la_SOURCES = \
 	exec_utils.c \
 	file_utils.c \
 	string_utils.c \
-	color_output.c
+	color_output.c \
+	config_parser.c
 
 # Include directories
 AM_CPPFLAGS = -I$(top_srcdir)/include
@@ -26,4 +27,5 @@ puppetcinclude_HEADERS = \
 	$(top_srcdir)/include/exec_utils.h \
 	$(top_srcdir)/include/file_utils.h \
 	$(top_srcdir)/include/string_utils.h \
-	$(top_srcdir)/include/color_output.h
+	$(top_srcdir)/include/color_output.h \
+	$(top_srcdir)/include/config_parser.h

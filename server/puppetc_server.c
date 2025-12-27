@@ -22,10 +22,12 @@
 #include "puppet_json_parser.h"
 #include "puppet_hiera.h"
 #include "puppet.tab.h"
+#include "config_parser.h"
 
 /* Default configuration */
 #define DEFAULT_PORT 8140
 #define DEFAULT_ENVIRONMENT "production"
+#define DEFAULT_CONFIG_FILE "/etc/puppetc/puppet.conf"
 
 /* Global state */
 static volatile int running = 1;
@@ -479,14 +481,18 @@ static void request_completed(void *cls,
  * @brief Print usage information
  */
 static void print_usage(const char *program_name) {
-    printf("Usage: %s [OPTIONS] <manifest_directory>\n", program_name);
+    printf("Usage: %s [OPTIONS] [manifest_directory]\n", program_name);
     printf("\nPuppet catalog compilation server\n\n");
     printf("Options:\n");
+    printf("  -c, --config FILE     Config file (default: %s)\n", DEFAULT_CONFIG_FILE);
     printf("  -p, --port PORT       Listen port (default: %d)\n", DEFAULT_PORT);
     printf("  -m, --modules PATH    Path to modules directory\n");
     printf("  -D, --hiera-data PATH Path to Hiera data directory\n");
     printf("  -v, --verbose         Enable verbose output\n");
     printf("  -h, --help            Show this help message\n");
+    printf("\nConfig file sections:\n");
+    printf("  [main]                Common settings\n");
+    printf("  [server]              Server-specific settings\n");
     printf("\nAPI Endpoints:\n");
     printf("  GET  /status                                Health check\n");
     printf("  POST /puppet/v4/catalog                     Compile catalog\n");
@@ -501,8 +507,11 @@ static void print_usage(const char *program_name) {
 int main(int argc, char *argv[]) {
     int port = DEFAULT_PORT;
     int opt;
+    const char *config_file = NULL;
+    config_file_t *file_config = NULL;
 
     static struct option long_options[] = {
+        {"config", required_argument, 0, 'c'},
         {"port", required_argument, 0, 'p'},
         {"modules", required_argument, 0, 'm'},
         {"hiera-data", required_argument, 0, 'D'},
@@ -511,12 +520,69 @@ int main(int argc, char *argv[]) {
         {0, 0, 0, 0}
     };
 
-    while ((opt = getopt_long(argc, argv, "p:m:D:vh", long_options, NULL)) != -1) {
+    /* First pass: find config file option */
+    optind = 1;
+    while ((opt = getopt_long(argc, argv, "c:p:m:D:vh", long_options, NULL)) != -1) {
+        if (opt == 'c') {
+            config_file = optarg;
+            break;
+        } else if (opt == 'h') {
+            print_usage(argv[0]);
+            return 0;
+        }
+    }
+
+    /* Load config file */
+    if (config_file) {
+        file_config = config_parse(config_file);
+        if (!file_config) {
+            fprintf(stderr, "Error: Cannot read config file: %s\n", config_file);
+            return 1;
+        }
+    } else {
+        /* Try default config file (silently ignore if missing) */
+        file_config = config_parse(DEFAULT_CONFIG_FILE);
+    }
+
+    /* Apply config file values (lowest priority) */
+    if (file_config) {
+        const char *val;
+
+        /* Port: try [server] then [main] */
+        port = config_get_int(file_config, "server", "port",
+               config_get_int(file_config, "main", "port", DEFAULT_PORT));
+
+        /* Manifest path */
+        val = config_get_string(file_config, "server", "manifest_dir", NULL);
+        if (!val) val = config_get_string(file_config, "main", "manifest_dir", NULL);
+        if (val) manifest_path = (char *)val;
+
+        /* Modules path */
+        val = config_get_string(file_config, "server", "modules_dir", NULL);
+        if (!val) val = config_get_string(file_config, "main", "modules_dir", NULL);
+        if (val) modules_path = (char *)val;
+
+        /* Hiera data directory */
+        val = config_get_string(file_config, "server", "hiera_datadir", NULL);
+        if (!val) val = config_get_string(file_config, "main", "hiera_datadir", NULL);
+        if (val) hiera_datadir = (char *)val;
+
+        /* Verbose */
+        verbose = config_get_bool(file_config, "server", "verbose", 0);
+    }
+
+    /* Second pass: command-line options (highest priority) */
+    optind = 1;
+    while ((opt = getopt_long(argc, argv, "c:p:m:D:vh", long_options, NULL)) != -1) {
         switch (opt) {
+            case 'c':
+                /* Already handled */
+                break;
             case 'p':
                 port = atoi(optarg);
                 if (port <= 0 || port > 65535) {
                     fprintf(stderr, "Error: Invalid port number\n");
+                    config_free(file_config);
                     return 1;
                 }
                 break;
@@ -531,20 +597,28 @@ int main(int argc, char *argv[]) {
                 break;
             case 'h':
                 print_usage(argv[0]);
+                config_free(file_config);
                 return 0;
             default:
                 print_usage(argv[0]);
+                config_free(file_config);
                 return 1;
         }
     }
 
-    if (optind >= argc) {
-        fprintf(stderr, "Error: No manifest directory specified\n");
-        print_usage(argv[0]);
-        return 1;
+    /* Manifest directory from command line (if provided) */
+    if (optind < argc) {
+        manifest_path = argv[optind];
     }
 
-    manifest_path = argv[optind];
+    /* Check required settings */
+    if (!manifest_path) {
+        fprintf(stderr, "Error: No manifest directory specified\n");
+        fprintf(stderr, "       Set 'manifest_dir' in config file or provide as argument\n");
+        print_usage(argv[0]);
+        config_free(file_config);
+        return 1;
+    }
 
     /* Initialize memory tracking */
     puppet_memory_init();
@@ -564,6 +638,7 @@ int main(int argc, char *argv[]) {
 
     if (!daemon) {
         fprintf(stderr, "Error: Failed to start HTTP server on port %d\n", port);
+        config_free(file_config);
         return 1;
     }
 
@@ -583,6 +658,7 @@ int main(int argc, char *argv[]) {
     MHD_stop_daemon(daemon);
 
     /* Cleanup */
+    config_free(file_config);
     puppet_memory_shutdown();
 
     return 0;

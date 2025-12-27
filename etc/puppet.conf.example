@@ -1,0 +1,69 @@
+# puppetc configuration file
+# Default location: /etc/puppetc/puppet.conf
+#
+# Settings can be in [main] (applies to both) or section-specific
+# ([server] or [agent]). Section-specific settings override [main].
+#
+# Priority order (highest to lowest):
+#   1. Command-line options
+#   2. Environment variables (PUPPET_SERVER, PUPPET_ENVIRONMENT)
+#   3. Section-specific config ([server] or [agent])
+#   4. [main] config
+#   5. Built-in defaults
+
+[main]
+# Common settings for both server and agent
+
+# Node certificate name (agent uses hostname if not set)
+# certname = node1.example.com
+
+# Environment name
+environment = production
+
+# Server URL (for agent to contact server)
+server = http://localhost:8140
+
+[server]
+# Server-specific settings
+
+# TCP port to listen on
+port = 8140
+
+# Path to manifests directory (contains site.pp)
+manifest_dir = /etc/puppet/manifests
+
+# Path to modules directory
+modules_dir = /etc/puppet/modules
+
+# Path to Hiera data directory
+hiera_datadir = /etc/puppet/hiera
+
+# Enable verbose logging
+verbose = false
+
+# SSL/TLS settings (for future use)
+# ssl_cert = /etc/puppetc/ssl/certs/server.pem
+# ssl_key = /etc/puppetc/ssl/private_keys/server.pem
+# ssl_ca = /etc/puppetc/ssl/certs/ca.pem
+
+[agent]
+# Agent-specific settings
+
+# Server URL (overrides [main] server)
+# server = http://puppet.example.com:8140
+
+# Run in no-op mode by default
+noop = false
+
+# Enable verbose output
+verbose = false
+
+# SSL/TLS settings (for future use)
+# ssl_cert = /etc/puppetc/ssl/certs/agent.pem
+# ssl_key = /etc/puppetc/ssl/private_keys/agent.pem
+# ssl_ca = /etc/puppetc/ssl/certs/ca.pem
+
+# Daemon mode settings (for future use)
+# runinterval = 1800
+# splay = true
+# splaylimit = 300

@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include "puppet_memory.h"
 #include "color_output.h"
+#include "config_parser.h"
 #include <string.h>
 #include <stdbool.h>
 #include <getopt.h>
@@ -21,6 +22,7 @@
 
 #define DEFAULT_SERVER "http://localhost:8140"
 #define DEFAULT_ENVIRONMENT "production"
+#define DEFAULT_CONFIG_FILE "/etc/puppetc/puppet.conf"
 #define AGENT_VERSION "0.1.0"
 
 /* Response buffer for curl */
@@ -460,8 +462,9 @@ static void print_usage(const char *prog) {
     printf("Usage: %s [OPTIONS]\n", prog);
     printf("\nPuppet agent client (v%s)\n", AGENT_VERSION);
     printf("\nOptions:\n");
+    printf("  -c, --config FILE     Config file (default: %s)\n", DEFAULT_CONFIG_FILE);
     printf("  -s, --server URL      Server URL (default: %s)\n", DEFAULT_SERVER);
-    printf("  -c, --certname NAME   Node certificate name (default: hostname)\n");
+    printf("      --certname NAME   Node certificate name (default: hostname)\n");
     printf("  -e, --environment ENV Environment (default: %s)\n", DEFAULT_ENVIRONMENT);
     printf("  -a, --apply           Apply catalog resources (requires root for some)\n");
     printf("  -n, --noop            No-op mode - simulate but don't apply\n");
@@ -469,6 +472,9 @@ static void print_usage(const char *prog) {
     printf("  -C, --catalog         Show full catalog JSON\n");
     printf("  -v, --verbose         Verbose output\n");
     printf("  -h, --help            Show this help\n");
+    printf("\nConfig file sections:\n");
+    printf("  [main]                Common settings\n");
+    printf("  [agent]               Agent-specific settings\n");
     printf("\nExamples:\n");
     printf("  %s                                    # Get catalog, show summary\n", prog);
     printf("  %s -n                                 # Noop mode, show what would change\n", prog);
@@ -478,14 +484,14 @@ static void print_usage(const char *prog) {
 }
 
 int main(int argc, char *argv[]) {
-    // Check environment variables for defaults
-    const char *env_server = getenv("PUPPET_SERVER");
-    const char *env_environment = getenv("PUPPET_ENVIRONMENT");
+    const char *config_file = NULL;
+    config_file_t *file_config = NULL;
 
+    /* Default configuration */
     agent_config_t config = {
-        .server_url = env_server ? env_server : DEFAULT_SERVER,
+        .server_url = NULL,
         .certname = NULL,
-        .environment = env_environment ? env_environment : DEFAULT_ENVIRONMENT,
+        .environment = NULL,
         .verbose = false,
         .noop = false,
         .apply_catalog = false,
@@ -494,8 +500,9 @@ int main(int argc, char *argv[]) {
     };
 
     static struct option long_options[] = {
+        {"config", required_argument, 0, 'c'},
         {"server", required_argument, 0, 's'},
-        {"certname", required_argument, 0, 'c'},
+        {"certname", required_argument, 0, 'N'},
         {"environment", required_argument, 0, 'e'},
         {"apply", no_argument, 0, 'a'},
         {"noop", no_argument, 0, 'n'},
@@ -506,13 +513,74 @@ int main(int argc, char *argv[]) {
         {0, 0, 0, 0}
     };
 
+    /* First pass: find config file option */
     int opt;
-    while ((opt = getopt_long(argc, argv, "s:c:e:anfCvh", long_options, NULL)) != -1) {
+    optind = 1;
+    while ((opt = getopt_long(argc, argv, "c:s:N:e:anfCvh", long_options, NULL)) != -1) {
+        if (opt == 'c') {
+            config_file = optarg;
+            break;
+        } else if (opt == 'h') {
+            print_usage(argv[0]);
+            return 0;
+        }
+    }
+
+    /* Load config file (try specified, then default) */
+    if (config_file) {
+        file_config = config_parse(config_file);
+        if (!file_config) {
+            fprintf(stderr, "Error: Cannot read config file: %s\n", config_file);
+            return 1;
+        }
+    } else {
+        /* Try default config file (silently ignore if missing) */
+        file_config = config_parse(DEFAULT_CONFIG_FILE);
+    }
+
+    /* Apply config file values (lowest priority) */
+    if (file_config) {
+        /* Try [agent] section first, then [main] */
+        const char *val;
+
+        val = config_get_string(file_config, "agent", "server", NULL);
+        if (!val) val = config_get_string(file_config, "main", "server", NULL);
+        if (val) config.server_url = val;
+
+        val = config_get_string(file_config, "agent", "certname", NULL);
+        if (!val) val = config_get_string(file_config, "main", "certname", NULL);
+        if (val) config.certname = puppet_strdup(val);
+
+        val = config_get_string(file_config, "agent", "environment", NULL);
+        if (!val) val = config_get_string(file_config, "main", "environment", NULL);
+        if (val) config.environment = val;
+
+        config.noop = config_get_bool(file_config, "agent", "noop", false);
+        config.verbose = config_get_bool(file_config, "agent", "verbose", false);
+    }
+
+    /* Apply environment variables (medium priority) */
+    const char *env_server = getenv("PUPPET_SERVER");
+    const char *env_environment = getenv("PUPPET_ENVIRONMENT");
+    if (env_server) config.server_url = env_server;
+    if (env_environment) config.environment = env_environment;
+
+    /* Apply final defaults if still unset */
+    if (!config.server_url) config.server_url = DEFAULT_SERVER;
+    if (!config.environment) config.environment = DEFAULT_ENVIRONMENT;
+
+    /* Second pass: command-line options (highest priority) */
+    optind = 1;
+    while ((opt = getopt_long(argc, argv, "c:s:N:e:anfCvh", long_options, NULL)) != -1) {
         switch (opt) {
+            case 'c':
+                /* Already handled */
+                break;
             case 's':
                 config.server_url = optarg;
                 break;
-            case 'c':
+            case 'N':
+                if (config.certname) puppet_free(config.certname);
                 config.certname = puppet_strdup(optarg);
                 break;
             case 'e':
@@ -535,9 +603,11 @@ int main(int argc, char *argv[]) {
                 break;
             case 'h':
                 print_usage(argv[0]);
+                config_free(file_config);
                 return 0;
             default:
                 print_usage(argv[0]);
+                config_free(file_config);
                 return 1;
         }
     }
@@ -549,6 +619,7 @@ int main(int argc, char *argv[]) {
 
     /* Cleanup */
     curl_global_cleanup();
+    config_free(file_config);
     if (config.certname) {
         puppet_free(config.certname);
     }
