@@ -4,7 +4,7 @@
 
 ### Expression Types
 - [ ] `PUPPET_EXPR_DOT` - Method calls (`$array.each`, `$string.length`)
-- [ ] `PUPPET_EXPR_LAMBDA` - Lambdas/closures (`|$x| { ... }`)
+- [x] `PUPPET_EXPR_LAMBDA` - Lambdas/closures (`|$x| { ... }`)
 
 ### Statement Types
 - [ ] `PUPPET_STMT_DEFINE` - Defined types (`define mytype($param) { }`)
@@ -43,7 +43,8 @@
 ### Functions
 - [x] ~50 built-in functions implemented
 - [ ] Custom function definitions
-- [ ] `each()`, `map()`, `filter()`, `reduce()` iterators
+- [x] `each()` iterator
+- [ ] `map()`, `filter()`, `reduce()` iterators
 - [ ] `with()` function
 - [ ] `assert_type()` function
 - [ ] `new()` function for type instantiation

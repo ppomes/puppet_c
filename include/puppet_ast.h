@@ -245,9 +245,12 @@ typedef struct {
     size_t count;
 } puppet_param_list_t;
 
+/* Forward declaration for lambda body */
+typedef struct puppet_stmt_list puppet_stmt_list_t;
+
 typedef struct {
     puppet_param_list_t params;
-    puppet_expr_list_t body;
+    puppet_stmt_list_t *body;
 } puppet_lambda_t;
 
 struct puppet_expr {
@@ -343,10 +346,10 @@ typedef enum {
 
 typedef struct puppet_stmt puppet_stmt_t;
 
-typedef struct {
+struct puppet_stmt_list {
     puppet_stmt_t **stmts;
     size_t count;
-} puppet_stmt_list_t;
+};
 
 typedef enum {
     PUPPET_RES_NORMAL,

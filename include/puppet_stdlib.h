@@ -86,6 +86,9 @@ puppet_value_t *puppet_func_sha1(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_md5(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_base64(puppet_expr_list_t *args, puppet_env_t *env);
 
+// Iterator functions (take full expression for lambda access)
+puppet_value_t *puppet_func_each(puppet_expr_t *expr, puppet_env_t *env);
+
 // Utility function to convert values to strings for logging
 char *puppet_value_to_display_string(puppet_value_t *value);
 

@@ -331,10 +331,13 @@ void puppet_expr_destroy(puppet_expr_t *expr) {
                     puppet_expr_destroy(expr->data.lambda->params.params[i].default_value);
                 }
                 puppet_free(expr->data.lambda->params.params);
-                for (size_t i = 0; i < expr->data.lambda->body.count; i++) {
-                    puppet_expr_destroy(expr->data.lambda->body.exprs[i]);
+                if (expr->data.lambda->body) {
+                    for (size_t i = 0; i < expr->data.lambda->body->count; i++) {
+                        puppet_stmt_destroy(expr->data.lambda->body->stmts[i]);
+                    }
+                    puppet_free(expr->data.lambda->body->stmts);
+                    puppet_free(expr->data.lambda->body);
                 }
-                puppet_free(expr->data.lambda->body.exprs);
                 puppet_free(expr->data.lambda);
             }
             break;

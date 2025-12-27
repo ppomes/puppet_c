@@ -2868,3 +2868,123 @@ puppet_value_t *puppet_func_base64(puppet_expr_list_t *args, puppet_env_t *env) 
 
     return result;
 }
+
+/*
+ * each($collection) |$item| { ... }
+ * each($collection) |$index, $item| { ... }
+ *
+ * Iterates over an array or hash, executing the lambda for each element.
+ * Returns the original collection.
+ */
+puppet_value_t *puppet_func_each(puppet_expr_t *expr, puppet_env_t *env) {
+    if (!expr || expr->type != PUPPET_EXPR_FUNCALL) {
+        puppet_log(PUPPET_LOG_ERROR, "each() internal error: invalid expression");
+        return puppet_value_create_undef();
+    }
+
+    /* Get the lambda */
+    puppet_lambda_t *lambda = expr->data.funcall.lambda;
+    if (!lambda || !lambda->body) {
+        puppet_log(PUPPET_LOG_ERROR, "each() requires a lambda block");
+        return puppet_value_create_undef();
+    }
+
+    /* Get the collection argument */
+    if (expr->data.funcall.args.count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "each() requires a collection argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *collection = puppet_eval_expr(expr->data.funcall.args.exprs[0], env);
+    if (!collection) {
+        return puppet_value_create_undef();
+    }
+
+    /* Get lambda parameter names */
+    size_t param_count = lambda->params.count;
+    const char *param1_name = NULL;
+    const char *param2_name = NULL;
+
+    if (param_count >= 1 && lambda->params.params[0].name.data) {
+        param1_name = lambda->params.params[0].name.data;
+    }
+    if (param_count >= 2 && lambda->params.params[1].name.data) {
+        param2_name = lambda->params.params[1].name.data;
+    }
+
+    /* Iterate based on collection type */
+    if (collection->type == PUPPET_VALUE_ARRAY) {
+        puppet_array_t *arr = collection->data.array;
+        for (size_t i = 0; i < arr->count; i++) {
+            /* Set parameter variables */
+            if (param_count == 1) {
+                /* |$item| - just the value */
+                if (param1_name) {
+                    puppet_value_t *item_copy = puppet_value_copy(arr->items[i]);
+                    puppet_env_set_var(env, param1_name, item_copy);
+                }
+            } else if (param_count >= 2) {
+                /* |$index, $item| - index and value */
+                if (param1_name) {
+                    puppet_value_t *index_val = puppet_value_create_number((double)i);
+                    puppet_env_set_var(env, param1_name, index_val);
+                }
+                if (param2_name) {
+                    puppet_value_t *item_copy = puppet_value_copy(arr->items[i]);
+                    puppet_env_set_var(env, param2_name, item_copy);
+                }
+            }
+
+            /* Execute the lambda body */
+            puppet_exec_stmt_list(lambda->body, env);
+        }
+    } else if (collection->type == PUPPET_VALUE_HASH) {
+        puppet_hash_t *hash = collection->data.hash;
+
+        /* Iterate over hash buckets */
+        for (size_t b = 0; b < hash->bucket_count; b++) {
+            puppet_hash_entry_t *entry = hash->buckets[b];
+            while (entry) {
+                /* Set parameter variables */
+                if (param_count == 1) {
+                    /* |$item| - key-value pair as array [key, value] */
+                    if (param1_name) {
+                        puppet_array_t *pair = puppet_calloc(1, sizeof(puppet_array_t));
+                        pair->count = 2;
+                        pair->capacity = 2;
+                        pair->items = puppet_malloc(2 * sizeof(puppet_value_t*));
+                        pair->items[0] = puppet_value_create_string(entry->key.data, entry->key.len);
+                        pair->items[1] = puppet_value_copy(entry->value);
+
+                        puppet_value_t *pair_val = puppet_calloc(1, sizeof(puppet_value_t));
+                        pair_val->type = PUPPET_VALUE_ARRAY;
+                        pair_val->data.array = pair;
+                        puppet_env_set_var(env, param1_name, pair_val);
+                    }
+                } else if (param_count >= 2) {
+                    /* |$key, $value| - key and value separately */
+                    if (param1_name) {
+                        puppet_value_t *key_val = puppet_value_create_string(entry->key.data, entry->key.len);
+                        puppet_env_set_var(env, param1_name, key_val);
+                    }
+                    if (param2_name) {
+                        puppet_value_t *val_copy = puppet_value_copy(entry->value);
+                        puppet_env_set_var(env, param2_name, val_copy);
+                    }
+                }
+
+                /* Execute the lambda body */
+                puppet_exec_stmt_list(lambda->body, env);
+
+                entry = entry->next;
+            }
+        }
+    } else {
+        puppet_log(PUPPET_LOG_ERROR, "each() requires an array or hash");
+        puppet_value_destroy(collection);
+        return puppet_value_create_undef();
+    }
+
+    /* Return the original collection */
+    return collection;
+}

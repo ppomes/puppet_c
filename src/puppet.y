@@ -128,7 +128,7 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 %}
 
 %glr-parser
-%expect 63
+%expect 64
 %expect-rr 6
 
 %union {
@@ -748,6 +748,7 @@ function_statement:
         $$->data.expr->data.funcall.name = puppet_string_create($1);
         $$->data.expr->data.funcall.args.count = 0;
         $$->data.expr->data.funcall.args.exprs = NULL;
+        $$->data.expr->data.funcall.lambda = NULL;
         puppet_free($1);
     }
     | NAME '(' expression_list ')' {
@@ -757,6 +758,33 @@ function_statement:
         $$->data.expr->type = PUPPET_EXPR_FUNCALL;
         $$->data.expr->data.funcall.name = puppet_string_create($1);
         $$->data.expr->data.funcall.args = *$3;
+        $$->data.expr->data.funcall.lambda = NULL;
+        puppet_free($1);
+        puppet_free($3);
+    }
+    | NAME '(' ')' lambda_expression {
+        $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
+        $$->type = PUPPET_STMT_FUNCTION_CALL;
+        $$->data.expr = puppet_calloc(1, sizeof(puppet_expr_t));
+        $$->data.expr->type = PUPPET_EXPR_FUNCALL;
+        $$->data.expr->data.funcall.name = puppet_string_create($1);
+        $$->data.expr->data.funcall.args.count = 0;
+        $$->data.expr->data.funcall.args.exprs = NULL;
+        $$->data.expr->data.funcall.lambda = $4->data.lambda;
+        $4->data.lambda = NULL;
+        puppet_free($4);
+        puppet_free($1);
+    }
+    | NAME '(' expression_list ')' lambda_expression {
+        $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
+        $$->type = PUPPET_STMT_FUNCTION_CALL;
+        $$->data.expr = puppet_calloc(1, sizeof(puppet_expr_t));
+        $$->data.expr->type = PUPPET_EXPR_FUNCALL;
+        $$->data.expr->data.funcall.name = puppet_string_create($1);
+        $$->data.expr->data.funcall.args = *$3;
+        $$->data.expr->data.funcall.lambda = $5->data.lambda;
+        $5->data.lambda = NULL;
+        puppet_free($5);
         puppet_free($1);
         puppet_free($3);
     }
@@ -952,20 +980,33 @@ funcall_expression:
             $$->data.funcall.args = *$3;
             puppet_free($3);
         }
+        $$->data.funcall.lambda = NULL;
         puppet_free($1);
     }
-    /* Commented out to fix ambiguity with commas
-    | NAME funcall_args {
+    | NAME '(' funcall_args ')' lambda_expression {
         $$ = puppet_calloc(1, sizeof(puppet_expr_t));
         $$->type = PUPPET_EXPR_FUNCALL;
         $$->data.funcall.name = puppet_string_create($1);
-        if ($2) {
-            $$->data.funcall.args = *$2;
-            puppet_free($2);
+        if ($3) {
+            $$->data.funcall.args = *$3;
+            puppet_free($3);
         }
+        $$->data.funcall.lambda = $5->data.lambda;
+        $5->data.lambda = NULL;
+        puppet_free($5);
         puppet_free($1);
     }
-    */
+    | NAME '(' ')' lambda_expression {
+        $$ = puppet_calloc(1, sizeof(puppet_expr_t));
+        $$->type = PUPPET_EXPR_FUNCALL;
+        $$->data.funcall.name = puppet_string_create($1);
+        $$->data.funcall.args.exprs = NULL;
+        $$->data.funcall.args.count = 0;
+        $$->data.funcall.lambda = $4->data.lambda;
+        $4->data.lambda = NULL;
+        puppet_free($4);
+        puppet_free($1);
+    }
     ;
 
 funcall_args:
@@ -1160,9 +1201,8 @@ lambda_expression:
             lambda->params = *$2;
             puppet_free($2);
         }
-        /* TODO: Convert statements to expressions */
+        lambda->body = $5;
         $$->data.lambda = lambda;
-        puppet_free($5);
     }
     ;
 
