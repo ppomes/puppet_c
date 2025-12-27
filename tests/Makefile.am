@@ -40,10 +40,12 @@ EXTRA_DIST = \
     puppet/join_test.pp \
     puppet/string_functions_test.pp \
     puppet/inspection_functions_test.pp \
-    data/common.yaml
+    puppet/iterator_test.pp \
+    data/common.yaml \
+    test_iterators.sh
 
 # Test output directory
-check-local: check-parser check-facts check-core-functions check-hiera
+check-local: check-parser check-facts check-core-functions check-hiera check-iterators
 	@echo "All tests completed."
 
 check-parser:
@@ -316,4 +318,15 @@ clean-local:
 $(builddir)/output:
 	$(MKDIR_P) $@
 
-.PHONY: check-parser check-facts check-core-functions check-hiera check-memory check-asan
+check-iterators:
+	@echo "Running iterator function tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_iterators.sh > output/iterators.out 2>&1; then \
+		echo "✅ All iterator tests passed!"; \
+	else \
+		echo "❌ Some iterator tests failed:"; \
+		sed 's/^/  /' output/iterators.out; \
+		exit 1; \
+	fi
+
+.PHONY: check-parser check-facts check-core-functions check-hiera check-iterators check-memory check-asan
