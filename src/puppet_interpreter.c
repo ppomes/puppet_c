@@ -648,7 +648,8 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
         case PUPPET_EXPR_RESOURCE_REF: {
             /* Resource reference: Type['title'] -> "Type[title]" string */
             puppet_value_t *title_val = puppet_eval_expr(expr->data.resource_ref.title, env);
-            char *title_str = puppet_value_to_string(title_val);
+            /* Note: puppet_value_to_string returns internal pointer, don't free it */
+            const char *title_str = puppet_value_to_string(title_val);
 
             /* Build reference string: Type[title] */
             size_t type_len = expr->data.resource_ref.type.len;
@@ -663,7 +664,6 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             puppet_value_t *result = puppet_value_create_string(ref_str, strlen(ref_str));
 
             puppet_free(ref_str);
-            puppet_free(title_str);
             puppet_value_destroy(title_val);
             return result;
         }
