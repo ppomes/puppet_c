@@ -315,6 +315,9 @@ static int run_agent(agent_config_t *config) {
     print_info("puppetc-agent v%s", AGENT_VERSION);
     print_info("Server: %s", config->server_url);
 
+    /* Set server URL in environment for providers (e.g., file provider) */
+    setenv("PUPPET_SERVER", config->server_url, 1);
+
     /* Collect facts */
     print_info("Collecting facts...");
 

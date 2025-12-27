@@ -6,6 +6,7 @@
 #include "puppet_loader.h"
 #include "puppet.tab.h"
 #include "puppet_memory.h"
+#include "puppet_interpreter.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -237,14 +238,37 @@ bool puppet_loader_include_class(puppet_loader_t *loader,
     
     /* Execute the class definition */
     printf("Including class: %s\n", class_name);
-    
+
     /* Create a new scope for the class */
     puppet_scope_t *class_scope = puppet_scope_create(env->current_scope, class_name);
     puppet_scope_push(env, class_scope);
-    
+
+    /* Set class scope in environment for enhanced variable lookup */
+    puppet_scope_t *old_class_scope = env->class_scope;
+    env->class_scope = class_scope;
+
+    /* Process class parameters and set default values */
+    for (size_t i = 0; i < class_def->data.class_def.params.count; i++) {
+        puppet_param_t *param = &class_def->data.class_def.params.params[i];
+        const char *param_name = param->name.data;
+
+        if (param->default_value) {
+            /* Evaluate default value and set in class scope */
+            puppet_value_t *default_val = puppet_eval_expr(param->default_value, env);
+            puppet_scope_set_var(class_scope, param_name, default_val);
+        } else {
+            /* Set parameter to undef if no default provided */
+            puppet_value_t *undef_val = puppet_value_create_undef();
+            puppet_scope_set_var(class_scope, param_name, undef_val);
+        }
+    }
+
     /* Execute the class body */
     puppet_exec_stmt_list(&class_def->data.class_def.body, env);
-    
+
+    /* Restore old class scope */
+    env->class_scope = old_class_scope;
+
     /* Pop the class scope */
     puppet_scope_t *old_scope = puppet_scope_pop(env);
     puppet_scope_destroy(old_scope);

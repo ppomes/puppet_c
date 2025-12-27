@@ -645,6 +645,29 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             return result;
         }
 
+        case PUPPET_EXPR_RESOURCE_REF: {
+            /* Resource reference: Type['title'] -> "Type[title]" string */
+            puppet_value_t *title_val = puppet_eval_expr(expr->data.resource_ref.title, env);
+            char *title_str = puppet_value_to_string(title_val);
+
+            /* Build reference string: Type[title] */
+            size_t type_len = expr->data.resource_ref.type.len;
+            size_t title_len = title_str ? strlen(title_str) : 0;
+            size_t ref_len = type_len + 1 + title_len + 1; /* Type[title] */
+
+            char *ref_str = puppet_malloc(ref_len + 1);
+            snprintf(ref_str, ref_len + 1, "%.*s[%s]",
+                     (int)type_len, expr->data.resource_ref.type.data,
+                     title_str ? title_str : "");
+
+            puppet_value_t *result = puppet_value_create_string(ref_str, strlen(ref_str));
+
+            puppet_free(ref_str);
+            puppet_free(title_str);
+            puppet_value_destroy(title_val);
+            return result;
+        }
+
         default:
             puppet_warn("Unimplemented expression type: %d", expr->type);
             return puppet_value_create_undef();
