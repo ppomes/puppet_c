@@ -141,6 +141,15 @@ PKG_CHECK_MODULES([CURL], [libcurl], [
     AC_MSG_ERROR([libcurl not found. Install libcurl4-openssl-dev package.])
 ])
 
+# Check for SQLite3 (required for PuppetDB)
+PKG_CHECK_MODULES([SQLITE], [sqlite3], [
+    AC_DEFINE([HAVE_SQLITE], [1], [Define if SQLite3 is available])
+    AC_SUBST([SQLITE_CFLAGS])
+    AC_SUBST([SQLITE_LIBS])
+], [
+    AC_MSG_ERROR([SQLite3 not found. Install libsqlite3-dev package.])
+])
+
 # Check for standard library functions
 AC_CHECK_FUNCS([malloc realloc free strdup strlen strcpy snprintf])
 AC_CHECK_HEADERS([stdio.h stdlib.h string.h])

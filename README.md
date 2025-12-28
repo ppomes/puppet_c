@@ -13,6 +13,7 @@ Prerequisites:
 - libssl/openssl (for crypto functions)
 - libmicrohttpd (for puppetc-server)
 - libcurl (for puppetc-agent)
+- libsqlite3 (for PuppetDB)
 
 ```bash
 autoreconf -i
@@ -74,13 +75,31 @@ Run `./compiler/puppetc-compile --help` for all options.
 ### Catalog Server
 
 ```bash
-# Start server
-./server/puppetc-server -p 8140 /etc/puppet/manifests
+# Start server (pass base directory, not manifests/)
+./server/puppetc-server -p 8140 /etc/puppet
+
+# With PuppetDB enabled
+./server/puppetc-server -p 8140 -P /var/lib/puppetc/puppetdb.sqlite /etc/puppet
 
 # Compile catalog via API
 curl -X POST http://localhost:8140/puppet/v4/catalog \
      -H 'Content-Type: application/json' \
-     -d '{"certname": "node1.example.com"}'
+     -d '{"certname": "node1.example.com", "facts": {"hostname": "node1"}}'
+```
+
+### PuppetDB
+
+The server includes an embedded SQLite-based PuppetDB for storing facts and catalogs.
+
+```bash
+# Query all nodes
+curl http://localhost:8140/pdb/query/v4/nodes
+
+# Get facts for a node
+curl http://localhost:8140/pdb/query/v4/facts/node1.example.com
+
+# Get catalog for a node
+curl http://localhost:8140/pdb/query/v4/catalogs/node1.example.com
 ```
 
 ### Native Fact Collection
@@ -125,6 +144,7 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 - Module autoloading
 - Virtual resources (`@resource`), `realize()`, and collectors (`<| |>`)
 - Iterator functions: `each()`, `map()`, `filter()`, `reduce()`
+- PuppetDB (SQLite): stores facts and catalogs, query API
 - Many stdlib functions (see below)
 - Resource providers for: file, package, service, exec, cron, host, group, user, sysctl, mount
 
@@ -145,7 +165,6 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 - **Exported resources**: The `@@resource` syntax for exported resources is not supported
 - **Exported collectors**: The `<<| |>>` collector syntax for exported resources is not implemented (virtual collectors `<| |>` work)
 - **Resource relationships**: Chaining arrows (`->`, `~>`) have limited support
-- **No PuppetDB support**: No integration with PuppetDB for exported resources or queries
 - **Incomplete stdlib coverage**: Many stdlib functions are implemented but not all
 
 ### Runtime Limitations
@@ -220,5 +239,7 @@ The agent supports the following resource types:
 │ - REST API      │  │ - Collect facts  │  │ - Parse/eval    │
 │ - Compile       │  │ - Request catalog│  │ - JSON output   │
 │   catalogs      │  │ - Apply catalog  │  │ - Catalog gen   │
+│ - PuppetDB      │  │                  │  │                 │
+│   (SQLite)      │  │                  │  │                 │
 └─────────────────┘  └──────────────────┘  └─────────────────┘
 ```

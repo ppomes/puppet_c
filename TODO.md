@@ -100,10 +100,15 @@
 - [ ] Certificate revocation (CRL)
 - [ ] Autosign configuration
 
-### PuppetDB Integration
+### PuppetDB Integration (SQLite)
+- [x] SQLite database backend
+- [x] Store facts on catalog request
+- [x] Store catalogs
+- [x] Query nodes (`/pdb/query/v4/nodes`)
+- [x] Query facts (`/pdb/query/v4/facts/<certname>`)
+- [x] Query catalogs (`/pdb/query/v4/catalogs/<certname>`)
 - [ ] Store/query exported resources
-- [ ] Store facts
-- [ ] Store catalogs
+- [ ] Exported resource collectors (`<<| |>>`)
 - [ ] Store reports
 - [ ] PuppetDB query functions (`puppetdb_query()`)
 

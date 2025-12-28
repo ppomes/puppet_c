@@ -1,13 +1,13 @@
 # puppetc-server - HTTP API for catalog compilation
 bin_PROGRAMS = puppetc-server
 
-puppetc_server_SOURCES = puppetc_server.c
+puppetc_server_SOURCES = puppetc_server.c puppetdb.c
 
 # Link against libpuppetc and libpuppetc_common
-puppetc_server_LDADD = $(top_builddir)/compiler/libpuppetc.la $(top_builddir)/common/libpuppetc_common.la $(MHD_LIBS) $(YAML_LIBS) $(OPENSSL_LIBS)
+puppetc_server_LDADD = $(top_builddir)/compiler/libpuppetc.la $(top_builddir)/common/libpuppetc_common.la $(MHD_LIBS) $(YAML_LIBS) $(OPENSSL_LIBS) $(SQLITE_LIBS)
 
 # Include directories
-AM_CPPFLAGS = -I$(top_srcdir)/include $(MHD_CFLAGS)
+AM_CPPFLAGS = -I$(top_srcdir)/include $(MHD_CFLAGS) $(SQLITE_CFLAGS)
 
 # Compiler flags
 AM_CFLAGS = -Wall -Wextra -g $(YAML_CFLAGS) $(OPENSSL_CFLAGS)

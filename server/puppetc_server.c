@@ -23,17 +23,23 @@
 #include "puppet_hiera.h"
 #include "puppet.tab.h"
 #include "config_parser.h"
+#include "puppetdb.h"
 
 /* Default configuration */
 #define DEFAULT_PORT 8140
 #define DEFAULT_ENVIRONMENT "production"
 #define DEFAULT_CONFIG_FILE "/etc/puppetc/puppet.conf"
 
+/* Default PuppetDB path */
+#define DEFAULT_PUPPETDB_PATH "/var/lib/puppetc/puppetdb.sqlite"
+
 /* Global state */
 static volatile int running = 1;
 static char *manifest_path = NULL;
 static char *modules_path = NULL;
 static char *hiera_datadir = NULL;
+static char *puppetdb_path = NULL;
+static puppetdb_t *pdb = NULL;
 static int verbose = 0;
 
 /* External parser symbols */
@@ -380,16 +386,144 @@ static enum MHD_Result handle_catalog(struct MHD_Connection *connection,
     /* Compile catalog */
     char *catalog_json = compile_catalog(certname, environment, facts_json);
 
-    json_value_destroy(request);
-
     if (!catalog_json) {
+        json_value_destroy(request);
         return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
                          "Failed to compile catalog");
     }
 
+    /* Store facts and catalog in PuppetDB */
+    if (pdb) {
+        /* Store facts if we have them */
+        if (facts_json) {
+            char *facts_str = json_value_to_string(facts_json);
+            if (facts_str) {
+                if (puppetdb_store_facts(pdb, certname, facts_str) != 0) {
+                    if (verbose) {
+                        fprintf(stderr, "[WARN] Failed to store facts: %s\n",
+                                puppetdb_error(pdb));
+                    }
+                } else if (verbose) {
+                    fprintf(stderr, "[INFO] Stored facts for node: %s\n", certname);
+                }
+                free(facts_str);
+            }
+        }
+
+        /* Store catalog */
+        if (puppetdb_store_catalog(pdb, certname, catalog_json) != 0) {
+            if (verbose) {
+                fprintf(stderr, "[WARN] Failed to store catalog: %s\n",
+                        puppetdb_error(pdb));
+            }
+        } else if (verbose) {
+            fprintf(stderr, "[INFO] Stored catalog for node: %s\n", certname);
+        }
+    }
+
+    json_value_destroy(request);
+
     enum MHD_Result ret = send_json_response(connection, MHD_HTTP_OK, catalog_json);
     puppet_free(catalog_json);
 
+    return ret;
+}
+
+/**
+ * @brief Handle GET /pdb/query/v4/nodes
+ */
+static enum MHD_Result handle_pdb_nodes(struct MHD_Connection *connection) {
+    if (!pdb) {
+        return send_error(connection, MHD_HTTP_SERVICE_UNAVAILABLE,
+                         "PuppetDB not enabled");
+    }
+
+    char *nodes_json = puppetdb_list_nodes(pdb);
+    if (!nodes_json) {
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                         puppetdb_error(pdb));
+    }
+
+    enum MHD_Result ret = send_json_response(connection, MHD_HTTP_OK, nodes_json);
+    free(nodes_json);
+    return ret;
+}
+
+/**
+ * @brief Handle GET /pdb/query/v4/facts/<certname>
+ */
+static enum MHD_Result handle_pdb_facts(struct MHD_Connection *connection,
+                                        const char *certname) {
+    if (!pdb) {
+        return send_error(connection, MHD_HTTP_SERVICE_UNAVAILABLE,
+                         "PuppetDB not enabled");
+    }
+
+    if (!certname || strlen(certname) == 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST,
+                         "Missing certname");
+    }
+
+    char *facts_json = puppetdb_get_facts(pdb, certname);
+    if (!facts_json) {
+        return send_error(connection, MHD_HTTP_NOT_FOUND,
+                         "Node not found or no facts available");
+    }
+
+    enum MHD_Result ret = send_json_response(connection, MHD_HTTP_OK, facts_json);
+    free(facts_json);
+    return ret;
+}
+
+/**
+ * @brief Handle GET /pdb/query/v4/catalogs/<certname>
+ */
+static enum MHD_Result handle_pdb_catalogs(struct MHD_Connection *connection,
+                                           const char *certname) {
+    if (!pdb) {
+        return send_error(connection, MHD_HTTP_SERVICE_UNAVAILABLE,
+                         "PuppetDB not enabled");
+    }
+
+    if (!certname || strlen(certname) == 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST,
+                         "Missing certname");
+    }
+
+    char *catalog_json = puppetdb_get_catalog(pdb, certname);
+    if (!catalog_json) {
+        return send_error(connection, MHD_HTTP_NOT_FOUND,
+                         "Node not found or no catalog available");
+    }
+
+    enum MHD_Result ret = send_json_response(connection, MHD_HTTP_OK, catalog_json);
+    free(catalog_json);
+    return ret;
+}
+
+/**
+ * @brief Handle GET /pdb/query/v4/resources/<type>
+ */
+static enum MHD_Result handle_pdb_resources(struct MHD_Connection *connection,
+                                            const char *type) {
+    if (!pdb) {
+        return send_error(connection, MHD_HTTP_SERVICE_UNAVAILABLE,
+                         "PuppetDB not enabled");
+    }
+
+    if (!type || strlen(type) == 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST,
+                         "Missing resource type");
+    }
+
+    char *resources_json = puppetdb_query_exported(pdb, type);
+    if (!resources_json) {
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                         puppetdb_error(pdb));
+    }
+
+    enum MHD_Result ret = send_json_response(connection, MHD_HTTP_OK, resources_json);
+    free(resources_json);
     return ret;
 }
 
@@ -443,6 +577,21 @@ static enum MHD_Result request_handler(void *cls,
     } else if (strcmp(method, "POST") == 0 &&
                strcmp(url, "/puppet/v4/catalog") == 0) {
         ret = handle_catalog(connection, con_info->post_data);
+    } else if (strcmp(method, "GET") == 0 &&
+               strcmp(url, "/pdb/query/v4/nodes") == 0) {
+        ret = handle_pdb_nodes(connection);
+    } else if (strcmp(method, "GET") == 0 &&
+               strncmp(url, "/pdb/query/v4/facts/", 20) == 0) {
+        const char *certname = url + 20;
+        ret = handle_pdb_facts(connection, certname);
+    } else if (strcmp(method, "GET") == 0 &&
+               strncmp(url, "/pdb/query/v4/catalogs/", 23) == 0) {
+        const char *certname = url + 23;
+        ret = handle_pdb_catalogs(connection, certname);
+    } else if (strcmp(method, "GET") == 0 &&
+               strncmp(url, "/pdb/query/v4/resources/", 24) == 0) {
+        const char *type = url + 24;
+        ret = handle_pdb_resources(connection, type);
     } else if (strcmp(method, "OPTIONS") == 0) {
         /* CORS preflight */
         struct MHD_Response *response = MHD_create_response_from_buffer(0, "", MHD_RESPMEM_PERSISTENT);
@@ -488,6 +637,8 @@ static void print_usage(const char *program_name) {
     printf("  -p, --port PORT       Listen port (default: %d)\n", DEFAULT_PORT);
     printf("  -m, --modules PATH    Path to modules directory\n");
     printf("  -D, --hiera-data PATH Path to Hiera data directory\n");
+    printf("  -P, --puppetdb PATH   Path to PuppetDB SQLite file\n");
+    printf("                        (default: %s)\n", DEFAULT_PUPPETDB_PATH);
     printf("  -v, --verbose         Enable verbose output\n");
     printf("  -h, --help            Show this help message\n");
     printf("\nConfig file sections:\n");
@@ -497,6 +648,11 @@ static void print_usage(const char *program_name) {
     printf("  GET  /status                                Health check\n");
     printf("  POST /puppet/v4/catalog                     Compile catalog\n");
     printf("  GET  /puppet/v3/file_content/modules/<m>/<p>  Serve file from module\n");
+    printf("\nPuppetDB Endpoints:\n");
+    printf("  GET  /pdb/query/v4/nodes                    List all nodes\n");
+    printf("  GET  /pdb/query/v4/facts/<certname>         Get facts for node\n");
+    printf("  GET  /pdb/query/v4/catalogs/<certname>      Get catalog for node\n");
+    printf("  GET  /pdb/query/v4/resources/<type>         Query exported resources\n");
     printf("\nExample:\n");
     printf("  %s -p 8140 /etc/puppet\n", program_name);
     printf("\n  curl -X POST http://localhost:8140/puppet/v4/catalog \\\n");
@@ -515,6 +671,7 @@ int main(int argc, char *argv[]) {
         {"port", required_argument, 0, 'p'},
         {"modules", required_argument, 0, 'm'},
         {"hiera-data", required_argument, 0, 'D'},
+        {"puppetdb", required_argument, 0, 'P'},
         {"verbose", no_argument, 0, 'v'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
@@ -522,7 +679,7 @@ int main(int argc, char *argv[]) {
 
     /* First pass: find config file option */
     optind = 1;
-    while ((opt = getopt_long(argc, argv, "c:p:m:D:vh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:p:m:D:P:vh", long_options, NULL)) != -1) {
         if (opt == 'c') {
             config_file = optarg;
             break;
@@ -567,13 +724,18 @@ int main(int argc, char *argv[]) {
         if (!val) val = config_get_string(file_config, "main", "hiera_datadir", NULL);
         if (val) hiera_datadir = (char *)val;
 
+        /* PuppetDB path */
+        val = config_get_string(file_config, "server", "puppetdb_path", NULL);
+        if (!val) val = config_get_string(file_config, "main", "puppetdb_path", NULL);
+        if (val) puppetdb_path = (char *)val;
+
         /* Verbose */
         verbose = config_get_bool(file_config, "server", "verbose", 0);
     }
 
     /* Second pass: command-line options (highest priority) */
     optind = 1;
-    while ((opt = getopt_long(argc, argv, "c:p:m:D:vh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:p:m:D:P:vh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'c':
                 /* Already handled */
@@ -591,6 +753,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'D':
                 hiera_datadir = optarg;
+                break;
+            case 'P':
+                puppetdb_path = optarg;
                 break;
             case 'v':
                 verbose = 1;
@@ -623,6 +788,16 @@ int main(int argc, char *argv[]) {
     /* Initialize memory tracking */
     puppet_memory_init();
 
+    /* Initialize PuppetDB */
+    if (!puppetdb_path) {
+        puppetdb_path = DEFAULT_PUPPETDB_PATH;
+    }
+    pdb = puppetdb_open(puppetdb_path);
+    if (!pdb) {
+        fprintf(stderr, "Warning: Failed to open PuppetDB at %s\n", puppetdb_path);
+        fprintf(stderr, "         PuppetDB endpoints will be unavailable\n");
+    }
+
     /* Set up signal handlers */
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -646,6 +821,7 @@ int main(int argc, char *argv[]) {
     printf("Manifest directory: %s\n", manifest_path);
     if (modules_path) printf("Modules directory: %s\n", modules_path);
     if (hiera_datadir) printf("Hiera data directory: %s\n", hiera_datadir);
+    if (pdb) printf("PuppetDB: %s\n", puppetdb_path);
     printf("\nPress Ctrl+C to stop\n");
 
     /* Main loop */
@@ -658,6 +834,7 @@ int main(int argc, char *argv[]) {
     MHD_stop_daemon(daemon);
 
     /* Cleanup */
+    if (pdb) puppetdb_close(pdb);
     config_free(file_config);
     puppet_memory_shutdown();
 
