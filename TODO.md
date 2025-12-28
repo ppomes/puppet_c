@@ -11,7 +11,7 @@
 - [ ] `PUPPET_STMT_DEFINE` - Defined types (`define mytype($param) { }`)
 - [ ] `PUPPET_STMT_RESOURCE_DEFAULT` - Resource defaults (`File { mode => '0644' }`)
 - [ ] `PUPPET_STMT_RESOURCE_OVERRIDE` - Resource override (`File['/x'] { attr +> val }`)
-- [ ] `PUPPET_STMT_RESOURCE_COLLECTOR` - Collectors (`File <| tag == 'foo' |>`)
+- [x] `PUPPET_STMT_RESOURCE_COLLECTOR` - Virtual collectors (`File <| ensure == present |>`)
 - [ ] `PUPPET_STMT_RESOURCE_CHAIN` - Ordering arrows (`Package['x'] -> Service['y']`)
 - [ ] `PUPPET_STMT_APPEND` - Array append (`$arr += ['value']`)
 - [x] `PUPPET_STMT_REQUIRE` - `require class_name`
@@ -21,7 +21,9 @@
 ### Virtual and Exported Resources
 - [x] Virtual resources (`@resource` syntax)
 - [x] `realize()` function
+- [x] Virtual resource collectors (`<| |>` with filters)
 - [ ] Exported resources (`@@resource` syntax)
+- [ ] Exported resource collectors (`<<| |>>`)
 - [ ] Resource collection from PuppetDB
 
 ### Resource Relationships
