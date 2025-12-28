@@ -6,7 +6,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PUPPETC="$SCRIPT_DIR/../src/puppetc"
+PUPPETC="$SCRIPT_DIR/../compiler/puppetc-compile"
 OUTPUT_DIR="$SCRIPT_DIR/output"
 
 # Colors for output
@@ -37,7 +37,7 @@ run_test() {
     
     # Run from project root directory to get correct relative paths
     pushd "$SCRIPT_DIR/.." > /dev/null
-    if output=$(./src/puppetc --eval --node web01 --facts "$facts_file" --template "$template_target" "$manifest" 2>&1); then
+    if output=$(./compiler/puppetc-compile --eval --node web01 --facts "$facts_file" --template "$template_target" "$manifest" 2>&1); then
         popd > /dev/null
         # Extract the template output section
         template_output=$(echo "$output" | sed -n '/=== ERB TEMPLATE OUTPUT ===/,/=== END ERB TEMPLATE OUTPUT ===/p' | sed '1d;$d')

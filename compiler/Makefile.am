@@ -1,6 +1,6 @@
 # Library and binary
 lib_LTLIBRARIES = libpuppetc.la
-bin_PROGRAMS = puppetc
+bin_PROGRAMS = puppetc-compile
 
 # Generated parser files
 BUILT_SOURCES = puppet.tab.c puppet.tab.h lex.yy.c
@@ -35,8 +35,8 @@ libpuppetc_la_LIBADD = $(top_builddir)/common/libpuppetc_common.la -lpthread $(Y
 endif
 
 # Binary sources (just main.c, links against library)
-puppetc_SOURCES = main.c
-puppetc_LDADD = libpuppetc.la $(top_builddir)/common/libpuppetc_common.la
+puppetc_compile_SOURCES = main.c
+puppetc_compile_LDADD = libpuppetc.la $(top_builddir)/common/libpuppetc_common.la
 
 # Include directories
 AM_CPPFLAGS = -I$(top_srcdir)/include

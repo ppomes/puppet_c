@@ -4,7 +4,7 @@
 echo "=== Testing Core Puppet Functions ==="
 echo
 
-OUTPUT=$(../src/puppetc --eval puppet/simple_core_test.pp 2>&1)
+OUTPUT=$(../compiler/puppetc-compile --eval puppet/simple_core_test.pp 2>&1)
 
 echo "Output from core functions test:"
 echo "$OUTPUT"
@@ -39,7 +39,7 @@ fi
 echo
 echo "Testing fail() function:"
 echo 'fail("Test failure")' > /tmp/fail_test.pp
-FAIL_OUTPUT=$(../src/puppetc --eval /tmp/fail_test.pp 2>&1)
+FAIL_OUTPUT=$(../compiler/puppetc-compile --eval /tmp/fail_test.pp 2>&1)
 if echo "$FAIL_OUTPUT" | grep -q "Critical: Test failure"; then
     echo "✓ fail() function works"
 else

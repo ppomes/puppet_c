@@ -1,2 +1,2 @@
-usr/bin/puppetc
+usr/bin/puppetc-compile
 usr/bin/facter_c

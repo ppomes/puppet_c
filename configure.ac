@@ -159,7 +159,7 @@ fi
 AC_CONFIG_FILES([
     Makefile
     common/Makefile
-    src/Makefile
+    compiler/Makefile
     facter/Makefile
     server/Makefile
     agent/Makefile

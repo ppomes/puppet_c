@@ -54,7 +54,7 @@ check-parser:
 	@total=0; passed=0; \
 	for file in $(srcdir)/puppet/*.pp; do \
 		printf "Testing %s... " "$$(basename $$file)"; \
-		if $(top_builddir)/src/puppetc $$file > output/$$(basename $$file).out 2>&1; then \
+		if $(top_builddir)/compiler/puppetc-compile $$file > output/$$(basename $$file).out 2>&1; then \
 			echo "✓ PASS"; \
 			passed=$$((passed + 1)); \
 		else \
@@ -78,7 +78,7 @@ check-facts:
 	@$(MKDIR_P) output
 	@total=0; passed=0; \
 	echo "  Testing single-node facts..."; \
-	if $(top_builddir)/src/puppetc --eval --facts $(srcdir)/facts/sample_facts.json \
+	if $(top_builddir)/compiler/puppetc-compile --eval --facts $(srcdir)/facts/sample_facts.json \
 	   $(srcdir)/facts/test_facts_usage.pp > output/facts_single.out 2>&1; then \
 		echo "    ✓ Single-node facts test passed"; \
 		passed=$$((passed + 1)); \
@@ -88,7 +88,7 @@ check-facts:
 	fi; \
 	total=$$((total + 1)); \
 	echo "  Testing multi-node facts..."; \
-	if $(top_builddir)/src/puppetc --eval --all-nodes --facts $(srcdir)/facts/multi_node_facts.json \
+	if $(top_builddir)/compiler/puppetc-compile --eval --all-nodes --facts $(srcdir)/facts/multi_node_facts.json \
 	   $(srcdir)/facts/test_single_quotes.pp > output/facts_multi.out 2>&1; then \
 		echo "    ✓ Multi-node facts test passed"; \
 		passed=$$((passed + 1)); \
@@ -98,7 +98,7 @@ check-facts:
 	fi; \
 	total=$$((total + 1)); \
 	echo "  Testing facts with default node..."; \
-	if $(top_builddir)/src/puppetc --eval --facts $(srcdir)/facts/multi_node_facts.json \
+	if $(top_builddir)/compiler/puppetc-compile --eval --facts $(srcdir)/facts/multi_node_facts.json \
 	   $(srcdir)/facts/simple_test.pp > output/facts_default.out 2>&1; then \
 		echo "    ✓ Default node facts test passed"; \
 		passed=$$((passed + 1)); \
@@ -108,7 +108,7 @@ check-facts:
 	fi; \
 	total=$$((total + 1)); \
 	echo "  Testing string interpolation with facts..."; \
-	if $(top_builddir)/src/puppetc --eval --facts $(srcdir)/facts/sample_facts.json \
+	if $(top_builddir)/compiler/puppetc-compile --eval --facts $(srcdir)/facts/sample_facts.json \
 	   $(srcdir)/puppet/interpolation_test.pp > output/interpolation.out 2>&1; then \
 		echo "    ✓ String interpolation test passed"; \
 		passed=$$((passed + 1)); \
@@ -130,7 +130,7 @@ check-core-functions:
 	@echo "Running core function tests..."
 	@$(MKDIR_P) output
 	@echo "  Testing logging functions (notice, info, warning, debug)..."
-	@if $(top_builddir)/src/puppetc --eval $(srcdir)/puppet/simple_core_test.pp > output/core_functions.out 2>&1; then \
+	@if $(top_builddir)/compiler/puppetc-compile --eval $(srcdir)/puppet/simple_core_test.pp > output/core_functions.out 2>&1; then \
 		if grep -q "Notice: Test message" output/core_functions.out && \
 		   grep -q "Info: Info test" output/core_functions.out && \
 		   grep -q "Warning: Warning test" output/core_functions.out && \
@@ -148,7 +148,7 @@ check-core-functions:
 	fi
 	@echo "  Testing fail() function..."
 	@echo 'fail("Test failure message")' > output/fail_test.pp
-	@if $(top_builddir)/src/puppetc --eval output/fail_test.pp > output/fail_test.out 2>&1; then \
+	@if $(top_builddir)/compiler/puppetc-compile --eval output/fail_test.pp > output/fail_test.out 2>&1; then \
 		echo "    ✗ fail() function should have caused failure but didn't"; \
 		cat output/fail_test.out; \
 		exit 1; \
@@ -162,7 +162,7 @@ check-core-functions:
 		fi; \
 	fi
 	@echo "  Testing function call statements..."
-	@if $(top_builddir)/src/puppetc --eval $(srcdir)/puppet/notice_statement_test.pp > output/statement_test.out 2>&1; then \
+	@if $(top_builddir)/compiler/puppetc-compile --eval $(srcdir)/puppet/notice_statement_test.pp > output/statement_test.out 2>&1; then \
 		if grep -q "Notice: This should appear during execution" output/statement_test.out; then \
 			echo "    ✓ Function call statements test passed"; \
 		else \
@@ -176,7 +176,7 @@ check-core-functions:
 		exit 1; \
 	fi
 	@echo "  Testing split() function..."
-	@if $(top_builddir)/src/puppetc --eval --verbose $(srcdir)/puppet/split_test.pp > output/split_test.out 2>&1; then \
+	@if $(top_builddir)/compiler/puppetc-compile --eval --verbose $(srcdir)/puppet/split_test.pp > output/split_test.out 2>&1; then \
 		if grep -q "split() function tests completed" output/split_test.out && \
 		   grep -q 'Set \$$parts = (complex value)' output/split_test.out && \
 		   grep -q 'Set \$$path = (complex value)' output/split_test.out && \
@@ -193,7 +193,7 @@ check-core-functions:
 		exit 1; \
 	fi
 	@echo "  Testing join() function..."
-	@if $(top_builddir)/src/puppetc --eval --verbose $(srcdir)/puppet/join_test.pp > output/join_test.out 2>&1; then \
+	@if $(top_builddir)/compiler/puppetc-compile --eval --verbose $(srcdir)/puppet/join_test.pp > output/join_test.out 2>&1; then \
 		if grep -q "join() function tests completed" output/join_test.out && \
 		   grep -q 'Joined with colon: a:b:c' output/join_test.out && \
 		   grep -q 'Joined with dash: one - two - three' output/join_test.out && \
@@ -216,7 +216,7 @@ check-hiera:
 	@$(MKDIR_P) output
 	@total=0; passed=0; \
 	echo "  Testing basic Hiera lookup functionality..."; \
-	if $(top_builddir)/src/puppetc --eval --hiera-data $(srcdir)/data \
+	if $(top_builddir)/compiler/puppetc-compile --eval --hiera-data $(srcdir)/data \
 	   $(srcdir)/puppet/hiera_lookup_test.pp > output/hiera_lookup.out 2>&1; then \
 		if grep -q "Hiera message:" output/hiera_lookup.out && \
 		   grep -q "Unknown key with default: default_value" output/hiera_lookup.out && \
@@ -234,7 +234,7 @@ check-hiera:
 	fi; \
 	total=$$((total + 1)); \
 	echo "  Testing complex Hiera data structures..."; \
-	if $(top_builddir)/src/puppetc --eval --hiera-data $(srcdir)/data \
+	if $(top_builddir)/compiler/puppetc-compile --eval --hiera-data $(srcdir)/data \
 	   $(srcdir)/puppet/hiera_complex_test.pp > output/hiera_complex.out 2>&1; then \
 		if grep -q "Array from Hiera:" output/hiera_complex.out && \
 		   grep -q "Hash from Hiera:" output/hiera_complex.out && \
@@ -251,7 +251,7 @@ check-hiera:
 	fi; \
 	total=$$((total + 1)); \
 	echo "  Testing Hiera data access..."; \
-	if $(top_builddir)/src/puppetc --eval --hiera-data $(srcdir)/data \
+	if $(top_builddir)/compiler/puppetc-compile --eval --hiera-data $(srcdir)/data \
 	   $(srcdir)/puppet/hiera_access_test.pp > output/hiera_access.out 2>&1; then \
 		if grep -q "Apache data loaded successfully" output/hiera_access.out && \
 		   grep -q "Simple value still works:" output/hiera_access.out; then \
@@ -276,7 +276,7 @@ check-hiera:
 	fi
 
 # Memory leak testing with Valgrind
-check-memory: $(top_builddir)/src/puppetc
+check-memory: $(top_builddir)/compiler/puppetc-compile
 	@echo "Running memory leak tests with Valgrind..."
 	@$(MKDIR_P) output
 	@if command -v valgrind >/dev/null 2>&1; then \
@@ -286,7 +286,7 @@ check-memory: $(top_builddir)/src/puppetc
 			printf "Memory testing %s... " "$$(basename $$file)"; \
 			if valgrind --tool=memcheck --leak-check=full --show-leak-kinds=all \
 			   --error-exitcode=1 --quiet \
-			   $(top_builddir)/src/puppetc $$file > output/$$(basename $$file).valgrind 2>&1; then \
+			   $(top_builddir)/compiler/puppetc-compile $$file > output/$$(basename $$file).valgrind 2>&1; then \
 				echo "✓ PASS"; \
 				passed=$$((passed + 1)); \
 			else \

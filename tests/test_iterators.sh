@@ -3,13 +3,13 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-PUPPETC="$PROJECT_DIR/src/.libs/puppetc"
+PUPPETC="$PROJECT_DIR/compiler/.libs/puppetc-compile"
 TEST_DIR="$SCRIPT_DIR/puppet"
 FAILED=0
 PASSED=0
 
 # Set library path
-export LD_LIBRARY_PATH="$PROJECT_DIR/src/.libs:$PROJECT_DIR/common/.libs:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="$PROJECT_DIR/compiler/.libs:$PROJECT_DIR/common/.libs:$LD_LIBRARY_PATH"
 
 # Color codes for output
 RED='\033[0;31m'

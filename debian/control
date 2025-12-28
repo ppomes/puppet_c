@@ -72,9 +72,10 @@ Architecture: any
 Depends: libpuppetc0 (= ${binary:Version}),
          ${shlibs:Depends},
          ${misc:Depends}
-Description: Puppet manifest parser and debugger
- Command-line tool for parsing, evaluating, and debugging
- Puppet manifests. Useful for development and testing.
+Description: Puppet manifest compiler and catalog generator
+ Command-line tool (puppetc-compile) for parsing, evaluating,
+ and compiling Puppet manifests into catalogs. Also includes
+ facter_c for collecting system facts.
 
 Package: puppetc-server
 Architecture: any

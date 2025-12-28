@@ -54,19 +54,22 @@ Edit `puppetcode/manifests/site.pp` on your host - changes are reflected immedia
 
 ```bash
 # Parse only
-./src/puppetc manifest.pp
+./compiler/puppetc-compile manifest.pp
 
 # Parse and evaluate
-./src/puppetc -e manifest.pp
+./compiler/puppetc-compile -e manifest.pp
 
 # With facts
-./src/puppetc -e -f facts.json manifest.pp
+./compiler/puppetc-compile -e -f facts.json manifest.pp
+
+# Compile to catalog JSON
+./compiler/puppetc-compile -c manifest.pp
 
 # JSON AST output
-./src/puppetc -j manifest.pp
+./compiler/puppetc-compile -j manifest.pp
 ```
 
-Run `./src/puppetc --help` for all options.
+Run `./compiler/puppetc-compile --help` for all options.
 
 ### Catalog Server
 
@@ -120,8 +123,10 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 - ERB templates (via embedded Ruby)
 - Hiera lookups (YAML backend)
 - Module autoloading
+- Virtual resources (`@resource`) and `realize()`
+- Iterator functions: `each()`, `map()`, `filter()`, `reduce()`
 - Many stdlib functions (see below)
-- Resource providers for: file, package, service, exec, cron, host, group, user
+- Resource providers for: file, package, service, exec, cron, host, group, user, sysctl, mount
 
 ## Known Limitations
 
@@ -137,7 +142,7 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 
 ### Feature Limitations
 
-- **Virtual resources**: The `@resource` syntax for virtual resources is not supported. The `realize()` function exists but cannot realize virtual resources
+- **Exported resources**: The `@@resource` syntax for exported resources is not supported
 - **Resource collectors**: The `<| |>` and `<<| |>>` collector syntax is not implemented
 - **Resource relationships**: Chaining arrows (`->`, `~>`) have limited support
 - **No PuppetDB support**: No integration with PuppetDB for exported resources or queries
@@ -168,6 +173,10 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 **Crypto**: sha1, md5, base64
 
 **Data**: lookup
+
+**Iterators**: each, map, filter, reduce
+
+**Resources**: realize
 
 ## Implemented Resources
 
@@ -206,10 +215,10 @@ The agent supports the following resource types:
            │                        │
            ▼                        ▼
 ┌─────────────────┐  ┌──────────────────┐  ┌─────────────────┐
-│ puppetc-server  │  │ puppetc-agent    │  │ puppetc         │
-│                 │  │                  │  │ (debug tool)    │
+│ puppetc-server  │  │ puppetc-agent    │  │ puppetc-compile │
+│                 │  │                  │  │                 │
 │ - REST API      │  │ - Collect facts  │  │ - Parse/eval    │
 │ - Compile       │  │ - Request catalog│  │ - JSON output   │
-│   catalogs      │  │ - Apply catalog  │  │ - Template debug│
+│   catalogs      │  │ - Apply catalog  │  │ - Catalog gen   │
 └─────────────────┘  └──────────────────┘  └─────────────────┘
 ```

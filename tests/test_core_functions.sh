@@ -1,7 +1,7 @@
 #!/bin/bash
 # Test script for Puppet core functions
 
-PUPPETC="../src/puppetc"
+PUPPETC="../compiler/puppetc-compile"
 TEST_DIR="puppet"
 FAILED=0
 PASSED=0

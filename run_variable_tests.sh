@@ -3,7 +3,7 @@
 # Test runner for enhanced variable system
 # This script runs all variable-related test cases and reports results
 
-PUPPETC="./src/puppetc"
+PUPPETC="./compiler/puppetc-compile"
 TEST_DIR="./tests"
 RESULTS_DIR="./test_results"
 

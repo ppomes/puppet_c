@@ -1,4 +1,4 @@
-SUBDIRS = common src facter server agent tests
+SUBDIRS = common compiler facter server agent tests
 
 # Additional files to distribute
 EXTRA_DIST = README.md
@@ -8,7 +8,7 @@ MAINTAINERCLEANFILES = \
     aclocal.m4 \
     configure \
     Makefile.in \
-    src/Makefile.in \
+    compiler/Makefile.in \
     tests/Makefile.in \
     install-sh \
     missing \
@@ -18,7 +18,7 @@ MAINTAINERCLEANFILES = \
 .PHONY: check-syntax
 check-syntax:
 	@echo "Running syntax checks..."
-	@for file in src/*.c src/*.h; do \
+	@for file in compiler/*.c compiler/*.h; do \
 		echo "Checking $$file..."; \
 		$(CC) $(CFLAGS) $(CPPFLAGS) -fsyntax-only $$file || exit 1; \
 	done
