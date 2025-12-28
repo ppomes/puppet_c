@@ -455,7 +455,7 @@ resource_override:
     ;
 
 resource_collector:
-    TYPE_NAME LCOLLECT expression RCOLLECT {
+    CLASSREF LCOLLECT expression RCOLLECT {
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
         $$->type = PUPPET_STMT_RESOURCE_COLLECTOR;
         $$->data.collector.style = PUPPET_RES_NORMAL;
@@ -463,7 +463,7 @@ resource_collector:
         $$->data.collector.search_expr = $3;
         puppet_free($1);
     }
-    | TYPE_NAME LCOLLECT RCOLLECT {
+    | CLASSREF LCOLLECT RCOLLECT {
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
         $$->type = PUPPET_STMT_RESOURCE_COLLECTOR;
         $$->data.collector.style = PUPPET_RES_NORMAL;

@@ -329,8 +329,9 @@ puppet_value_t *puppet_func_defined(puppet_expr_list_t *args, puppet_env_t *env)
 
 /**
  * Helper function to apply a single virtual resource
+ * Also used by resource collectors
  */
-static void realize_single_resource(puppet_stmt_t *stmt, size_t instance_idx, puppet_env_t *env) {
+void realize_single_resource(puppet_stmt_t *stmt, size_t instance_idx, puppet_env_t *env) {
     if (!stmt || stmt->type != PUPPET_STMT_RESOURCE) {
         return;
     }

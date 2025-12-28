@@ -123,7 +123,7 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 - ERB templates (via embedded Ruby)
 - Hiera lookups (YAML backend)
 - Module autoloading
-- Virtual resources (`@resource`) and `realize()`
+- Virtual resources (`@resource`), `realize()`, and collectors (`<| |>`)
 - Iterator functions: `each()`, `map()`, `filter()`, `reduce()`
 - Many stdlib functions (see below)
 - Resource providers for: file, package, service, exec, cron, host, group, user, sysctl, mount
@@ -143,7 +143,7 @@ curl -X POST http://localhost:8140/puppet/v4/catalog \
 ### Feature Limitations
 
 - **Exported resources**: The `@@resource` syntax for exported resources is not supported
-- **Resource collectors**: The `<| |>` and `<<| |>>` collector syntax is not implemented
+- **Exported collectors**: The `<<| |>>` collector syntax for exported resources is not implemented (virtual collectors `<| |>` work)
 - **Resource relationships**: Chaining arrows (`->`, `~>`) have limited support
 - **No PuppetDB support**: No integration with PuppetDB for exported resources or queries
 - **Incomplete stdlib coverage**: Many stdlib functions are implemented but not all

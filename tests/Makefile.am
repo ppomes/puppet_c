@@ -41,11 +41,13 @@ EXTRA_DIST = \
     puppet/string_functions_test.pp \
     puppet/inspection_functions_test.pp \
     puppet/iterator_test.pp \
+    puppet/collector_test.pp \
     data/common.yaml \
-    test_iterators.sh
+    test_iterators.sh \
+    test_collectors.sh
 
 # Test output directory
-check-local: check-parser check-facts check-core-functions check-hiera check-iterators
+check-local: check-parser check-facts check-core-functions check-hiera check-iterators check-collectors
 	@echo "All tests completed."
 
 check-parser:
@@ -329,4 +331,15 @@ check-iterators:
 		exit 1; \
 	fi
 
-.PHONY: check-parser check-facts check-core-functions check-hiera check-iterators check-memory check-asan
+check-collectors:
+	@echo "Running virtual resource collector tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_collectors.sh > output/collectors.out 2>&1; then \
+		echo "✅ All collector tests passed!"; \
+	else \
+		echo "❌ Some collector tests failed:"; \
+		sed 's/^/  /' output/collectors.out; \
+		exit 1; \
+	fi
+
+.PHONY: check-parser check-facts check-core-functions check-hiera check-iterators check-collectors check-memory check-asan

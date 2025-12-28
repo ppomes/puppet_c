@@ -15,6 +15,7 @@ puppet_value_t *puppet_func_debug(puppet_expr_list_t *args, puppet_env_t *env);
 // Resource functions
 puppet_value_t *puppet_func_defined(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_realize(puppet_expr_list_t *args, puppet_env_t *env);
+void realize_single_resource(puppet_stmt_t *stmt, size_t instance_idx, puppet_env_t *env);
 puppet_value_t *puppet_func_tag(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_tagged(puppet_expr_list_t *args, puppet_env_t *env);
 

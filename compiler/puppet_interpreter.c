@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 
 /* Global verbose flag */
 bool puppet_verbose = false;
@@ -836,6 +837,160 @@ puppet_value_t *puppet_eval_unop(puppet_unop_t op, puppet_value_t *operand) {
     return puppet_value_create_undef();
 }
 
+/* ============================================================================
+ * Resource Collector Helpers
+ * ============================================================================ */
+
+/**
+ * Get an attribute value from a virtual resource instance
+ */
+static puppet_value_t *collector_get_attribute(
+    puppet_stmt_t *stmt,
+    size_t instance_idx,
+    const char *attr_name,
+    puppet_env_t *env
+) {
+    if (!stmt || stmt->type != PUPPET_STMT_RESOURCE) return NULL;
+    if (instance_idx >= stmt->data.resource.instance_count) return NULL;
+
+    puppet_resource_instance_t *instance = &stmt->data.resource.instances[instance_idx];
+
+    for (size_t i = 0; i < instance->attr_count; i++) {
+        if (strcmp(instance->attributes[i].name.data, attr_name) == 0) {
+            return puppet_eval_expr(instance->attributes[i].value, env);
+        }
+    }
+    return NULL;
+}
+
+/**
+ * Check if a resource matches a collector filter expression
+ * Handles: ==, !=, and, or operators with attribute comparisons
+ */
+static bool collector_matches_filter(
+    puppet_expr_t *filter,
+    puppet_stmt_t *resource_stmt,
+    size_t instance_idx,
+    puppet_env_t *env
+) {
+    if (!filter) return true;  /* No filter = match all */
+
+    switch (filter->type) {
+        case PUPPET_EXPR_BINOP: {
+            puppet_binop_t op = filter->data.binop.op;
+
+            /* Handle logical operators */
+            if (op == PUPPET_OP_AND) {
+                bool left = collector_matches_filter(filter->data.binop.left, resource_stmt, instance_idx, env);
+                if (!left) return false;
+                return collector_matches_filter(filter->data.binop.right, resource_stmt, instance_idx, env);
+            }
+            if (op == PUPPET_OP_OR) {
+                bool left = collector_matches_filter(filter->data.binop.left, resource_stmt, instance_idx, env);
+                if (left) return true;
+                return collector_matches_filter(filter->data.binop.right, resource_stmt, instance_idx, env);
+            }
+
+            /* Handle comparison operators: left should be attribute name (variable) */
+            if (op == PUPPET_OP_EQ || op == PUPPET_OP_NE) {
+                /* Get attribute name from left side */
+                const char *attr_name = NULL;
+                if (filter->data.binop.left->type == PUPPET_EXPR_VARIABLE) {
+                    attr_name = filter->data.binop.left->data.variable.data;
+                } else if (filter->data.binop.left->type == PUPPET_EXPR_VALUE &&
+                           filter->data.binop.left->data.value->type == PUPPET_VALUE_STRING) {
+                    attr_name = filter->data.binop.left->data.value->data.string.data;
+                }
+
+                if (!attr_name) {
+                    puppet_warn("Collector filter: left side must be attribute name");
+                    return false;
+                }
+
+                /* Get the expected value from right side */
+                puppet_value_t *expected = puppet_eval_expr(filter->data.binop.right, env);
+                if (!expected) return false;
+
+                /* Get the actual attribute value from resource */
+                puppet_value_t *actual = collector_get_attribute(resource_stmt, instance_idx, attr_name, env);
+
+                bool result = false;
+                if (actual) {
+                    puppet_value_t *cmp = puppet_eval_binop(PUPPET_OP_EQ, actual, expected);
+                    bool is_equal = (cmp && cmp->type == PUPPET_VALUE_BOOL && cmp->data.boolean);
+                    if (cmp) puppet_value_destroy(cmp);
+
+                    result = (op == PUPPET_OP_EQ) ? is_equal : !is_equal;
+                    puppet_value_destroy(actual);
+                } else {
+                    /* Attribute not found: == fails, != succeeds */
+                    result = (op == PUPPET_OP_NE);
+                }
+
+                puppet_value_destroy(expected);
+                return result;
+            }
+            break;
+        }
+
+        default:
+            puppet_warn("Collector filter: unsupported expression type %d", filter->type);
+            break;
+    }
+
+    return false;
+}
+
+/**
+ * Execute a resource collector - realize matching virtual resources
+ */
+static void puppet_exec_collector(puppet_stmt_t *stmt, puppet_env_t *env) {
+    if (!stmt || stmt->type != PUPPET_STMT_RESOURCE_COLLECTOR) return;
+    if (!env->virtual_resources) return;
+
+    const char *collect_type = stmt->data.collector.type.data;
+    puppet_expr_t *filter = stmt->data.collector.search_expr;
+
+    /* Build lowercase type prefix for matching (e.g., "user[") */
+    size_t type_len = strlen(collect_type);
+    char *type_lower = puppet_malloc(type_len + 2);
+    for (size_t i = 0; i < type_len; i++) {
+        type_lower[i] = tolower((unsigned char)collect_type[i]);
+    }
+    type_lower[type_len] = '[';
+    type_lower[type_len + 1] = '\0';
+    size_t prefix_len = type_len + 1;
+
+    puppet_debug("Collector: looking for virtual %s resources", collect_type);
+
+    /* Iterate through all virtual resources */
+    size_t realized_count = 0;
+    for (size_t i = 0; i < env->virtual_resources->bucket_count; i++) {
+        puppet_hash_entry_t *entry = env->virtual_resources->buckets[i];
+        while (entry) {
+            puppet_hash_entry_t *next = entry->next;  /* Save next before potential removal */
+
+            /* Check if this resource matches the type */
+            if (strncmp(entry->key.data, type_lower, prefix_len) == 0) {
+                /* Extract stored stmt pointer and instance index */
+                puppet_stmt_t *res_stmt = (puppet_stmt_t *)entry->value->data.string.data;
+                size_t instance_idx = (size_t)entry->value->data.string.len;
+
+                /* Check filter if present */
+                if (collector_matches_filter(filter, res_stmt, instance_idx, env)) {
+                    puppet_debug("Collector: realizing %s", entry->key.data);
+                    realize_single_resource(res_stmt, instance_idx, env);
+                    realized_count++;
+                }
+            }
+            entry = next;
+        }
+    }
+
+    puppet_free(type_lower);
+    puppet_debug("Collector: realized %zu %s resource(s)", realized_count, collect_type);
+}
+
 /* Forward declarations */
 void puppet_exec_require(puppet_stmt_t *require_stmt, puppet_env_t *env);
 void puppet_exec_contain(puppet_stmt_t *contain_stmt, puppet_env_t *env);
@@ -1117,6 +1272,10 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
             if (expr_val) puppet_value_destroy(expr_val);
             break;
         }
+
+        case PUPPET_STMT_RESOURCE_COLLECTOR:
+            puppet_exec_collector(stmt, env);
+            break;
 
         default:
             puppet_warn("Unimplemented statement type: %d", stmt->type);

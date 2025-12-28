@@ -91,6 +91,8 @@ NON_WORD    [^a-zA-Z0-9_]
 "+="                    { return APPEND; }
 "=="                    { return EQ; }
 "!="                    { return NE; }
+"<|"                    { return LCOLLECT; }
+"|>"                    { return RCOLLECT; }
 "<"                     { return '<'; }
 "<="                    { return LE; }
 ">"                     { return '>'; }
@@ -117,8 +119,6 @@ NON_WORD    [^a-zA-Z0-9_]
 "|"                     { return '|'; }
 "@"                     { return '@'; }
 "@@"                    { return AT2; }
-"<|"                    { return LCOLLECT; }
-"|>"                    { return RCOLLECT; }
 
 "$"{WORD}+              { yylval.string = puppet_strdup(yytext + 1); return VARIABLE; }
 "$""::"?({WORD}+"::")*{WORD}+ { yylval.string = puppet_strdup(yytext + 1); return VARIABLE; }
