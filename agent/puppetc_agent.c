@@ -33,9 +33,9 @@ typedef struct {
 
 /* Agent configuration */
 typedef struct {
-    char *server_url;
+    const char *server_url;
     char *certname;
-    char *environment;
+    const char *environment;
     bool verbose;
     bool noop;           /* No-op mode - don't apply changes */
     bool apply_catalog;  /* Actually apply resources */

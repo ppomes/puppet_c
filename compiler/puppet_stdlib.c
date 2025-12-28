@@ -2859,18 +2859,25 @@ puppet_value_t *puppet_func_sha1(puppet_expr_list_t *args, puppet_env_t *env) {
         return puppet_value_create_undef();
     }
 
-    unsigned char hash[SHA_DIGEST_LENGTH];
-    SHA1((const unsigned char *)str_val->data.string.data,
-         str_val->data.string.len, hash);
+    /* Use EVP API (OpenSSL 3.0+ compatible) */
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hash_len = 0;
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (ctx) {
+        EVP_DigestInit_ex(ctx, EVP_sha1(), NULL);
+        EVP_DigestUpdate(ctx, str_val->data.string.data, str_val->data.string.len);
+        EVP_DigestFinal_ex(ctx, hash, &hash_len);
+        EVP_MD_CTX_free(ctx);
+    }
 
     /* Convert to hex string */
-    char hex_str[SHA_DIGEST_LENGTH * 2 + 1];
-    for (int i = 0; i < SHA_DIGEST_LENGTH; i++) {
+    char hex_str[EVP_MAX_MD_SIZE * 2 + 1];
+    for (unsigned int i = 0; i < hash_len; i++) {
         snprintf(hex_str + i * 2, 3, "%02x", hash[i]);
     }
 
     puppet_value_destroy(str_val);
-    return puppet_value_create_string(hex_str, SHA_DIGEST_LENGTH * 2);
+    return puppet_value_create_string(hex_str, hash_len * 2);
 }
 
 /**
@@ -2896,18 +2903,25 @@ puppet_value_t *puppet_func_md5(puppet_expr_list_t *args, puppet_env_t *env) {
         return puppet_value_create_undef();
     }
 
-    unsigned char hash[MD5_DIGEST_LENGTH];
-    MD5((const unsigned char *)str_val->data.string.data,
-        str_val->data.string.len, hash);
+    /* Use EVP API (OpenSSL 3.0+ compatible) */
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hash_len = 0;
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (ctx) {
+        EVP_DigestInit_ex(ctx, EVP_md5(), NULL);
+        EVP_DigestUpdate(ctx, str_val->data.string.data, str_val->data.string.len);
+        EVP_DigestFinal_ex(ctx, hash, &hash_len);
+        EVP_MD_CTX_free(ctx);
+    }
 
     /* Convert to hex string */
-    char hex_str[MD5_DIGEST_LENGTH * 2 + 1];
-    for (int i = 0; i < MD5_DIGEST_LENGTH; i++) {
+    char hex_str[EVP_MAX_MD_SIZE * 2 + 1];
+    for (unsigned int i = 0; i < hash_len; i++) {
         snprintf(hex_str + i * 2, 3, "%02x", hash[i]);
     }
 
     puppet_value_destroy(str_val);
-    return puppet_value_create_string(hex_str, MD5_DIGEST_LENGTH * 2);
+    return puppet_value_create_string(hex_str, hash_len * 2);
 }
 
 /**

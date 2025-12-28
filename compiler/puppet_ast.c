@@ -322,7 +322,17 @@ void puppet_expr_destroy(puppet_expr_t *expr) {
             puppet_expr_destroy(expr->data.conditional.then_expr);
             puppet_expr_destroy(expr->data.conditional.else_expr);
             break;
-            
+
+        case PUPPET_EXPR_SELECTOR:
+            puppet_expr_destroy(expr->data.selector.control);
+            for (size_t i = 0; i < expr->data.selector.case_count; i++) {
+                puppet_expr_destroy(expr->data.selector.cases[i].match);
+                puppet_expr_destroy(expr->data.selector.cases[i].value);
+            }
+            puppet_free(expr->data.selector.cases);
+            puppet_expr_destroy(expr->data.selector.default_value);
+            break;
+
         case PUPPET_EXPR_LAMBDA:
             if (expr->data.lambda) {
                 for (size_t i = 0; i < expr->data.lambda->params.count; i++) {
@@ -545,8 +555,12 @@ void puppet_stmt_destroy(puppet_stmt_t *stmt) {
         case PUPPET_STMT_IMPORT:
             puppet_string_free(stmt->data.import_pattern);
             break;
+
+        case PUPPET_STMT_EXPRESSION:
+            puppet_expr_destroy(stmt->data.expr);
+            break;
     }
-    
+
     puppet_free(stmt);
 }
 

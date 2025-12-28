@@ -53,6 +53,7 @@ static int systemd_stop(const char *service, bool verbose) {
     return exec_command(cmd, verbose);
 }
 
+static int systemd_restart(const char *service, bool verbose) __attribute__((unused));
 static int systemd_restart(const char *service, bool verbose) {
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "systemctl restart '%s' 2>&1", service);

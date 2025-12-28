@@ -77,6 +77,7 @@ facter_value_t *facter_value_boolean(bool val) {
     return v;
 }
 
+static facter_value_t *facter_value_float(double val) __attribute__((unused));
 static facter_value_t *facter_value_float(double val) {
     facter_value_t *v = puppet_calloc(1, sizeof(facter_value_t));
     if (!v) return NULL;
