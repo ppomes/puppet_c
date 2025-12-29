@@ -217,7 +217,8 @@ NON_WORD    [^a-zA-Z0-9_]
     exit(1); 
 }
 
-"/"[^/\n\* \t]([^/\n]*[^/\n\\])?"/"{NON_WORD} {
+"/"[^/\n\* \t]([^/\n\\]|\\.)*"/"{NON_WORD} {
+    /* Regex pattern - handles escaped slashes like \/ */
     yyless(yyleng - 1);
     char *tmp = puppet_malloc(yyleng - 1);
     memcpy(tmp, yytext + 1, yyleng - 2);
