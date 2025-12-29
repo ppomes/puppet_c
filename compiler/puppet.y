@@ -128,8 +128,8 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 %}
 
 %glr-parser
-%expect 11
-%expect-rr 6
+%expect 13
+%expect-rr 7
 
 %union {
     char *string;
@@ -171,7 +171,7 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
     } selector_cases;
 }
 
-%token <string> NAME CLASSREF TYPE_NAME VARIABLE
+%token <string> NAME CLASSREF VARIABLE
 %token <string> STRING_LITERAL DQSTRING_LITERAL REGEX
 %token <number> NUMBER
 %token <boolean> BOOLEAN
@@ -216,7 +216,7 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 %type <stmt> class_definition class_instantiation define_definition node_definition
 %type <stmt> if_statement unless_statement case_statement
 %type <stmt> assignment_statement append_statement
-%type <stmt> function_statement resource_chain
+%type <stmt> function_statement resource_chain chain_element
 %type <stmt> include_statement require_statement contain_statement
 
 %type <expr_list> expression_list expression_list_opt
@@ -246,6 +246,7 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 %type <string> class_parent_opt
 %type <string> qualified_name
 %type <string> qualified_classref
+%type <string> bare_word
 /* comparison_op and arithmetic_op removed - inlined for precedence */
 %type <unop> unary_op
 
@@ -261,6 +262,14 @@ program:
 
 qualified_name:
     NAME { $$ = $1; }
+    | COLONCOLON NAME {
+        /* Absolute qualified name starting with :: */
+        size_t len = strlen($2);
+        $$ = puppet_malloc(2 + len + 1);
+        strcpy($$, "::");
+        strcat($$, $2);
+        puppet_free($2);
+    }
     | qualified_name COLONCOLON NAME {
         size_t len1 = strlen($1);
         size_t len3 = strlen($3);
@@ -319,20 +328,20 @@ statement:
     ;
 
 resource_declaration:
-    resource_type resource_body {
+    resource_type resource_body %dprec 1 {
         $$ = puppet_stmt_create_resource(*$2);
         $$->data.resource.type = puppet_string_create($1);
         puppet_free($1);
         puppet_free($2);
     }
-    | '@' resource_type resource_body {
+    | '@' resource_type resource_body %dprec 1 {
         $$ = puppet_stmt_create_resource(*$3);
         $$->data.resource.type = puppet_string_create($2);
         $$->data.resource.style = PUPPET_RES_VIRTUAL;
         puppet_free($2);
         puppet_free($3);
     }
-    | AT2 resource_type resource_body {
+    | AT2 resource_type resource_body %dprec 1 {
         $$ = puppet_stmt_create_resource(*$3);
         $$->data.resource.type = puppet_string_create($2);
         $$->data.resource.style = PUPPET_RES_EXPORTED;
@@ -478,7 +487,7 @@ attribute:
     ;
 
 resource_default:
-    TYPE_NAME '{' attribute_list '}' {
+    CLASSREF '{' attribute_list '}' {
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
         $$->type = PUPPET_STMT_RESOURCE_DEFAULT;
         $$->data.resource_default.type = puppet_string_create($1);
@@ -552,7 +561,7 @@ class_instantiation:
 
 class_parent_opt:
     /* empty */ { $$ = NULL; }
-    | INHERITS NAME { $$ = $2; }
+    | INHERITS qualified_name { $$ = $2; }
     ;
 
 parameter_list_opt:
@@ -831,20 +840,48 @@ function_statement:
     ;
 
 resource_chain:
-    statement ARROW statement {
+    chain_element ARROW chain_element {
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
         $$->type = PUPPET_STMT_RESOURCE_CHAIN;
         $$->data.chain.left = $1;
         $$->data.chain.right = $3;
         $$->data.chain.type = CHAIN_BEFORE;
     }
-    | statement NOTIFY statement {
+    | chain_element NOTIFY chain_element {
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
         $$->type = PUPPET_STMT_RESOURCE_CHAIN;
         $$->data.chain.left = $1;
         $$->data.chain.right = $3;
         $$->data.chain.type = CHAIN_NOTIFY;
     }
+    | resource_chain ARROW chain_element {
+        /* Support chaining: A -> B -> C */
+        puppet_stmt_t *chain = puppet_calloc(1, sizeof(puppet_stmt_t));
+        chain->type = PUPPET_STMT_RESOURCE_CHAIN;
+        chain->data.chain.left = $1;
+        chain->data.chain.right = $3;
+        chain->data.chain.type = CHAIN_BEFORE;
+        $$ = chain;
+    }
+    | resource_chain NOTIFY chain_element {
+        /* Support chaining: A ~> B ~> C */
+        puppet_stmt_t *chain = puppet_calloc(1, sizeof(puppet_stmt_t));
+        chain->type = PUPPET_STMT_RESOURCE_CHAIN;
+        chain->data.chain.left = $1;
+        chain->data.chain.right = $3;
+        chain->data.chain.type = CHAIN_NOTIFY;
+        $$ = chain;
+    }
+    ;
+
+/* Elements that can participate in resource ordering chains */
+chain_element:
+    resource_reference {
+        $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
+        $$->type = PUPPET_STMT_EXPRESSION;
+        $$->data.expr = $1;
+    }
+    | resource_declaration { $$ = $1; }
     ;
 
 include_statement:
@@ -926,16 +963,18 @@ value:
     BOOLEAN { $$ = puppet_value_create_bool($1); }
     | NUMBER { $$ = puppet_value_create_number($1); }
     | STRING_LITERAL { $$ = puppet_value_create_string($1, strlen($1)); puppet_free($1); }
-    | NAME { $$ = puppet_value_create_string($1, strlen($1)); puppet_free($1); }
+    | qualified_name %dprec 1 { $$ = puppet_value_create_string($1, strlen($1)); puppet_free($1); }
     | UNDEF { $$ = puppet_value_create_undef(); }
     | array_value { $$ = $1; }
     | hash_value { $$ = $1; }
-    | REGEX { 
+    | REGEX {
         $$ = puppet_calloc(1, sizeof(puppet_value_t));
         $$->type = PUPPET_VALUE_REGEXP;
         $$->data.regexp = puppet_string_create($1);
         puppet_free($1);
     }
+    /* Keywords that can be used as barewords in expressions */
+    | TAG { $$ = puppet_value_create_string("tag", 3); }
     ;
 
 array_value:
@@ -1017,6 +1056,27 @@ hash_pair:
         $$->key = $1;
         $$->value = $3;
     }
+    | bare_word FARROW expression %dprec 2 {
+        /* Allow keywords as hash keys */
+        $$ = puppet_calloc(1, sizeof(puppet_hash_pair_t));
+        $$->key = puppet_expr_create_value(puppet_value_create_string($1, strlen($1)));
+        $$->value = $3;
+        puppet_free($1);
+    }
+    ;
+
+/* Keywords that can be used as bare words (hash keys) */
+bare_word:
+    REQUIRE_KEYWORD { $$ = puppet_strdup("require"); }
+    | TAG { $$ = puppet_strdup("tag"); }
+    | SUBSCRIBE { $$ = puppet_strdup("subscribe"); }
+    | NOTIFY_KEYWORD { $$ = puppet_strdup("notify"); }
+    | BEFORE_KEYWORD { $$ = puppet_strdup("before"); }
+    | SCHEDULE { $$ = puppet_strdup("schedule"); }
+    | STAGE { $$ = puppet_strdup("stage"); }
+    | INCLUDE { $$ = puppet_strdup("include"); }
+    | UNLESS { $$ = puppet_strdup("unless"); }
+    | DEFAULT { $$ = puppet_strdup("default"); }
     ;
 
 variable_expression:
@@ -1024,7 +1084,7 @@ variable_expression:
     ;
 
 funcall_expression:
-    NAME '(' funcall_args ')' {
+    qualified_name '(' funcall_args ')' %dprec 2 {
         $$ = puppet_calloc(1, sizeof(puppet_expr_t));
         $$->type = PUPPET_EXPR_FUNCALL;
         $$->data.funcall.name = puppet_string_create($1);
@@ -1035,7 +1095,7 @@ funcall_expression:
         $$->data.funcall.lambda = NULL;
         puppet_free($1);
     }
-    | NAME '(' funcall_args ')' lambda_expression {
+    | qualified_name '(' funcall_args ')' lambda_expression %dprec 2 {
         $$ = puppet_calloc(1, sizeof(puppet_expr_t));
         $$->type = PUPPET_EXPR_FUNCALL;
         $$->data.funcall.name = puppet_string_create($1);
@@ -1048,7 +1108,7 @@ funcall_expression:
         puppet_free($5);
         puppet_free($1);
     }
-    | NAME '(' ')' lambda_expression {
+    | qualified_name '(' ')' lambda_expression %dprec 2 {
         $$ = puppet_calloc(1, sizeof(puppet_expr_t));
         $$->type = PUPPET_EXPR_FUNCALL;
         $$->data.funcall.name = puppet_string_create($1);
@@ -1310,34 +1370,11 @@ qualified_classref:
     ;
 
 resource_reference:
-    TYPE_NAME '[' expression ']' %dprec 2 {
+    qualified_classref '[' expression ']' %dprec 2 {
         $$ = puppet_calloc(1, sizeof(puppet_expr_t));
         $$->type = PUPPET_EXPR_RESOURCE_REF;
         $$->data.resource_ref.type = puppet_string_create($1);
         $$->data.resource_ref.title = $3;
-        puppet_free($1);
-    }
-    | qualified_classref '[' expression ']' %dprec 2 {
-        $$ = puppet_calloc(1, sizeof(puppet_expr_t));
-        $$->type = PUPPET_EXPR_RESOURCE_REF;
-        $$->data.resource_ref.type = puppet_string_create($1);
-        $$->data.resource_ref.title = $3;
-        puppet_free($1);
-    }
-    | TYPE_NAME '[' expression ',' expression_list ']' %dprec 1 {
-        /* Resource reference with multiple titles: Package['foo','bar'] */
-        /* For now, just use the first expression as the title */
-        /* Full support would require interpreter changes to handle array of refs */
-        $$ = puppet_calloc(1, sizeof(puppet_expr_t));
-        $$->type = PUPPET_EXPR_RESOURCE_REF;
-        $$->data.resource_ref.type = puppet_string_create($1);
-        $$->data.resource_ref.title = $3;
-        /* Free unused expressions */
-        for (size_t i = 0; i < $5->count; i++) {
-            puppet_expr_destroy($5->exprs[i]);
-        }
-        puppet_free($5->exprs);
-        puppet_free($5);
         puppet_free($1);
     }
     | qualified_classref '[' expression ',' expression_list ']' %dprec 1 {
