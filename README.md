@@ -142,7 +142,7 @@ curl http://localhost:8140/pdb/query/v4/catalogs/node1.example.com
 - ERB templates (via embedded Ruby)
 - Hiera lookups (YAML backend)
 - Module autoloading
-- Virtual resources (`@resource`), `realize()`, and collectors (`<| |>`)
+- Virtual resources (`@resource`), `realize()`, collectors (`<| |>`), and exported collectors (`<<| |>>`)
 - Iterator functions: `each()`, `map()`, `filter()`, `reduce()`
 - PuppetDB (SQLite): stores facts and catalogs, query API
 - Many stdlib functions (see below)
@@ -158,12 +158,13 @@ curl http://localhost:8140/pdb/query/v4/catalogs/node1.example.com
   class { "apache": }
   ```
 - **Lambda expressions**: Lambda blocks (`|$x| { ... }`) are parsed but statement-to-expression conversion is incomplete
-- **Parameterized types**: Type parameters like `Array[String]` or `Optional[Integer]` are not yet implemented
+- **Type matching**: The `=~ Type` syntax (e.g., `$var =~ String`) is not yet supported
+- **Method-style calls**: Chained method calls with lambdas like `$array.each |$x| { }` are not yet supported
+- **Function calls without parentheses**: Statements like `fail "message"` require parentheses: `fail("message")`
 
 ### Feature Limitations
 
 - **Exported resources**: The `@@resource` syntax for exported resources is not supported
-- **Exported collectors**: The `<<| |>>` collector syntax for exported resources is not implemented (virtual collectors `<| |>` work)
 - **Resource relationships**: Chaining arrows (`->`, `~>`) have limited support
 - **Incomplete stdlib coverage**: Many stdlib functions are implemented but not all
 
