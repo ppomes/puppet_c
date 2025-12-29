@@ -514,7 +514,17 @@ void puppet_stmt_destroy(puppet_stmt_t *stmt) {
             puppet_expr_destroy(stmt->data.case_stmt.expr);
             for (size_t i = 0; i < stmt->data.case_stmt.when_count; i++) {
                 puppet_expr_destroy(stmt->data.case_stmt.whens[i].test);
-                puppet_stmt_list_destroy(&stmt->data.case_stmt.whens[i].body);
+                /* Check if this body was already freed (shared bodies from multi-value cases) */
+                bool already_freed = false;
+                for (size_t j = 0; j < i; j++) {
+                    if (stmt->data.case_stmt.whens[j].body.stmts == stmt->data.case_stmt.whens[i].body.stmts) {
+                        already_freed = true;
+                        break;
+                    }
+                }
+                if (!already_freed) {
+                    puppet_stmt_list_destroy(&stmt->data.case_stmt.whens[i].body);
+                }
             }
             puppet_free(stmt->data.case_stmt.whens);
             if (stmt->data.case_stmt.default_body) {

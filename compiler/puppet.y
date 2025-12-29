@@ -815,6 +815,49 @@ case_when_list:
         }
         $$.default_body = $1.default_body;
     }
+    | case_when_list expression ',' expression_list ':' '{' statement_list '}' {
+        /* Multiple case values: val1, val2, val3: { ... } - expand to separate entries */
+        /* All values point to the same body - only first owns it for cleanup */
+        size_t new_count = 1 + $4->count;
+        $$.whens = puppet_realloc($1.whens, ($1.count + new_count) * sizeof(puppet_case_when_t));
+
+        /* First value owns the body */
+        $$.whens[$1.count].test = $2;
+        $$.whens[$1.count].body = *$7;
+
+        /* Remaining values share the same body (cleanup handles duplicates) */
+        for (size_t i = 0; i < $4->count; i++) {
+            $$.whens[$1.count + 1 + i].test = $4->exprs[i];
+            $$.whens[$1.count + 1 + i].body = *$7;  /* Same body pointer */
+        }
+
+        $$.count = $1.count + new_count;
+        $$.default_body = $1.default_body;
+        puppet_free($4->exprs);
+        puppet_free($4);
+        puppet_free($7);
+    }
+    | expression ',' expression_list ':' '{' statement_list '}' {
+        /* Multiple case values as first entry */
+        size_t new_count = 1 + $3->count;
+        $$.whens = puppet_calloc(new_count, sizeof(puppet_case_when_t));
+
+        /* First value owns the body */
+        $$.whens[0].test = $1;
+        $$.whens[0].body = *$6;
+
+        /* Remaining values share the same body (cleanup handles duplicates) */
+        for (size_t i = 0; i < $3->count; i++) {
+            $$.whens[1 + i].test = $3->exprs[i];
+            $$.whens[1 + i].body = *$6;  /* Same body pointer */
+        }
+
+        $$.count = new_count;
+        $$.default_body = NULL;
+        puppet_free($3->exprs);
+        puppet_free($3);
+        puppet_free($6);
+    }
     | case_when_list DEFAULT ':' '{' statement_list '}' {
         $$ = $1;
         $$.default_body = puppet_calloc(1, sizeof(puppet_stmt_list_t));
@@ -837,20 +880,6 @@ case_when:
         $$->test = $1;
         $$->body = *$4;
         puppet_free($4);
-    }
-    | expression ',' expression_list ':' '{' statement_list '}' {
-        /* Multiple case values: val1, val2, val3: { ... } */
-        /* Use first value for now - interpreter can handle multiple later */
-        $$ = puppet_calloc(1, sizeof(puppet_case_when_t));
-        $$->test = $1;
-        $$->body = *$6;
-        /* Free other expressions */
-        for (size_t i = 0; i < $3->count; i++) {
-            puppet_expr_destroy($3->exprs[i]);
-        }
-        puppet_free($3->exprs);
-        puppet_free($3);
-        puppet_free($6);
     }
     ;
 
