@@ -93,6 +93,8 @@ NON_WORD    [^a-zA-Z0-9_]
 "!="                    { return NE; }
 "<|"                    { return LCOLLECT; }
 "|>"                    { return RCOLLECT; }
+"<<|"                   { return LLCOLLECT; }
+"|>>"                   { return RRCOLLECT; }
 "<"                     { return '<'; }
 "<="                    { return LE; }
 ">"                     { return '>'; }
@@ -131,6 +133,7 @@ NON_WORD    [^a-zA-Z0-9_]
 "default"               { return DEFAULT; }
 
 "class"                 { return CLASS; }
+"type"                  { return TYPE; }
 "define"                { return DEFINE; }
 "node"                  { return NODE; }
 "inherits"              { return INHERITS; }

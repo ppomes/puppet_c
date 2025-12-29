@@ -128,7 +128,7 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 %}
 
 %glr-parser
-%expect 13
+%expect 14
 %expect-rr 7
 
 %union {
@@ -178,14 +178,14 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 %token UNDEF
 
 %token IF ELSIF ELSE UNLESS CASE DEFAULT
-%token CLASS DEFINE NODE INHERITS
+%token CLASS TYPE DEFINE NODE INHERITS
 %token INCLUDE REQUIRE_KEYWORD CONTAIN TAG IMPORT
 %token ATTR AUDIT BEFORE_KEYWORD NOOP NOTIFY_KEYWORD SCHEDULE STAGE SUBSCRIBE
 
 %token ARROW NOTIFY BEFORE REQUIRE FARROW PARROW
 %token APPEND EQ NE LE GE MATCH NOT_MATCH IN LSHIFT RSHIFT
 %token AND OR NOT
-%token AT2 LCOLLECT RCOLLECT COLONCOLON
+%token AT2 LCOLLECT RCOLLECT LLCOLLECT RRCOLLECT COLONCOLON
 %token DQSTRING_INTERP_START
 
 %nonassoc TERNARY
@@ -213,7 +213,7 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 
 %type <stmt> statement resource_declaration
 %type <stmt> resource_default resource_override resource_collector
-%type <stmt> class_definition class_instantiation define_definition node_definition
+%type <stmt> class_definition class_instantiation define_definition node_definition type_alias
 %type <stmt> if_statement unless_statement case_statement
 %type <stmt> assignment_statement append_statement
 %type <stmt> function_statement resource_chain chain_element
@@ -315,6 +315,7 @@ statement:
     | class_instantiation
     | define_definition
     | node_definition
+    | type_alias
     | if_statement
     | unless_statement
     | case_statement
@@ -484,6 +485,11 @@ attribute:
         $$->name = puppet_string_create("include");
         $$->value = $3;
     }
+    | TYPE FARROW expression {
+        $$ = puppet_calloc(1, sizeof(puppet_attribute_t));
+        $$->name = puppet_string_create("type");
+        $$->value = $3;
+    }
     ;
 
 resource_default:
@@ -504,7 +510,7 @@ resource_override:
     ;
 
 resource_collector:
-    CLASSREF LCOLLECT expression RCOLLECT {
+    qualified_classref LCOLLECT expression RCOLLECT {
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
         $$->type = PUPPET_STMT_RESOURCE_COLLECTOR;
         $$->data.collector.style = PUPPET_RES_NORMAL;
@@ -512,10 +518,28 @@ resource_collector:
         $$->data.collector.search_expr = $3;
         puppet_free($1);
     }
-    | CLASSREF LCOLLECT RCOLLECT {
+    | qualified_classref LCOLLECT RCOLLECT {
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
         $$->type = PUPPET_STMT_RESOURCE_COLLECTOR;
         $$->data.collector.style = PUPPET_RES_NORMAL;
+        $$->data.collector.type = puppet_string_create($1);
+        $$->data.collector.search_expr = NULL;
+        puppet_free($1);
+    }
+    | qualified_classref LLCOLLECT expression RRCOLLECT {
+        /* Exported resource collector: Type<<| expr |>> */
+        $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
+        $$->type = PUPPET_STMT_RESOURCE_COLLECTOR;
+        $$->data.collector.style = PUPPET_RES_EXPORTED;
+        $$->data.collector.type = puppet_string_create($1);
+        $$->data.collector.search_expr = $3;
+        puppet_free($1);
+    }
+    | qualified_classref LLCOLLECT RRCOLLECT {
+        /* Exported resource collector without query: Type<<| |>> */
+        $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
+        $$->type = PUPPET_STMT_RESOURCE_COLLECTOR;
+        $$->data.collector.style = PUPPET_RES_EXPORTED;
         $$->data.collector.type = puppet_string_create($1);
         $$->data.collector.search_expr = NULL;
         puppet_free($1);
@@ -633,6 +657,16 @@ define_definition:
         $$->data.define.body = *$5;
         puppet_free($2);
         puppet_free($5);
+    }
+    ;
+
+type_alias:
+    TYPE qualified_classref '=' type_expression {
+        /* Type alias: type Stdlib::Absolutepath = Variant[...] */
+        $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
+        $$->type = PUPPET_STMT_TYPE_ALIAS;
+        puppet_free($2);
+        puppet_expr_destroy($4);
     }
     ;
 
@@ -1077,6 +1111,7 @@ bare_word:
     | INCLUDE { $$ = puppet_strdup("include"); }
     | UNLESS { $$ = puppet_strdup("unless"); }
     | DEFAULT { $$ = puppet_strdup("default"); }
+    | TYPE { $$ = puppet_strdup("type"); }
     ;
 
 variable_expression:
@@ -1394,8 +1429,8 @@ resource_reference:
     ;
 
 type_expression:
-    CLASSREF { $$ = puppet_expr_create_variable($1); puppet_free($1); }
-    | CLASSREF '[' type_params ']' {
+    qualified_classref { $$ = puppet_expr_create_variable($1); puppet_free($1); }
+    | qualified_classref '[' type_params ']' {
         /* Parameterized types like Array[String], Hash[String, Integer] */
         $$ = puppet_expr_create_variable($1);
         puppet_free($1);
@@ -1404,20 +1439,28 @@ type_expression:
 
 /* Type parameters inside parameterized types - accepts types not expressions */
 type_params:
-    CLASSREF {
-        /* Single type parameter like Array[String] */
+    qualified_classref {
+        /* Single type parameter like Array[String] or Stdlib::Unixpath */
         puppet_free($1);
     }
-    | CLASSREF '[' type_params ']' {
+    | qualified_classref '[' type_params ']' {
         /* Nested parameterized type like Array[Optional[String]] */
         puppet_free($1);
     }
-    | type_params ',' CLASSREF {
+    | type_params ',' qualified_classref {
         /* Multiple type parameters like Hash[String, Integer] */
         puppet_free($3);
     }
-    | type_params ',' CLASSREF '[' type_params ']' {
+    | type_params ',' qualified_classref '[' type_params ']' {
         /* Multiple type params with nested: Hash[String, Array[Integer]] */
+        puppet_free($3);
+    }
+    | REGEX {
+        /* Regex parameter for Pattern[/regex/] */
+        puppet_free($1);
+    }
+    | type_params ',' REGEX {
+        /* Multiple with regex: Pattern[/a/, /b/] */
         puppet_free($3);
     }
     ;
