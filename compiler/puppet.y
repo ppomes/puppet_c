@@ -129,7 +129,7 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 
 %glr-parser
 %expect 14
-%expect-rr 7
+%expect-rr 8
 
 %union {
     char *string;
@@ -288,6 +288,14 @@ qualified_name:
         strcat($$, "::node");
         puppet_free($1);
     }
+    | qualified_name COLONCOLON DEFAULT {
+        /* Allow 'default' as a component in qualified names like nagios::service::default */
+        size_t len1 = strlen($1);
+        $$ = puppet_malloc(len1 + 2 + 7 + 1);  /* "::default" = 9 chars */
+        strcpy($$, $1);
+        strcat($$, "::default");
+        puppet_free($1);
+    }
     ;
 
 statement_list:
@@ -356,6 +364,7 @@ resource_type:
     | CLASSREF { $$ = $1; }
     | CLASS %dprec 1 { $$ = puppet_strdup("class"); }
     | NOTIFY_KEYWORD { $$ = puppet_strdup("notify"); }
+    | STAGE { $$ = puppet_strdup("stage"); }
     ;
 
 resource_body:
@@ -519,6 +528,24 @@ resource_collector:
         puppet_free($1);
     }
     | qualified_classref LCOLLECT RCOLLECT {
+        $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
+        $$->type = PUPPET_STMT_RESOURCE_COLLECTOR;
+        $$->data.collector.style = PUPPET_RES_NORMAL;
+        $$->data.collector.type = puppet_string_create($1);
+        $$->data.collector.search_expr = NULL;
+        puppet_free($1);
+    }
+    | qualified_classref LCOLLECT expression RCOLLECT '{' attribute_list '}' {
+        /* Collector with override: Type <| query |> { attr => val } */
+        $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
+        $$->type = PUPPET_STMT_RESOURCE_COLLECTOR;
+        $$->data.collector.style = PUPPET_RES_NORMAL;
+        $$->data.collector.type = puppet_string_create($1);
+        $$->data.collector.search_expr = $3;
+        puppet_free($1);
+    }
+    | qualified_classref LCOLLECT RCOLLECT '{' attribute_list '}' {
+        /* Collector with override, no query: Type <| |> { attr => val } */
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
         $$->type = PUPPET_STMT_RESOURCE_COLLECTOR;
         $$->data.collector.style = PUPPET_RES_NORMAL;
@@ -794,6 +821,14 @@ case_when_list:
         *$$.default_body = *$5;
         puppet_free($5);
     }
+    | DEFAULT ':' '{' statement_list '}' {
+        /* default as only case */
+        $$.whens = NULL;
+        $$.count = 0;
+        $$.default_body = puppet_calloc(1, sizeof(puppet_stmt_list_t));
+        *$$.default_body = *$4;
+        puppet_free($4);
+    }
     ;
 
 case_when:
@@ -802,6 +837,20 @@ case_when:
         $$->test = $1;
         $$->body = *$4;
         puppet_free($4);
+    }
+    | expression ',' expression_list ':' '{' statement_list '}' {
+        /* Multiple case values: val1, val2, val3: { ... } */
+        /* Use first value for now - interpreter can handle multiple later */
+        $$ = puppet_calloc(1, sizeof(puppet_case_when_t));
+        $$->test = $1;
+        $$->body = *$6;
+        /* Free other expressions */
+        for (size_t i = 0; i < $3->count; i++) {
+            puppet_expr_destroy($3->exprs[i]);
+        }
+        puppet_free($3->exprs);
+        puppet_free($3);
+        puppet_free($6);
     }
     ;
 
@@ -920,6 +969,28 @@ chain_element:
 
 include_statement:
     INCLUDE qualified_name {
+        $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
+        $$->type = PUPPET_STMT_INCLUDE;
+        $$->data.names.exprs = puppet_calloc(1, sizeof(puppet_expr_t*));
+        $$->data.names.exprs[0] = puppet_calloc(1, sizeof(puppet_expr_t));
+        $$->data.names.exprs[0]->type = PUPPET_EXPR_VALUE;
+        $$->data.names.exprs[0]->data.value = puppet_value_create_string($2, strlen($2));
+        $$->data.names.count = 1;
+        puppet_free($2);
+    }
+    | INCLUDE STRING_LITERAL {
+        /* include 'classname' */
+        $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
+        $$->type = PUPPET_STMT_INCLUDE;
+        $$->data.names.exprs = puppet_calloc(1, sizeof(puppet_expr_t*));
+        $$->data.names.exprs[0] = puppet_calloc(1, sizeof(puppet_expr_t));
+        $$->data.names.exprs[0]->type = PUPPET_EXPR_VALUE;
+        $$->data.names.exprs[0]->data.value = puppet_value_create_string($2, strlen($2));
+        $$->data.names.count = 1;
+        puppet_free($2);
+    }
+    | INCLUDE DQSTRING_LITERAL {
+        /* include "classname" */
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
         $$->type = PUPPET_STMT_INCLUDE;
         $$->data.names.exprs = puppet_calloc(1, sizeof(puppet_expr_t*));
@@ -1349,6 +1420,12 @@ selector_match:
         puppet_free($1);
         $$ = puppet_expr_create_value(val);
     }
+    | NAME {
+        /* Bareword values like 'running', 'stopped' in selectors */
+        puppet_value_t *val = puppet_value_create_string($1, strlen($1));
+        $$ = puppet_expr_create_value(val);
+        puppet_free($1);
+    }
     ;
 
 selector_case:
@@ -1461,6 +1538,20 @@ type_params:
     }
     | type_params ',' REGEX {
         /* Multiple with regex: Pattern[/a/, /b/] */
+        puppet_free($3);
+    }
+    | NUMBER {
+        /* Numeric parameter for String[1] (min length) */
+    }
+    | type_params ',' NUMBER {
+        /* Multiple numeric params like String[1, 10] (min/max length) */
+    }
+    | STRING_LITERAL {
+        /* String parameter for Enum['value'] */
+        puppet_free($1);
+    }
+    | type_params ',' STRING_LITERAL {
+        /* Multiple string params: Enum['present', 'absent'] */
         puppet_free($3);
     }
     ;
