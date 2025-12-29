@@ -128,7 +128,7 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 %}
 
 %glr-parser
-%expect 68
+%expect 11
 %expect-rr 6
 
 %union {
@@ -245,7 +245,8 @@ static puppet_expr_t *puppet_create_interpolated_expr(const char *str) {
 
 %type <string> class_parent_opt
 %type <string> qualified_name
-%type <binop> comparison_op arithmetic_op logical_op
+%type <string> qualified_classref
+/* comparison_op and arithmetic_op removed - inlined for precedence */
 %type <unop> unary_op
 
 %%
@@ -269,6 +270,14 @@ qualified_name:
         strcat($$, $3);
         puppet_free($1);
         puppet_free($3);
+    }
+    | qualified_name COLONCOLON NODE {
+        /* Allow 'node' as a component in qualified names like rit_rancher::node */
+        size_t len1 = strlen($1);
+        $$ = puppet_malloc(len1 + 2 + 4 + 1);  /* "::node" = 6 chars */
+        strcpy($$, $1);
+        strcat($$, "::node");
+        puppet_free($1);
     }
     ;
 
@@ -360,7 +369,13 @@ resource_instance_list:
         $$ = $1;
     }
     | resource_instance_list ',' resource_instance {
-        $$ = $1;  // For now, just return the first one
+        $$ = $1;  /* Comma separated instances */
+    }
+    | resource_instance_list ';' resource_instance {
+        $$ = $1;  /* Semicolon separated instances (chained resources) */
+    }
+    | resource_instance_list ';' {
+        $$ = $1;  /* Trailing semicolon */
     }
     ;
 
@@ -474,7 +489,7 @@ resource_collector:
     ;
 
 class_definition:
-    CLASS NAME parameter_list_opt class_parent_opt '{' statement_list '}' {
+    CLASS qualified_name parameter_list_opt class_parent_opt '{' statement_list '}' {
         $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
         $$->type = PUPPET_STMT_CLASS_DEF;
         $$->data.class_def.name = puppet_string_create($2);
@@ -1056,44 +1071,63 @@ unary_op:
     ;
 
 binary_expression:
-    expression arithmetic_op expression {
-        $$ = puppet_expr_create_binop($2, $1, $3);
+    /* Arithmetic operators - inlined for proper precedence */
+    expression '+' expression %prec '+' {
+        $$ = puppet_expr_create_binop(PUPPET_OP_ADD, $1, $3);
     }
-    | expression comparison_op expression {
-        $$ = puppet_expr_create_binop($2, $1, $3);
+    | expression '-' expression %prec '-' {
+        $$ = puppet_expr_create_binop(PUPPET_OP_SUB, $1, $3);
     }
-    | expression logical_op expression {
-        $$ = puppet_expr_create_binop($2, $1, $3);
+    | expression '*' expression %prec '*' {
+        $$ = puppet_expr_create_binop(PUPPET_OP_MUL, $1, $3);
     }
-    | expression IN expression {
+    | expression '/' expression %prec '/' {
+        $$ = puppet_expr_create_binop(PUPPET_OP_DIV, $1, $3);
+    }
+    | expression '%' expression %prec '%' {
+        $$ = puppet_expr_create_binop(PUPPET_OP_MOD, $1, $3);
+    }
+    | expression LSHIFT expression %prec LSHIFT {
+        $$ = puppet_expr_create_binop(PUPPET_OP_LSHIFT, $1, $3);
+    }
+    | expression RSHIFT expression %prec RSHIFT {
+        $$ = puppet_expr_create_binop(PUPPET_OP_RSHIFT, $1, $3);
+    }
+    /* Comparison operators */
+    | expression '<' expression %prec '<' {
+        $$ = puppet_expr_create_binop(PUPPET_OP_LT, $1, $3);
+    }
+    | expression '>' expression %prec '>' {
+        $$ = puppet_expr_create_binop(PUPPET_OP_GT, $1, $3);
+    }
+    | expression LE expression %prec LE {
+        $$ = puppet_expr_create_binop(PUPPET_OP_LE, $1, $3);
+    }
+    | expression GE expression %prec GE {
+        $$ = puppet_expr_create_binop(PUPPET_OP_GE, $1, $3);
+    }
+    | expression EQ expression %prec EQ {
+        $$ = puppet_expr_create_binop(PUPPET_OP_EQ, $1, $3);
+    }
+    | expression NE expression %prec NE {
+        $$ = puppet_expr_create_binop(PUPPET_OP_NE, $1, $3);
+    }
+    | expression MATCH expression %prec MATCH {
+        $$ = puppet_expr_create_binop(PUPPET_OP_MATCH, $1, $3);
+    }
+    | expression NOT_MATCH expression %prec NOT_MATCH {
+        $$ = puppet_expr_create_binop(PUPPET_OP_NOT_MATCH, $1, $3);
+    }
+    /* Logical operators */
+    | expression AND expression %prec AND {
+        $$ = puppet_expr_create_binop(PUPPET_OP_AND, $1, $3);
+    }
+    | expression OR expression %prec OR {
+        $$ = puppet_expr_create_binop(PUPPET_OP_OR, $1, $3);
+    }
+    | expression IN expression %prec IN {
         $$ = puppet_expr_create_binop(PUPPET_OP_IN, $1, $3);
     }
-    ;
-
-arithmetic_op:
-    '+' { $$ = PUPPET_OP_ADD; }
-    | '-' { $$ = PUPPET_OP_SUB; }
-    | '*' { $$ = PUPPET_OP_MUL; }
-    | '/' { $$ = PUPPET_OP_DIV; }
-    | '%' { $$ = PUPPET_OP_MOD; }
-    | LSHIFT { $$ = PUPPET_OP_LSHIFT; }
-    | RSHIFT { $$ = PUPPET_OP_RSHIFT; }
-    ;
-
-comparison_op:
-    '<' { $$ = PUPPET_OP_LT; }
-    | '>' { $$ = PUPPET_OP_GT; }
-    | LE { $$ = PUPPET_OP_LE; }
-    | GE { $$ = PUPPET_OP_GE; }
-    | EQ { $$ = PUPPET_OP_EQ; }
-    | NE { $$ = PUPPET_OP_NE; }
-    | MATCH { $$ = PUPPET_OP_MATCH; }
-    | NOT_MATCH { $$ = PUPPET_OP_NOT_MATCH; }
-    ;
-
-logical_op:
-    AND { $$ = PUPPET_OP_AND; }
-    | OR { $$ = PUPPET_OP_OR; }
     ;
 
 conditional_expression:
@@ -1144,6 +1178,10 @@ selector_cases:
             $$.count = $1.count + 1;
             $$.default_value = $1.default_value;
         }
+    }
+    | selector_cases ',' {
+        /* Allow trailing comma */
+        $$ = $1;
     }
     ;
 
@@ -1219,29 +1257,94 @@ lambda_expression:
     }
     ;
 
+/* Qualified class reference for resource references like Rit_apache_ng::Module */
+qualified_classref:
+    CLASSREF { $$ = $1; }
+    | qualified_classref COLONCOLON CLASSREF {
+        size_t len1 = strlen($1);
+        size_t len3 = strlen($3);
+        $$ = puppet_malloc(len1 + 2 + len3 + 1);
+        strcpy($$, $1);
+        strcat($$, "::");
+        strcat($$, $3);
+        puppet_free($1);
+        puppet_free($3);
+    }
+    ;
+
 resource_reference:
-    TYPE_NAME '[' expression ']' {
+    TYPE_NAME '[' expression ']' %dprec 2 {
         $$ = puppet_calloc(1, sizeof(puppet_expr_t));
         $$->type = PUPPET_EXPR_RESOURCE_REF;
         $$->data.resource_ref.type = puppet_string_create($1);
         $$->data.resource_ref.title = $3;
         puppet_free($1);
     }
-    | CLASSREF '[' expression ']' {
+    | qualified_classref '[' expression ']' %dprec 2 {
         $$ = puppet_calloc(1, sizeof(puppet_expr_t));
         $$->type = PUPPET_EXPR_RESOURCE_REF;
         $$->data.resource_ref.type = puppet_string_create($1);
         $$->data.resource_ref.title = $3;
+        puppet_free($1);
+    }
+    | TYPE_NAME '[' expression ',' expression_list ']' %dprec 1 {
+        /* Resource reference with multiple titles: Package['foo','bar'] */
+        /* For now, just use the first expression as the title */
+        /* Full support would require interpreter changes to handle array of refs */
+        $$ = puppet_calloc(1, sizeof(puppet_expr_t));
+        $$->type = PUPPET_EXPR_RESOURCE_REF;
+        $$->data.resource_ref.type = puppet_string_create($1);
+        $$->data.resource_ref.title = $3;
+        /* Free unused expressions */
+        for (size_t i = 0; i < $5->count; i++) {
+            puppet_expr_destroy($5->exprs[i]);
+        }
+        puppet_free($5->exprs);
+        puppet_free($5);
+        puppet_free($1);
+    }
+    | qualified_classref '[' expression ',' expression_list ']' %dprec 1 {
+        /* Resource reference with multiple titles */
+        $$ = puppet_calloc(1, sizeof(puppet_expr_t));
+        $$->type = PUPPET_EXPR_RESOURCE_REF;
+        $$->data.resource_ref.type = puppet_string_create($1);
+        $$->data.resource_ref.title = $3;
+        /* Free unused expressions */
+        for (size_t i = 0; i < $5->count; i++) {
+            puppet_expr_destroy($5->exprs[i]);
+        }
+        puppet_free($5->exprs);
+        puppet_free($5);
         puppet_free($1);
     }
     ;
 
 type_expression:
-    TYPE_NAME { $$ = puppet_expr_create_variable($1); puppet_free($1); }
-    | TYPE_NAME '[' expression_list ']' {
-        /* TODO: Implement parameterized types */
-        $$ = puppet_expr_create_variable($1); 
+    CLASSREF { $$ = puppet_expr_create_variable($1); puppet_free($1); }
+    | CLASSREF '[' type_params ']' {
+        /* Parameterized types like Array[String], Hash[String, Integer] */
+        $$ = puppet_expr_create_variable($1);
         puppet_free($1);
+    }
+    ;
+
+/* Type parameters inside parameterized types - accepts types not expressions */
+type_params:
+    CLASSREF {
+        /* Single type parameter like Array[String] */
+        puppet_free($1);
+    }
+    | CLASSREF '[' type_params ']' {
+        /* Nested parameterized type like Array[Optional[String]] */
+        puppet_free($1);
+    }
+    | type_params ',' CLASSREF {
+        /* Multiple type parameters like Hash[String, Integer] */
+        puppet_free($3);
+    }
+    | type_params ',' CLASSREF '[' type_params ']' {
+        /* Multiple type params with nested: Hash[String, Array[Integer]] */
+        puppet_free($3);
     }
     ;
 
