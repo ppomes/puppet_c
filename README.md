@@ -138,7 +138,7 @@ curl http://localhost:8140/pdb/query/v4/catalogs/node1.example.com
 
 - Basic parsing of classes, resources, nodes, defines
 - Conditionals: if/elsif/else, unless, case, ternary, selector
-- Variable scoping and interpolation
+- Variable scoping and interpolation, multi-line strings
 - ERB templates (via embedded Ruby)
 - Hiera lookups (YAML backend)
 - Module autoloading
