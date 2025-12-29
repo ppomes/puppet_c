@@ -184,10 +184,7 @@ NON_WORD    [^a-zA-Z0-9_]
 <STRING>\\r             { string_buf_append_char('\r'); }
 <STRING>\\t             { string_buf_append_char('\t'); }
 <STRING>[^\\\'\n]+      { string_buf_append(yytext, yyleng); }
-<STRING>\n              { 
-    fprintf(stderr, "Unterminated string\n"); 
-    exit(1); 
-}
+<STRING>\n              { string_buf_append_char('\n'); }
 
 \"                      { string_buf_init(); BEGIN(DQSTRING); }
 <DQSTRING>\"            { 
@@ -212,10 +209,7 @@ NON_WORD    [^a-zA-Z0-9_]
 }
 <DQSTRING>"$"           { string_buf_append_char('$'); }
 <DQSTRING>[^\\\"\n$]+   { string_buf_append(yytext, yyleng); }
-<DQSTRING>\n            { 
-    fprintf(stderr, "Unterminated string\n"); 
-    exit(1); 
-}
+<DQSTRING>\n            { string_buf_append_char('\n'); }
 
 "/"[^/\n\* \t]([^/\n\\]|\\.)*"/"{NON_WORD} {
     /* Regex pattern - handles escaped slashes like \/ */
