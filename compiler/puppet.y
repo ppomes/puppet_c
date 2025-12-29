@@ -450,6 +450,31 @@ attribute:
         $$->name = puppet_string_create("unless");
         $$->value = $3;
     }
+    | TAG FARROW expression {
+        $$ = puppet_calloc(1, sizeof(puppet_attribute_t));
+        $$->name = puppet_string_create("tag");
+        $$->value = $3;
+    }
+    | SUBSCRIBE FARROW expression {
+        $$ = puppet_calloc(1, sizeof(puppet_attribute_t));
+        $$->name = puppet_string_create("subscribe");
+        $$->value = $3;
+    }
+    | SCHEDULE FARROW expression {
+        $$ = puppet_calloc(1, sizeof(puppet_attribute_t));
+        $$->name = puppet_string_create("schedule");
+        $$->value = $3;
+    }
+    | STAGE FARROW expression {
+        $$ = puppet_calloc(1, sizeof(puppet_attribute_t));
+        $$->name = puppet_string_create("stage");
+        $$->value = $3;
+    }
+    | INCLUDE FARROW expression {
+        $$ = puppet_calloc(1, sizeof(puppet_attribute_t));
+        $$->name = puppet_string_create("include");
+        $$->value = $3;
+    }
     ;
 
 resource_default:
@@ -833,6 +858,14 @@ include_statement:
         $$->data.names.count = 1;
         puppet_free($2);
     }
+    | INCLUDE '(' expression ')' {
+        /* Function-style include: include("classname") or include($var) */
+        $$ = puppet_calloc(1, sizeof(puppet_stmt_t));
+        $$->type = PUPPET_STMT_INCLUDE;
+        $$->data.names.exprs = puppet_calloc(1, sizeof(puppet_expr_t*));
+        $$->data.names.exprs[0] = $3;
+        $$->data.names.count = 1;
+    }
     ;
 
 require_statement:
@@ -971,6 +1004,10 @@ hash_pairs:
         $$->pairs = puppet_realloc($$->pairs, ($$->count + 1) * sizeof(puppet_hash_pair_t));
         $$->pairs[$$->count++] = *$3;
         puppet_free($3);
+    }
+    | hash_pairs ',' {
+        /* Allow trailing comma */
+        $$ = $1;
     }
     ;
 
@@ -1359,6 +1396,10 @@ expression_list:
         $$ = $1;
         $$->exprs = puppet_realloc($$->exprs, ($$->count + 1) * sizeof(puppet_expr_t *));
         $$->exprs[$$->count++] = $3;
+    }
+    | expression_list ',' {
+        /* Allow trailing comma */
+        $$ = $1;
     }
     ;
 
