@@ -106,22 +106,28 @@ case $unknown {
 }
 
 # =====================
-# Test ternary
+# Test selector expressions
 # =====================
-notice("=== Testing ternary ===")
+notice("=== Testing selector expressions ===")
 
-# Note: Comparisons in ternary conditions require parentheses
-$result1 = ($x > 5) ? 'big' : 'small'
-notice("(x > 5) ? 'big' : 'small' = ", $result1)
+# Selector with boolean condition
+$result1 = ($x > 5) ? {
+  true  => 'big',
+  false => 'small',
+}
+notice("(x > 5) selector = ", $result1)
 
-$result2 = $flag ? 'yes' : 'no'
-notice("flag ? 'yes' : 'no' = ", $result2)
+$result2 = $flag ? {
+  true  => 'yes',
+  false => 'no',
+}
+notice("flag selector = ", $result2)
 
-$result3 = $empty ? 'has value' : 'empty'
-notice("empty ? 'has value' : 'empty' = ", $result3)
-
-# Nested ternary
-$nested = ($x > 20) ? 'large' : (($x > 5) ? 'medium' : 'small')
-notice("nested ternary result = ", $nested)
+# Selector with default
+$result3 = $empty ? {
+  undef   => 'empty',
+  default => 'has value',
+}
+notice("empty selector = ", $result3)
 
 notice("=== All conditional tests completed! ===")

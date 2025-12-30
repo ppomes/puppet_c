@@ -1,0 +1,93 @@
+================================================================================
+resource definition basic class
+================================================================================
+class myclass{}
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (class_definition
+      (classname
+        (name))
+      (block))))
+
+================================================================================
+resource definition basic type
+================================================================================
+define myresource (){}
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (define_definition
+      (classname
+        (name))
+      (parameter_list)
+      (block))))
+
+================================================================================
+resource definition basic plan
+================================================================================
+plan foo::bar {}
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (plan_definition
+      (classname
+        (name))
+      (block))))
+
+================================================================================
+resource definition basic
+================================================================================
+class mypackage::myclass (){}
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (class_definition
+      (classname
+        (name))
+      (parameter_list)
+      (block))))
+
+================================================================================
+resource definition with inheritance
+================================================================================
+class myclass () inherits myclass::params { }
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (class_definition
+      (classname
+        (name))
+      (parameter_list)
+      (classname
+        (name))
+      (block))))
+
+================================================================================
+resource definition with parameters
+================================================================================
+class foo (
+  String $foo,
+  String $bar = 'asdf',
+){}
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (class_definition
+      (classname
+        (name))
+      (parameter_list
+        (parameter
+          (typed_parameter
+            (type)
+            (regular_parameter
+              (variable
+                (name)))))
+        (parameter
+          (typed_parameter
+            (type)
+            (regular_parameter
+              (variable
+                (name))
+              (single_quoted_string)))))
+        (block))))

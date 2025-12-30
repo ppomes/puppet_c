@@ -13,14 +13,14 @@ RUN apt-get update && apt-get install -y \
     autoconf \
     automake \
     libtool \
-    flex \
-    bison \
     gawk \
     pkg-config \
+    libtree-sitter-dev \
     libyaml-dev \
     libssl-dev \
     libmicrohttpd-dev \
     libcurl4-openssl-dev \
+    libsqlite3-dev \
     ruby-dev \
     debhelper \
     devscripts \
@@ -42,9 +42,11 @@ RUN mkdir -p /packages && mv /puppet-c*.deb /lib*.deb /packages/ 2>/dev/null || 
 FROM debian:bookworm-slim AS server
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    libtree-sitter0 \
     libyaml-0-2 \
     libssl3 \
     libmicrohttpd12 \
+    libsqlite3-0 \
     libruby3.1 \
     curl \
     && rm -rf /var/lib/apt/lists/*
@@ -76,6 +78,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4 \
     ca-certificates \
     cron \
+    bash \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install packages

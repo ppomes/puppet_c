@@ -1,13 +1,14 @@
 # Puppet-C
 
-A C implementation of a Puppet language parser and interpreter using flex/bison.
+A C implementation of a Puppet language parser and interpreter using tree-sitter.
 
 **Note**: This is an experimental project. It implements a subset of the Puppet language and is not a replacement for the real Puppet.
 
 ## Building
 
 Prerequisites:
-- GCC, flex, bison
+- GCC
+- libtree-sitter (tree-sitter runtime library)
 - Ruby development headers (for ERB templates)
 - libyaml (for Hiera)
 - libssl/openssl (for crypto functions)
@@ -152,26 +153,17 @@ curl http://localhost:8140/pdb/query/v4/catalogs/node1.example.com
 
 ### Parser Limitations
 
-- Class instantiation with single quotes may fail due to parser ambiguity:
-  ```puppet
-  # Use double quotes:
-  class { "apache": }
-  ```
-- **Lambda expressions**: Lambda blocks (`|$x| { ... }`) are parsed but statement-to-expression conversion is incomplete
-- **Type matching**: The `=~ Type` syntax (e.g., `$var =~ String`) is not yet supported
-- **Method-style calls**: Chained method calls with lambdas like `$array.each |$x| { }` are not yet supported
-- **Function calls without parentheses**: Statements like `fail "message"` require parentheses: `fail("message")`
+- **Type matching**: The `=~ Type` syntax (e.g., `$var =~ String`) is parsed but not yet evaluated
 
 ### Feature Limitations
 
-- **Exported resources**: The `@@resource` syntax for exported resources is not supported
+- **Exported resources**: The `@@resource` syntax is parsed but exported resources are not yet sent to PuppetDB for cross-node collection
 - **Resource relationships**: Chaining arrows (`->`, `~>`) have limited support
 - **Incomplete stdlib coverage**: Many stdlib functions are implemented but not all
 
 ### Runtime Limitations
 
 - **No pluginsync**: Custom facts and functions must be pre-installed
-- **Limited error messages**: Parse and runtime errors may not always point to exact location
 - **Single-threaded server**: The catalog server handles requests sequentially
 
 ## Implemented Functions
@@ -225,7 +217,7 @@ The agent supports the following resource types:
 │                      Libraries                              │
 ├─────────────────────┬───────────────────────────────────────┤
 │  libpuppetc         │  libfacter_c                          │
-│  - Parser/Lexer     │  - Native fact collection             │
+│  - Tree-sitter      │  - Native fact collection             │
 │  - AST              │  - JSON fact loading                  │
 │  - Interpreter      │  - System info (hostname, os, etc.)   │
 │  - Stdlib           │                                       │

@@ -4,7 +4,7 @@
  */
 
 #include "puppet_loader.h"
-#include "puppet.tab.h"
+#include "puppet_ts_parser.h"
 #include "puppet_memory.h"
 #include "puppet_interpreter.h"
 #include <stdio.h>
@@ -12,11 +12,6 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
-/* External symbols from parser */
-extern int yyparse(void);
-extern FILE *yyin;
-extern puppet_program_t *parsed_program;
 
 puppet_loader_t *puppet_loader_create(const char *base_path) {
     puppet_loader_t *loader = puppet_calloc(1, sizeof(puppet_loader_t));
@@ -175,36 +170,19 @@ puppet_program_t *puppet_loader_load_manifest(puppet_loader_t *loader,
                                               const char *file_path) {
     (void)loader; /* Currently unused */
     if (!file_path) return NULL;
-    
-    /* Open the file */
-    FILE *file = fopen(file_path, "r");
-    if (!file) {
-        fprintf(stderr, "Error: Cannot open file '%s'\n", file_path);
-        return NULL;
-    }
-    
-    /* Parse the file */
-    FILE *old_yyin = yyin;
-    yyin = file;
-    parsed_program = NULL;
-    
-    int result = yyparse();
-    
-    fclose(file);
-    yyin = old_yyin;
-    
-    if (result != 0) {
+
+    /* Parse the file with tree-sitter */
+    puppet_stmt_list_t *stmts = puppet_ts_parse_file(file_path);
+    if (!stmts) {
         fprintf(stderr, "Error: Failed to parse '%s'\n", file_path);
-        if (parsed_program) {
-            puppet_program_destroy(parsed_program);
-            parsed_program = NULL;
-        }
         return NULL;
     }
-    
-    puppet_program_t *program = parsed_program;
-    parsed_program = NULL;  /* Clear global to avoid double-free */
-    
+
+    /* Wrap in program structure */
+    puppet_program_t *program = puppet_calloc(1, sizeof(puppet_program_t));
+    program->statements = *stmts;
+    puppet_free(stmts);
+
     return program;
 }
 

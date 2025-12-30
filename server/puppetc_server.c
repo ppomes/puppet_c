@@ -21,7 +21,6 @@
 #include "puppet_memory.h"
 #include "puppet_json_parser.h"
 #include "puppet_hiera.h"
-#include "puppet.tab.h"
 #include "config_parser.h"
 #include "puppetdb.h"
 
@@ -41,11 +40,6 @@ static char *hiera_datadir = NULL;
 static char *puppetdb_path = NULL;
 static puppetdb_t *pdb = NULL;
 static int verbose = 0;
-
-/* External parser symbols */
-extern int yyparse(void);
-extern FILE *yyin;
-extern puppet_program_t *parsed_program;
 
 /**
  * @brief Signal handler for graceful shutdown

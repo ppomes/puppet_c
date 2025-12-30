@@ -1,24 +1,20 @@
 AC_INIT([puppet-c], [0.0.1], [pierre.pomes@gmail.com])
-AM_INIT_AUTOMAKE([-Wall -Werror foreign])
+AM_INIT_AUTOMAKE([-Wall -Werror foreign subdir-objects])
 
 # Libtool support for shared libraries
 AM_PROG_AR
 LT_INIT
 
 AC_PROG_CC
-AC_PROG_LEX
-AC_PROG_YACC
 
-# Check for required programs
-AC_CHECK_PROG([FLEX], [flex], [flex])
-if test -z "$FLEX"; then
-    AC_MSG_ERROR([flex is required but not found])
-fi
-
-AC_CHECK_PROG([BISON], [bison], [bison])
-if test -z "$BISON"; then
-    AC_MSG_ERROR([bison is required but not found])
-fi
+# Check for tree-sitter library (required for parsing)
+PKG_CHECK_MODULES([TREESITTER], [tree-sitter], [
+    AC_DEFINE([HAVE_TREESITTER], [1], [Define if tree-sitter is available])
+    AC_SUBST([TREESITTER_CFLAGS])
+    AC_SUBST([TREESITTER_LIBS])
+], [
+    AC_MSG_ERROR([tree-sitter not found. Install libtree-sitter-dev package.])
+])
 
 # Check for Ruby support (optional)
 AC_ARG_ENABLE([ruby],

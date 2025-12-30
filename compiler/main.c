@@ -26,13 +26,8 @@
 #include "puppet_interpreter.h"
 #include "puppet_loader.h"
 #include "puppet_memory.h"
-#include "puppet.tab.h"
+#include "puppet_ts_parser.h"
 #include "puppet_hiera.h"
-
-/* External symbols from generated parser */
-extern int yyparse(void);
-extern FILE *yyin;
-extern puppet_program_t *parsed_program;
 
 /**
  * @brief Print command-line usage information
@@ -133,12 +128,6 @@ int main(int argc, char *argv[]) {
             case 'h':
                 print_usage(argv[0]);
                 return 0;
-            case 'd':
-                #if YYDEBUG
-                extern int yydebug;
-                yydebug = 1;
-                #endif
-                break;
             default:
                 print_usage(argv[0]);
                 return 1;
@@ -219,23 +208,20 @@ int main(int argc, char *argv[]) {
             }
         }
     } else {
-        /* File mode - traditional parsing */
-        yyin = fopen(input_path, "r");
-        if (!yyin) {
-            perror("fopen");
-            return 1;
-        }
-
+        /* File mode - tree-sitter parsing */
         if (!json_output && !eval_mode && verbose) {
             fprintf(stderr, "Parsing %s...\n", input_path);
         }
-        
-        result = yyparse();
-        fclose(yyin);
-        
-        if (result == 0) {
-            program = parsed_program;
-            parsed_program = NULL;
+
+        puppet_stmt_list_t *stmts = puppet_ts_parse_file(input_path);
+        if (stmts) {
+            program = puppet_calloc(1, sizeof(puppet_program_t));
+            program->statements = *stmts;
+            puppet_free(stmts);
+            result = 0;
+        } else {
+            fprintf(stderr, "Failed to parse: %s\n", input_path);
+            result = 1;
         }
     }
     

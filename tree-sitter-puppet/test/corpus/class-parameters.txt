@@ -1,0 +1,168 @@
+================================================================================
+simple type
+================================================================================
+class f (
+  Boolean $bool = false,
+) {}
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (class_definition
+      (classname
+        (name))
+      (parameter_list
+        (parameter
+          (typed_parameter
+            (type)
+            (regular_parameter
+              (variable
+                (name))
+              (false)))))
+      (block))))
+
+================================================================================
+optional type
+================================================================================
+class f (
+  Optional[Boolean] $bool,
+) {}
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (class_definition
+      (classname
+        (name))
+      (parameter_list
+        (parameter
+          (typed_parameter
+            (type)
+            (access
+              (access_element
+                (type)))
+            (regular_parameter
+              (variable
+                (name))))))
+      (block))))
+
+================================================================================
+optional enum type
+================================================================================
+class foo(
+  Optional[Enum['default', 'foo', 'bar']] $optional_enum_string = undef,
+){ }
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (class_definition
+      (classname
+        (name))
+      (parameter_list
+        (parameter
+          (typed_parameter
+            (type)
+            (access
+              (access_element
+                (type)
+                (access
+                  (access_element
+                    (single_quoted_string))
+                  (access_element
+                    (single_quoted_string))
+                  (access_element
+                    (single_quoted_string)))))
+            (regular_parameter
+              (variable
+                (name))
+              (undef)))))
+      (block))))
+
+================================================================================
+optional variant type
+================================================================================
+class foo(
+  Variant[Undef,String] $fancy_optional_string = undef,
+){ }
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (class_definition
+      (classname
+        (name))
+      (parameter_list
+        (parameter
+          (typed_parameter
+            (type)
+            (access
+              (access_element
+                (type))
+              (access_element
+                (type)))
+            (regular_parameter
+              (variable
+                (name))
+              (undef)))))
+      (block))))
+
+================================================================================
+types with constraints
+================================================================================
+class foo(
+  Array[String,1,10]   $array_with_size_constraint,
+  Integer[10,999]      $integer_with_range_constraint,
+  Integer[default,999] $integer_with_range_constraint,
+  Integer[999,default] $integer_with_range_constraint,
+){ }
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (class_definition
+      (classname
+        (name))
+      (parameter_list
+        (parameter
+          (typed_parameter
+            (type)
+            (access
+              (access_element
+                (type))
+              (access_element
+                (number))
+              (access_element
+                (number)))
+            (regular_parameter
+              (variable
+                (name)))))
+        (parameter
+          (typed_parameter
+            (type)
+            (access
+              (access_element
+                (number))
+              (access_element
+                (number)))
+            (regular_parameter
+              (variable
+                (name)))))
+        (parameter
+          (typed_parameter
+            (type)
+            (access
+              (access_element
+                (default))
+              (access_element
+                (number)))
+            (regular_parameter
+              (variable
+                (name)))))
+        (parameter
+          (typed_parameter
+            (type)
+            (access
+              (access_element
+                (number))
+              (access_element
+                (default)))
+            (regular_parameter
+              (variable
+                (name))))))
+      (block))))

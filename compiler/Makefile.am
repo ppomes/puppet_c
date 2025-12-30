@@ -2,11 +2,7 @@
 lib_LTLIBRARIES = libpuppetc.la
 bin_PROGRAMS = puppetc-compile
 
-# Generated parser files
-BUILT_SOURCES = puppet.tab.c puppet.tab.h lex.yy.c
-CLEANFILES = $(BUILT_SOURCES)
-
-# Library sources (everything except main.c)
+# Library sources
 libpuppetc_la_SOURCES = \
     puppet_ast.c \
     puppet_catalog.c \
@@ -16,7 +12,9 @@ libpuppetc_la_SOURCES = \
     puppet_loader.c \
     puppet_stdlib.c \
     puppet_hiera.c \
-    $(BUILT_SOURCES)
+    puppet_ts_parser.c \
+    $(top_srcdir)/tree-sitter-puppet/src/parser.c \
+    $(top_srcdir)/tree-sitter-puppet/src/scanner.c
 
 # Conditionally add ERB support to library
 if HAVE_RUBY
@@ -29,9 +27,9 @@ libpuppetc_la_LDFLAGS = -version-info 0:0:0
 
 # Library dependencies
 if HAVE_RUBY
-libpuppetc_la_LIBADD = $(top_builddir)/common/libpuppetc_common.la $(RUBY_LIBS) -lm -lpthread $(YAML_LIBS) $(OPENSSL_LIBS)
+libpuppetc_la_LIBADD = $(top_builddir)/common/libpuppetc_common.la $(RUBY_LIBS) -lm -lpthread $(YAML_LIBS) $(OPENSSL_LIBS) $(TREESITTER_LIBS)
 else
-libpuppetc_la_LIBADD = $(top_builddir)/common/libpuppetc_common.la -lpthread $(YAML_LIBS) $(OPENSSL_LIBS)
+libpuppetc_la_LIBADD = $(top_builddir)/common/libpuppetc_common.la -lpthread $(YAML_LIBS) $(OPENSSL_LIBS) $(TREESITTER_LIBS)
 endif
 
 # Binary sources (just main.c, links against library)
@@ -39,10 +37,10 @@ puppetc_compile_SOURCES = main.c
 puppetc_compile_LDADD = libpuppetc.la $(top_builddir)/common/libpuppetc_common.la
 
 # Include directories
-AM_CPPFLAGS = -I$(top_srcdir)/include
+AM_CPPFLAGS = -I$(top_srcdir)/include -I$(top_srcdir)/tree-sitter-puppet/src
 
 # Compiler flags
-AM_CFLAGS = -Wall -Wextra -g
+AM_CFLAGS = -Wall -Wextra -g $(TREESITTER_CFLAGS)
 
 # Conditional Ruby flags
 if HAVE_RUBY
@@ -67,34 +65,9 @@ puppetcinclude_HEADERS = \
     $(top_srcdir)/include/puppet_json_parser.h \
     $(top_srcdir)/include/puppet_loader.h \
     $(top_srcdir)/include/puppet_stdlib.h \
-    $(top_srcdir)/include/puppet_hiera.h
+    $(top_srcdir)/include/puppet_hiera.h \
+    puppet_ts_parser.h
 
 if HAVE_RUBY
 puppetcinclude_HEADERS += $(top_srcdir)/include/puppet_erb.h
 endif
-
-# Flex/Bison rules
-lex.yy.c: puppet.l puppet.tab.h
-	$(LEX) -o $@ $<
-
-puppet.tab.c puppet.tab.h: puppet.y
-	$(YACC) -d -o puppet.tab.c $<
-	cp puppet.tab.h $(top_srcdir)/include/
-
-# Ensure proper build order
-puppet_ast.lo: puppet.tab.h
-puppet_catalog.lo: puppet.tab.h
-puppet_interpreter.lo: puppet.tab.h
-puppet_json.lo: puppet.tab.h
-puppet_loader.lo: puppet.tab.h
-puppet_stdlib.lo: puppet.tab.h
-puppet_hiera.lo: puppet.tab.h
-main.$(OBJEXT): puppet.tab.h
-if HAVE_RUBY
-puppet_erb.lo: puppet.tab.h
-endif
-
-# Install parser header
-install-data-hook:
-	$(MKDIR_P) $(DESTDIR)$(puppetcincludedir)
-	cp $(top_srcdir)/include/puppet.tab.h $(DESTDIR)$(puppetcincludedir)/ || true

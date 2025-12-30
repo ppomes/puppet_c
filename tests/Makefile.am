@@ -42,12 +42,13 @@ EXTRA_DIST = \
     puppet/inspection_functions_test.pp \
     puppet/iterator_test.pp \
     puppet/collector_test.pp \
+    puppet/node_test.pp \
     data/common.yaml \
     test_iterators.sh \
     test_collectors.sh
 
 # Test output directory
-check-local: check-parser check-facts check-core-functions check-hiera check-iterators check-collectors
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors
 	@echo "All tests completed."
 
 check-parser:
@@ -74,6 +75,26 @@ check-parser:
 		echo "❌ Some parser tests failed. Check output/ for details."; \
 		exit 1; \
 	fi
+
+check-nodes:
+	@echo "Running node definition tests..."
+	@$(MKDIR_P) output
+	@echo "  Testing node default block..."
+	@if $(top_builddir)/compiler/puppetc-compile --eval --verbose $(srcdir)/puppet/node_test.pp > output/node_test.out 2>&1; then \
+		if grep -q "NODE_TEST_WORKS" output/node_test.out; then \
+			echo "    ✓ Node definition test passed"; \
+		else \
+			echo "    ✗ Node definition test failed - resource not found in output"; \
+			echo "    Expected 'NODE_TEST_WORKS' in output but got:"; \
+			sed 's/^/      /' output/node_test.out; \
+			exit 1; \
+		fi; \
+	else \
+		echo "    ✗ Node definition test failed - execution error"; \
+		sed 's/^/      /' output/node_test.out; \
+		exit 1; \
+	fi
+	@echo "✅ All node definition tests passed!"
 
 check-facts:
 	@echo "Running facts system tests..."
@@ -342,4 +363,4 @@ check-collectors:
 		exit 1; \
 	fi
 
-.PHONY: check-parser check-facts check-core-functions check-hiera check-iterators check-collectors check-memory check-asan
+.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-memory check-asan
