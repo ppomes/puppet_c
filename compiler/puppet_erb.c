@@ -396,13 +396,91 @@ const char *puppet_ruby_version(void) {
 
 #endif
 
+// Forward declaration for loader
+#include "puppet_loader.h"
+
+/**
+ * Resolve a Puppet template path to a filesystem path
+ *
+ * Puppet template paths are in format: module_name/template_file.erb
+ * These resolve to: <modules_path>/module_name/templates/template_file.erb
+ *
+ * @param template_path The Puppet template path (e.g., "base_config/system_info.erb")
+ * @param env The execution environment with loader
+ * @return Resolved filesystem path (caller must free) or NULL on error
+ */
+static char *resolve_template_path(const char *template_path, puppet_env_t *env) {
+    if (!template_path) return NULL;
+
+    // Find the first '/' to split module_name and template_file
+    const char *slash = strchr(template_path, '/');
+    if (!slash) {
+        printf("Error: Invalid template path '%s' - must be in format 'module/template.erb'\n",
+               template_path);
+        return NULL;
+    }
+
+    // Extract module name
+    size_t module_len = slash - template_path;
+    char *module_name = puppet_malloc(module_len + 1);
+    strncpy(module_name, template_path, module_len);
+    module_name[module_len] = '\0';
+
+    // Template file is everything after the slash
+    const char *template_file = slash + 1;
+
+    // Get the modules path from loader
+    const char *modules_path = NULL;
+    if (env && env->loader && env->loader->modules_path) {
+        modules_path = env->loader->modules_path;
+    }
+
+    // Build full path: modules_path/module_name/templates/template_file
+    char *full_path = NULL;
+    if (modules_path) {
+        size_t path_len = strlen(modules_path) + 1 + module_len + strlen("/templates/") + strlen(template_file) + 1;
+        full_path = puppet_malloc(path_len);
+        snprintf(full_path, path_len, "%s/%s/templates/%s", modules_path, module_name, template_file);
+    } else {
+        // Fallback: try common paths
+        const char *search_paths[] = {
+            "/etc/puppet/modules",
+            "/etc/puppet/code/modules",
+            "/etc/puppetlabs/code/modules",
+            "modules",
+            NULL
+        };
+
+        for (int i = 0; search_paths[i]; i++) {
+            size_t path_len = strlen(search_paths[i]) + 1 + module_len + strlen("/templates/") + strlen(template_file) + 1;
+            full_path = puppet_malloc(path_len);
+            snprintf(full_path, path_len, "%s/%s/templates/%s", search_paths[i], module_name, template_file);
+
+            // Check if file exists
+            FILE *test = fopen(full_path, "r");
+            if (test) {
+                fclose(test);
+                puppet_free(module_name);
+                return full_path;
+            }
+            puppet_free(full_path);
+            full_path = NULL;
+        }
+
+        printf("Error: Could not find template '%s' in any modules path\n", template_path);
+    }
+
+    puppet_free(module_name);
+    return full_path;
+}
+
 // Common template() function implementation
 puppet_value_t *puppet_func_template(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count != 1) {
         printf("Error: template() function requires exactly 1 argument\n");
         return puppet_value_create_undef();
     }
-    
+
     // Evaluate the template path argument
     puppet_value_t *path_value = puppet_eval_expr(args->exprs[0], env);
     if (path_value->type != PUPPET_VALUE_STRING) {
@@ -410,25 +488,33 @@ puppet_value_t *puppet_func_template(puppet_expr_list_t *args, puppet_env_t *env
         puppet_value_destroy(path_value);
         return puppet_value_create_undef();
     }
-    
+
+    // Resolve the template path to a filesystem path
+    char *resolved_path = resolve_template_path(path_value->data.string.data, env);
+    puppet_value_destroy(path_value);
+
+    if (!resolved_path) {
+        return puppet_value_create_undef();
+    }
+
     // Initialize Ruby if needed
     static puppet_ruby_context_t *ruby_ctx = NULL;
     if (!ruby_ctx) {
         ruby_ctx = puppet_ruby_init();
         if (!ruby_ctx) {
-            puppet_value_destroy(path_value);
+            puppet_free(resolved_path);
             return puppet_value_create_undef();
         }
     }
-    
+
     // Render the template
-    char *rendered = puppet_erb_file(path_value->data.string.data, env, ruby_ctx);
-    puppet_value_destroy(path_value);
-    
+    char *rendered = puppet_erb_file(resolved_path, env, ruby_ctx);
+    puppet_free(resolved_path);
+
     if (!rendered) {
         return puppet_value_create_undef();
     }
-    
+
     puppet_value_t *result = puppet_value_create_string(rendered, strlen(rendered));
     puppet_free(rendered);
     return result;

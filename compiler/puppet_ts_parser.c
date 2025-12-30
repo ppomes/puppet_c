@@ -108,6 +108,33 @@ static puppet_expr_t *convert_number(TSNode node, const char *source) {
     return expr;
 }
 
+/* Process escape sequences in a string */
+static char *process_escape_sequences(const char *input, size_t *out_len) {
+    size_t len = strlen(input);
+    char *output = puppet_malloc(len + 1);
+    size_t j = 0;
+
+    for (size_t i = 0; i < len; i++) {
+        if (input[i] == '\\' && i + 1 < len) {
+            switch (input[i + 1]) {
+                case 'n':  output[j++] = '\n'; i++; break;
+                case 't':  output[j++] = '\t'; i++; break;
+                case 'r':  output[j++] = '\r'; i++; break;
+                case '\\': output[j++] = '\\'; i++; break;
+                case '"':  output[j++] = '"';  i++; break;
+                case '\'': output[j++] = '\''; i++; break;
+                case '$':  output[j++] = '$';  i++; break;
+                default:   output[j++] = input[i]; break;
+            }
+        } else {
+            output[j++] = input[i];
+        }
+    }
+    output[j] = '\0';
+    if (out_len) *out_len = j;
+    return output;
+}
+
 /* Convert string literal (single or double quoted) */
 static puppet_expr_t *convert_string_literal(TSNode node, const char *source) {
     puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
@@ -115,18 +142,22 @@ static puppet_expr_t *convert_string_literal(TSNode node, const char *source) {
 
     /* Check for interpolation in double-quoted strings */
     uint32_t child_count = ts_node_named_child_count(node);
-    if (child_count > 0 && node_is(node, "double_quoted_string")) {
-        /* Has interpolations - build interpolated string */
-        expr->type = PUPPET_EXPR_INTERPOLATED_STRING;
 
-        /* Count interpolation nodes */
-        size_t interp_count = 0;
+    /* First, count actual interpolation nodes (not escape_sequence) */
+    size_t interp_count = 0;
+    if (child_count > 0 && node_is(node, "double_quoted_string")) {
         for (uint32_t i = 0; i < child_count; i++) {
             TSNode child = ts_node_named_child(node, i);
             if (node_is(child, "interpolation")) {
                 interp_count++;
             }
         }
+    }
+
+    /* Only use interpolated string path if there are actual interpolations */
+    if (interp_count > 0) {
+        /* Has interpolations - build interpolated string */
+        expr->type = PUPPET_EXPR_INTERPOLATED_STRING;
 
         /* Allocate parts and expressions */
         expr->data.interpolated.parts = puppet_calloc(interp_count + 1, sizeof(puppet_string_t));
@@ -187,10 +218,21 @@ static puppet_expr_t *convert_string_literal(TSNode node, const char *source) {
 
     /* Remove surrounding quotes */
     if (len >= 2 && (raw[0] == '\'' || raw[0] == '"')) {
+        char quote_char = raw[0];
         char *content = puppet_malloc(len - 1);
         memcpy(content, raw + 1, len - 2);
         content[len - 2] = '\0';
-        expr->data.value = puppet_value_create_string(content, len - 2);
+
+        /* Process escape sequences for double-quoted strings */
+        if (quote_char == '"') {
+            size_t processed_len;
+            char *processed = process_escape_sequences(content, &processed_len);
+            expr->data.value = puppet_value_create_string(processed, processed_len);
+            puppet_free(processed);
+        } else {
+            /* Single-quoted strings: no escape processing */
+            expr->data.value = puppet_value_create_string(content, len - 2);
+        }
         puppet_free(content);
     } else {
         expr->data.value = puppet_value_create_string(raw, len);

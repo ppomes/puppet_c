@@ -213,6 +213,15 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Parsing %s...\n", input_path);
         }
 
+        /* Create loader if modules path specified (for template() function) */
+        if (modules_path) {
+            loader = puppet_loader_create(".");
+            if (loader) {
+                puppet_loader_set_modules_path(loader, modules_path);
+                if (verbose) fprintf(stderr, "Using modules path: %s\n", modules_path);
+            }
+        }
+
         puppet_stmt_list_t *stmts = puppet_ts_parse_file(input_path);
         if (stmts) {
             program = puppet_calloc(1, sizeof(puppet_program_t));
