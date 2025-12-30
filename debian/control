@@ -6,13 +6,13 @@ Build-Depends: debhelper-compat (= 13),
                autoconf,
                automake,
                libtool,
-               flex,
-               bison,
                pkg-config,
+               libtree-sitter-dev,
                libyaml-dev,
                libssl-dev,
                libmicrohttpd-dev,
                libcurl4-openssl-dev,
+               libsqlite3-dev,
                ruby-dev
 Standards-Version: 4.6.0
 Homepage: https://github.com/ppomes/puppet_c
