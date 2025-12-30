@@ -615,11 +615,48 @@ static puppet_attribute_t convert_attribute(TSNode node, const char *source) {
     return attr;
 }
 
+/* Build index expression from object + access node */
+static puppet_expr_t *build_index_expr(puppet_expr_t *object, TSNode access_node, const char *source) {
+    /* Access node contains access_element children with the index expressions */
+    TSNode element = find_child(access_node, "access_element");
+    if (ts_node_is_null(element)) {
+        /* Try direct child */
+        element = ts_node_named_child(access_node, 0);
+    }
+
+    puppet_expr_t *index_expr = NULL;
+    if (!ts_node_is_null(element)) {
+        index_expr = convert_expression(element, source);
+    }
+
+    if (!index_expr) {
+        return object;  /* No valid index, return object unchanged */
+    }
+
+    puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
+    expr->type = PUPPET_EXPR_INDEX;
+    expr->loc = node_location(access_node);
+    expr->data.index.object = object;
+    expr->data.index.index = index_expr;
+    return expr;
+}
+
 /* Convert assignment: variable = expression */
 static puppet_stmt_t *convert_assignment(TSNode node, const char *source) {
     puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
     stmt->type = PUPPET_STMT_ASSIGNMENT;
     stmt->loc = node_location(node);
+
+    /*
+     * Assignment can have two forms:
+     * 1. Simple: $var = expr
+     *    Children: variable, expr
+     * 2. With bracket access on RHS: $var = $obj['key1']['key2']
+     *    Children: variable, variable, access, access
+     *    First variable is LHS, second + access nodes are the indexed expression
+     */
+    bool lhs_set = false;
+    puppet_expr_t *rhs_expr = NULL;
 
     uint32_t count = ts_node_named_child_count(node);
     for (uint32_t i = 0; i < count; i++) {
@@ -627,17 +664,31 @@ static puppet_stmt_t *convert_assignment(TSNode node, const char *source) {
         const char *type = ts_node_type(child);
 
         if (strcmp(type, "variable") == 0) {
-            TSNode name_node = find_child(child, "name");
-            if (!ts_node_is_null(name_node)) {
-                char *name = node_text(name_node, source);
-                stmt->data.assignment.variable = puppet_string_create(name);
-                puppet_free(name);
+            if (!lhs_set) {
+                /* First variable is the assignment target */
+                TSNode name_node = find_child(child, "name");
+                if (!ts_node_is_null(name_node)) {
+                    char *name = node_text(name_node, source);
+                    stmt->data.assignment.variable = puppet_string_create(name);
+                    puppet_free(name);
+                }
+                lhs_set = true;
+            } else {
+                /* Subsequent variable is part of the RHS expression */
+                rhs_expr = convert_expression(child, source);
+            }
+        } else if (strcmp(type, "access") == 0) {
+            /* Build index expression: rhs_expr[access] */
+            if (rhs_expr) {
+                rhs_expr = build_index_expr(rhs_expr, child, source);
             }
         } else {
-            stmt->data.assignment.value = convert_expression(child, source);
+            /* Other expression types */
+            rhs_expr = convert_expression(child, source);
         }
     }
 
+    stmt->data.assignment.value = rhs_expr;
     return stmt;
 }
 
@@ -807,15 +858,18 @@ static puppet_stmt_t *convert_case(TSNode node, const char *source) {
         if (strcmp(type, "condition") == 0 || strcmp(type, "variable") == 0 ||
             strcmp(type, "binary") == 0) {
             stmt->data.case_stmt.expr = convert_expression(child, source);
-        } else if (strcmp(type, "case_entry") == 0) {
-            /* Each case_entry has match values and a block */
+        } else if (strcmp(type, "case_entry") == 0 || strcmp(type, "case_option") == 0) {
+            /* Each case_entry/case_option has match values and a block */
             TSNode block = find_child(child, "block");
 
             uint32_t entry_count = ts_node_named_child_count(child);
             for (uint32_t j = 0; j < entry_count; j++) {
                 TSNode entry_child = ts_node_named_child(child, j);
+                const char *entry_type = ts_node_type(entry_child);
                 if (!node_is(entry_child, "block")) {
-                    /* This is a match value */
+                    /* This is a match value - check for 'default' keyword */
+                    bool is_default = (strcmp(entry_type, "default") == 0);
+
                     if (stmt->data.case_stmt.when_count >= when_capacity) {
                         when_capacity *= 2;
                         stmt->data.case_stmt.whens = puppet_realloc(
@@ -823,7 +877,14 @@ static puppet_stmt_t *convert_case(TSNode node, const char *source) {
                             when_capacity * sizeof(puppet_case_when_t));
                     }
                     puppet_case_when_t *when = &stmt->data.case_stmt.whens[stmt->data.case_stmt.when_count++];
-                    when->test = convert_expression(entry_child, source);
+
+                    if (is_default) {
+                        /* Default case - test is null */
+                        when->test = NULL;
+                    } else {
+                        when->test = convert_expression(entry_child, source);
+                    }
+
                     if (!ts_node_is_null(block)) {
                         when->body = convert_block(block, source);
                     }
@@ -867,14 +928,7 @@ static puppet_stmt_t *convert_statement(TSNode node, const char *source) {
         return NULL;
     }
 
-    /* Check for assignment on other node types */
-    if (ts_node_named_child_count(node) >= 2) {
-        TSNode first = ts_node_named_child(node, 0);
-        if (node_is(first, "variable")) {
-            return convert_assignment(node, source);
-        }
-    }
-
+    /* Specific statement types first (before generic assignment check) */
     if (strcmp(type, "class_definition") == 0)
         return convert_class_def(node, source);
     if (strcmp(type, "resource_type") == 0)
