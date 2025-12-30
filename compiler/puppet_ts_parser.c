@@ -960,6 +960,44 @@ static puppet_stmt_t *convert_statement(TSNode node, const char *source) {
         return stmt;
     }
 
+    /* Handle node definitions: node 'name' { } or node default { } */
+    if (strcmp(type, "node_definition") == 0) {
+        puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
+        stmt->type = PUPPET_STMT_NODE;
+        stmt->loc = node_location(node);
+
+        /* Get hostname (can be string, default, or regex) */
+        TSNode hostname = find_child(node, "hostname");
+        if (!ts_node_is_null(hostname)) {
+            TSNode name_child = ts_node_named_child(hostname, 0);
+            if (!ts_node_is_null(name_child)) {
+                const char *name_type = ts_node_type(name_child);
+                if (strcmp(name_type, "default") == 0) {
+                    stmt->data.node.name = puppet_string_create("default");
+                } else {
+                    /* String or regex - extract text without quotes */
+                    char *text = node_text(name_child, source);
+                    /* Remove quotes if present */
+                    size_t len = strlen(text);
+                    if (len >= 2 && (text[0] == '\'' || text[0] == '"')) {
+                        memmove(text, text + 1, len - 2);
+                        text[len - 2] = '\0';
+                    }
+                    stmt->data.node.name = puppet_string_create(text);
+                    puppet_free(text);
+                }
+            }
+        }
+
+        /* Get node body */
+        TSNode block = find_child(node, "block");
+        if (!ts_node_is_null(block)) {
+            stmt->data.node.body = convert_block(block, source);
+        }
+
+        return stmt;
+    }
+
     /* Skip comments and unknown nodes */
     if (strcmp(type, "comment") == 0)
         return NULL;
