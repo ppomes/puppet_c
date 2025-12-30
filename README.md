@@ -164,7 +164,6 @@ curl http://localhost:8140/pdb/query/v4/catalogs/node1.example.com
 ### Runtime Limitations
 
 - **No pluginsync**: Custom facts and functions must be pre-installed
-- **Limited error messages**: Parse and runtime errors may not always point to exact location
 - **Single-threaded server**: The catalog server handles requests sequentially
 
 ## Implemented Functions
