@@ -569,6 +569,10 @@ void puppet_stmt_destroy(puppet_stmt_t *stmt) {
         case PUPPET_STMT_EXPRESSION:
             puppet_expr_destroy(stmt->data.expr);
             break;
+
+        case PUPPET_STMT_TYPE_ALIAS:
+            /* Type alias not yet implemented - no data to destroy */
+            break;
     }
 
     puppet_free(stmt);

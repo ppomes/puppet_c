@@ -1157,7 +1157,6 @@ puppet_stmt_list_t *puppet_ts_parse_string(const char *source, size_t length) {
 
             if (strcmp(ts_node_type(node), "ERROR") == 0) {
                 TSPoint start = ts_node_start_point(node);
-                TSPoint end = ts_node_end_point(node);
                 uint32_t start_byte = ts_node_start_byte(node);
                 uint32_t end_byte = ts_node_end_byte(node);
 
