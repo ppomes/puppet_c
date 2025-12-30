@@ -1,0 +1,235 @@
+================================================================================
+if statement
+================================================================================
+if true { }
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (if
+      (condition
+        (true))
+      (block))))
+
+================================================================================
+if statement with else
+================================================================================
+if true { } else { }
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (if
+      (condition
+        (true))
+      (block)
+      (else
+        (block)))))
+
+================================================================================
+if statement with elsif and else
+================================================================================
+if true { } elsif false { } else { }
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (if
+      (condition
+        (true))
+      (block)
+      (elsif
+        (condition
+          (false))
+        (block))
+      (else
+        (block)))))
+
+================================================================================
+unless statement
+================================================================================
+unless true { }
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (unless
+      (condition
+        (true))
+      (block))))
+
+================================================================================
+unless statement with else
+================================================================================
+unless true { } else { }
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (unless
+      (condition
+        (true))
+      (block)
+      (else
+        (block)))))
+
+================================================================================
+if statement with group
+================================================================================
+if (true or false) or 1 { }
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (if
+      (condition
+        (binary
+          (binary
+            (true)
+            (false))
+          (number)))
+      (block))))
+
+================================================================================
+if statement with method call
+================================================================================
+if $var.is_a(Hash) { }
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (if
+      (condition
+        (call_method_with_lambda
+          (call_method
+            (named_access
+              (variable
+                (name))
+              (name))
+            (argument_list
+              (argument
+                (type))))))
+      (block))))
+
+================================================================================
+if as expression
+================================================================================
+$result = if $os == 'RedHat' {
+      1
+    }
+    else {
+      2
+    }
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (variable
+      (name))
+    (if
+      (condition
+        (binary
+          (variable
+            (name))
+          (single_quoted_string)))
+      (block
+        (statement
+          (number)))
+      (else
+        (block
+          (statement
+            (number)))))))
+
+================================================================================
+case statement
+================================================================================
+case $os {
+    'RedHat', 'CentOS':  {
+         include role::redhat
+    }
+    /^(Debian|Ubuntu)$/:  {
+         include role::debian
+    }
+    default:  {
+         include role::generic
+    }
+}
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (case
+      (variable
+        (name))
+    (case_option
+      (single_quoted_string)
+      (single_quoted_string)
+      (block
+        (statement
+          (statement_function
+            (name)
+            (argument_list
+              (argument
+                (name)))))))
+    (case_option
+      (regex)
+      (block
+        (statement
+          (statement_function
+            (name)
+            (argument_list
+              (argument
+                (name)))))))
+    (case_option
+      (default)
+      (block
+        (statement
+          (statement_function
+            (name)
+            (argument_list
+              (argument
+                (name))))))))))
+
+================================================================================
+case with data type
+================================================================================
+case $foo {
+  String: { }
+  Stdlib::Absolutepath: { }
+}
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (case
+      (variable
+        (name))
+      (case_option
+        (type)
+        (block))
+      (case_option
+        (type)
+        (block)))))
+
+================================================================================
+case as expression
+================================================================================
+$result = case $os {
+    'RedHat', 'CentOS': { 1 }
+    /^(Debian|Ubuntu)$/: { 2 }
+    default: { 3 }
+}
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (variable
+      (name))
+    (case
+      (variable
+        (name))
+      (case_option
+        (single_quoted_string)
+        (single_quoted_string)
+        (block
+          (statement
+            (number))))
+      (case_option
+        (regex)
+        (block
+          (statement
+            (number))))
+      (case_option
+        (default)
+        (block
+          (statement
+            (number)))))))

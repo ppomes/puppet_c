@@ -1,0 +1,64 @@
+================================================================================
+enum with bare words
+================================================================================
+type Foo = Enum[true,default]
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (type_alias
+      (type)
+      (type)
+      (access
+        (access_element
+          (true))
+        (access_element
+          (default))))))
+
+================================================================================
+typecast
+================================================================================
+$foo = String(5)
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (variable
+      (name))
+    (function_call
+      (type)
+        (argument_list
+          (argument
+            (number))))))
+
+================================================================================
+struct data type
+================================================================================
+type Foo = Struct[{mode => Enum['read', 'write'],
+                   path => Optional[String[1]]}]
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (type_alias
+      (type)
+      (type)
+      (access
+        (access_element
+          (hash
+            (hashpair
+              (name)
+              (arrow)
+              (type)
+              (access
+                (access_element
+                  (single_quoted_string))
+                (access_element
+                  (single_quoted_string))))
+            (hashpair
+              (name)
+              (arrow)
+              (type)
+              (access
+                (access_element
+                  (type)
+                  (access
+                    (access_element
+                      (number))))))))))))

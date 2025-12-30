@@ -1,0 +1,22 @@
+================================================================================
+binary expression
+================================================================================
+true or false
+
+123 > 456
+
+'asdf' == 'boo'
+--------------------------------------------------------------------------------
+(manifest
+  (statement
+    (binary
+      (true)
+      (false)))
+  (statement
+    (binary
+      (number)
+      (number)))
+  (statement
+    (binary
+      (single_quoted_string)
+      (single_quoted_string))))
