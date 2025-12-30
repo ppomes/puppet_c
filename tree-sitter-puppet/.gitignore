@@ -46,6 +46,12 @@ zig-out/
 *.wasm
 *.obj
 *.o
+*.lo
+
+# Libtool/Automake build artifacts
+.deps/
+.libs/
+.dirstamp
 
 # Archives
 *.tar.gz
