@@ -1010,9 +1010,65 @@ puppet_stmt_list_t *puppet_ts_parse_string(const char *source, size_t length) {
 
     TSNode root = ts_tree_root_node(tree);
 
-    /* Check for parse errors */
+    /* Check for parse errors and report them */
     if (ts_node_has_error(root)) {
-        fprintf(stderr, "Parse errors detected\n");
+        /* Find and report error nodes */
+        TSTreeCursor cursor = ts_tree_cursor_new(root);
+        bool found_error = false;
+
+        /* Traverse tree to find ERROR nodes */
+        bool done = false;
+        while (!done) {
+            TSNode node = ts_tree_cursor_current_node(&cursor);
+
+            if (strcmp(ts_node_type(node), "ERROR") == 0) {
+                TSPoint start = ts_node_start_point(node);
+                TSPoint end = ts_node_end_point(node);
+                uint32_t start_byte = ts_node_start_byte(node);
+                uint32_t end_byte = ts_node_end_byte(node);
+
+                /* Extract error context (up to 40 chars) */
+                int ctx_len = end_byte - start_byte;
+                if (ctx_len > 40) ctx_len = 40;
+                char context[41];
+                strncpy(context, source + start_byte, ctx_len);
+                context[ctx_len] = '\0';
+                /* Replace newlines with spaces for display */
+                for (int i = 0; i < ctx_len; i++) {
+                    if (context[i] == '\n' || context[i] == '\r') context[i] = ' ';
+                }
+
+                fprintf(stderr, "Parse error at line %u, column %u: unexpected '%s'\n",
+                        start.row + 1, start.column + 1, context);
+                found_error = true;
+            } else if (ts_node_is_missing(node)) {
+                TSPoint start = ts_node_start_point(node);
+                fprintf(stderr, "Parse error at line %u, column %u: missing '%s'\n",
+                        start.row + 1, start.column + 1, ts_node_type(node));
+                found_error = true;
+            }
+
+            /* Move to next node */
+            if (ts_tree_cursor_goto_first_child(&cursor)) {
+                continue;
+            }
+            while (!ts_tree_cursor_goto_next_sibling(&cursor)) {
+                if (!ts_tree_cursor_goto_parent(&cursor)) {
+                    done = true;
+                    break;
+                }
+            }
+        }
+
+        ts_tree_cursor_delete(&cursor);
+
+        if (!found_error) {
+            fprintf(stderr, "Parse errors detected (unknown location)\n");
+        }
+
+        ts_tree_delete(tree);
+        ts_parser_delete(parser);
+        return NULL;
     }
 
     puppet_stmt_list_t block = convert_block(root, source);
