@@ -34,6 +34,7 @@ sudo apt-get install build-essential autoconf automake libtool \
 
 ### Building from Source
 
+**Linux:**
 ```bash
 autoreconf -i
 ./configure
@@ -41,10 +42,22 @@ make
 make check
 ```
 
-If using a specific Ruby version on macOS:
+**macOS (with Homebrew dependencies):**
 ```bash
-./configure --with-ruby=/opt/homebrew/opt/ruby@3.3
+autoreconf -i
+./configure \
+  --with-treesitter=/opt/homebrew/opt/tree-sitter \
+  --with-ruby=/opt/homebrew/opt/ruby@3.3 \
+  --with-yaml=/opt/homebrew/opt/libyaml \
+  --with-openssl=/opt/homebrew/opt/openssl \
+  --with-microhttpd=/opt/homebrew/opt/libmicrohttpd \
+  --with-curl=/opt/homebrew/opt/curl \
+  --with-sqlite=/opt/homebrew/opt/sqlite3
+make
+make check
 ```
+
+Note: On Intel Macs, use `/usr/local/opt/` instead of `/opt/homebrew/opt/`.
 
 ## Docker
 
