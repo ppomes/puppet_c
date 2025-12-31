@@ -366,6 +366,13 @@ const char *puppet_ruby_version(void) {
 static char *resolve_template_path(const char *template_path, puppet_env_t *env) {
     if (!template_path) return NULL;
 
+    // First, check if the path is a direct file path that exists
+    FILE *test = fopen(template_path, "r");
+    if (test) {
+        fclose(test);
+        return puppet_strdup(template_path);
+    }
+
     // Find the first '/' to split module_name and template_file
     const char *slash = strchr(template_path, '/');
     if (!slash) {
