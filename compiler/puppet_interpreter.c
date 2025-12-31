@@ -1091,84 +1091,100 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                 puppet_resource_instance_t *instance = &stmt->data.resource.instances[i];
                 if (instance->title) {
                     puppet_value_t *title_val = puppet_eval_expr(instance->title, env);
-                    const char *title_str = puppet_value_to_string(title_val);
 
-                    // Build resource identifier (type::title)
-                    size_t res_id_len = strlen(stmt->data.resource.type.data) + strlen(title_str) + 3;
-                    char *resource_id = puppet_malloc(res_id_len);
-                    snprintf(resource_id, res_id_len, "%s[%s]", stmt->data.resource.type.data, title_str);
+                    // Handle array titles - expand into multiple resources
+                    size_t title_count = 1;
+                    puppet_value_t **titles = NULL;
 
-                    // Check for duplicate resource
-                    puppet_value_t *existing = puppet_hash_get(env->resource_catalog,
-                                                               resource_id, strlen(resource_id));
-                    if (existing) {
-                        fprintf(stderr, "Error: Duplicate declaration - %s is already declared\n", resource_id);
-                        fprintf(stderr, "       Resource titles must be unique within their type\n");
-                        puppet_free(resource_id);
-                        puppet_value_destroy(title_val);
-                        continue;  // Skip this duplicate resource
+                    if (title_val->type == PUPPET_VALUE_ARRAY) {
+                        title_count = title_val->data.array->count;
+                        titles = title_val->data.array->items;
                     }
 
-                    // Add to duplicate detection catalog
-                    puppet_value_t *marker = puppet_value_create_bool(true);
-                    puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);
-
-                    puppet_debug("  Title: %s", title_str);
-
-                    // Check if this is the template target for output
-                    bool is_template_target = (env->template_output_target &&
-                                               strcmp(title_str, env->template_output_target) == 0 &&
-                                               strcmp(stmt->data.resource.type.data, "file") == 0);
-
-                    // Collect parameters for catalog
-                    puppet_catalog_param_t *params = NULL;
-                    size_t param_count = instance->attr_count;
-                    if (env->build_catalog && param_count > 0) {
-                        params = puppet_calloc(param_count, sizeof(puppet_catalog_param_t));
-                    }
-
-                    // Show attributes for this instance
-                    size_t param_idx = 0;  // Separate index for params array
-                    for (size_t j = 0; j < instance->attr_count; j++) {
-                        // Skip attributes with NULL names (parser bug workaround)
-                        if (!instance->attributes[j].name.data) {
-                            puppet_debug("    [WARN] Skipping attribute with NULL name");
-                            continue;
+                    for (size_t t = 0; t < title_count; t++) {
+                        const char *title_str;
+                        if (titles) {
+                            title_str = puppet_value_to_string(titles[t]);
+                        } else {
+                            title_str = puppet_value_to_string(title_val);
                         }
 
-                        puppet_value_t *attr_val = puppet_eval_expr(instance->attributes[j].value, env);
-                        const char *attr_str = puppet_value_to_string(attr_val);
-                        puppet_debug("    %s => %s", instance->attributes[j].name.data, attr_str);
+                        // Build resource identifier (type::title)
+                        size_t res_id_len = strlen(stmt->data.resource.type.data) + strlen(title_str) + 3;
+                        char *resource_id = puppet_malloc(res_id_len);
+                        snprintf(resource_id, res_id_len, "%s[%s]", stmt->data.resource.type.data, title_str);
 
-                        // If this is template output mode and we found the content attribute
-                        // Output goes to stdout (clean, for piping) - no markers
-                        if (is_template_target && strcmp(instance->attributes[j].name.data, "content") == 0) {
-                            if (attr_val->type == PUPPET_VALUE_STRING) {
-                                printf("%s", attr_val->data.string.data);
-                                env->template_output_found = true;
+                        // Check for duplicate resource
+                        puppet_value_t *existing = puppet_hash_get(env->resource_catalog,
+                                                                   resource_id, strlen(resource_id));
+                        if (existing) {
+                            fprintf(stderr, "Error: Duplicate declaration - %s is already declared\n", resource_id);
+                            fprintf(stderr, "       Resource titles must be unique within their type\n");
+                            puppet_free(resource_id);
+                            continue;  // Skip this duplicate resource
+                        }
+
+                        // Add to duplicate detection catalog
+                        puppet_value_t *marker = puppet_value_create_bool(true);
+                        puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);
+
+                        puppet_debug("  Title: %s", title_str);
+
+                        // Check if this is the template target for output
+                        bool is_template_target = (env->template_output_target &&
+                                                   strcmp(title_str, env->template_output_target) == 0 &&
+                                                   strcmp(stmt->data.resource.type.data, "file") == 0);
+
+                        // Collect parameters for catalog
+                        puppet_catalog_param_t *params = NULL;
+                        size_t param_count = instance->attr_count;
+                        if (env->build_catalog && param_count > 0) {
+                            params = puppet_calloc(param_count, sizeof(puppet_catalog_param_t));
+                        }
+
+                        // Show attributes for this instance
+                        size_t param_idx = 0;  // Separate index for params array
+                        for (size_t j = 0; j < instance->attr_count; j++) {
+                            // Skip attributes with NULL names (parser bug workaround)
+                            if (!instance->attributes[j].name.data) {
+                                puppet_debug("    [WARN] Skipping attribute with NULL name");
+                                continue;
                             }
+
+                            puppet_value_t *attr_val = puppet_eval_expr(instance->attributes[j].value, env);
+                            const char *attr_str = puppet_value_to_string(attr_val);
+                            puppet_debug("    %s => %s", instance->attributes[j].name.data, attr_str);
+
+                            // If this is template output mode and we found the content attribute
+                            // Output goes to stdout (clean, for piping) - no markers
+                            if (is_template_target && strcmp(instance->attributes[j].name.data, "content") == 0) {
+                                if (attr_val->type == PUPPET_VALUE_STRING) {
+                                    printf("%s", attr_val->data.string.data);
+                                    env->template_output_found = true;
+                                }
+                            }
+
+                            // Store in catalog params if building catalog
+                            if (env->build_catalog && params) {
+                                params[param_idx].name = puppet_strdup(instance->attributes[j].name.data);
+                                params[param_idx].value = puppet_value_copy(attr_val);
+                                param_idx++;  // Increment only when we add a parameter
+                            }
+
+                            puppet_value_destroy(attr_val);
                         }
 
-                        // Store in catalog params if building catalog
-                        if (env->build_catalog && params) {
-                            params[param_idx].name = puppet_strdup(instance->attributes[j].name.data);
-                            params[param_idx].value = puppet_value_copy(attr_val);
-                            param_idx++;  // Increment only when we add a parameter
+                        // Add to resource catalog if building
+                        if (env->build_catalog && env->catalog) {
+                            puppet_catalog_add_resource(env->catalog,
+                                                        stmt->data.resource.type.data,
+                                                        title_str,
+                                                        params,
+                                                        param_idx);  // Use actual count, not attr_count
                         }
 
-                        puppet_value_destroy(attr_val);
+                        puppet_free(resource_id);
                     }
-
-                    // Add to resource catalog if building
-                    if (env->build_catalog && env->catalog) {
-                        puppet_catalog_add_resource(env->catalog,
-                                                    stmt->data.resource.type.data,
-                                                    title_str,
-                                                    params,
-                                                    param_idx);  // Use actual count, not attr_count
-                    }
-
-                    puppet_free(resource_id);
                     puppet_value_destroy(title_val);
                 }
             }
