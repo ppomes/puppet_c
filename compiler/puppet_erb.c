@@ -41,7 +41,7 @@ puppet_ruby_context_t *puppet_ruby_init(void) {
 
     puppet_ruby_context_t *ctx = puppet_calloc(1, sizeof(puppet_ruby_context_t));
 
-    // Initialize Ruby VM with minimal setup to avoid Ruby 4.0 rbconfig crash
+    // Initialize Ruby VM with proper setup
     {
         int argc = 1;
         char *argv[] = {"puppet", NULL};
@@ -51,20 +51,17 @@ puppet_ruby_context_t *puppet_ruby_init(void) {
         ruby_init();
         ruby_init_loadpath();
 
-        // Skip ruby_options() call which causes segfault in Ruby 4.0
-        // on macOS due to rbconfig.rb issues
-        // The VM is now initialized and ready for use
+        // Use ruby_options() with -e "nil" to avoid stdin blocking
+        char *ruby_specific_argv[] = {"puppet", "-e", "nil", NULL};
+        void *node = ruby_options(3, ruby_specific_argv);
+        if (!node) {
+            printf("Warning: Ruby options processing failed\n");
+        }
     }
 
-    // Load ERB library with workarounds for Ruby 4.0
+    // Load ERB library
     int state = 0;
-
-    // Try to disable Ractor to work around Ruby 4.0 compatibility issues
-    (void)rb_eval_string_protect("begin; Ractor.make_shareable(1); rescue; end", &state);
-    state = 0;  // Reset state
-
-    // Load ERB with error handling
-    (void)rb_eval_string_protect("begin; require 'erb'; rescue LoadError => e; puts \"ERB load error: #{e.message}\"; raise; end", &state);
+    (void)rb_eval_string_protect("require 'erb'", &state);
     if (state == 0) {
         ctx->initialized = 1;
     } else {
