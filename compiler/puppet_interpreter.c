@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <regex.h>
 
 /* Global verbose flag */
 bool puppet_verbose = false;
@@ -1348,64 +1349,12 @@ void puppet_exec_assignment(const char *var, puppet_expr_t *value, puppet_env_t 
 void puppet_exec_class_def(puppet_stmt_t *class_stmt, puppet_env_t *env) {
     const char *class_name = class_stmt->data.class_def.name.data;
     puppet_debug("Defining class: %s", class_name);
-    
-    // Register this class definition for later instantiation
-    puppet_register_class_def(env, class_stmt);
-    
-    // Create a new scope for the class
-    puppet_scope_t *class_scope = puppet_scope_create(env->current_scope, class_name);
-    puppet_scope_push(env, class_scope);
-    
-    // Set class scope in environment for enhanced variable lookup
-    puppet_scope_t *old_class_scope = env->class_scope;
-    env->class_scope = class_scope;
-    
-    // Process parameters and set default values
-    for (size_t i = 0; i < class_stmt->data.class_def.params.count; i++) {
-        puppet_param_t *param = &class_stmt->data.class_def.params.params[i];
-        const char *param_name = param->name.data;
 
-        if (param->default_value) {
-            // Evaluate default value and set in class scope
-            puppet_value_t *default_val = puppet_eval_expr(param->default_value, env);
-            puppet_scope_set_var(class_scope, param_name, default_val);
-            if (puppet_verbose) {
-                const char *val_str;
-                char num_buf[64];
-                switch (default_val->type) {
-                    case PUPPET_VALUE_BOOL:
-                        val_str = default_val->data.boolean ? "true" : "false";
-                        break;
-                    case PUPPET_VALUE_NUMBER:
-                        snprintf(num_buf, sizeof(num_buf), "%.6g", default_val->data.number);
-                        val_str = num_buf;
-                        break;
-                    case PUPPET_VALUE_STRING:
-                        val_str = default_val->data.string.data;
-                        break;
-                    default:
-                        val_str = "(complex value)";
-                        break;
-                }
-                puppet_debug("Set class parameter $%s = %s (default)", param_name, val_str);
-            }
-        } else {
-            // Set parameter to undef if no default provided
-            puppet_value_t *undef_val = puppet_value_create_undef();
-            puppet_scope_set_var(class_scope, param_name, undef_val);
-            puppet_debug("Set class parameter $%s = undef (no default)", param_name);
-        }
-    }
-    
-    // Execute class body
-    puppet_exec_stmt_list(&class_stmt->data.class_def.body, env);
-    
-    // Restore old class scope
-    env->class_scope = old_class_scope;
-    
-    // Pop the class scope
-    puppet_scope_t *old_scope = puppet_scope_pop(env);
-    puppet_scope_destroy(old_scope);
+    // Register this class definition for later instantiation
+    // The class body is NOT executed here - it will be executed when
+    // the class is included via 'include', 'require', 'contain', or
+    // resource-style instantiation (class { 'name': ... })
+    puppet_register_class_def(env, class_stmt);
 }
 
 void puppet_exec_program(puppet_program_t *program, puppet_env_t *env) {
@@ -1427,14 +1376,55 @@ void puppet_exec_program(puppet_program_t *program, puppet_env_t *env) {
     }
 }
 
+/* Helper function to execute a registered class definition */
+static bool puppet_include_class_from_def(puppet_stmt_t *class_def, puppet_env_t *env) {
+    if (!class_def || class_def->type != PUPPET_STMT_CLASS_DEF || !env) return false;
+
+    const char *class_name = class_def->data.class_def.name.data;
+    printf("Including class: %s\n", class_name);
+
+    /* Create a new scope for the class */
+    puppet_scope_t *class_scope = puppet_scope_create(env->current_scope, class_name);
+    puppet_scope_push(env, class_scope);
+
+    /* Set class scope in environment for enhanced variable lookup */
+    puppet_scope_t *old_class_scope = env->class_scope;
+    env->class_scope = class_scope;
+
+    /* Process class parameters and set default values */
+    for (size_t i = 0; i < class_def->data.class_def.params.count; i++) {
+        puppet_param_t *param = &class_def->data.class_def.params.params[i];
+        const char *param_name = param->name.data;
+
+        if (param->default_value) {
+            puppet_value_t *default_val = puppet_eval_expr(param->default_value, env);
+            puppet_scope_set_var(class_scope, param_name, default_val);
+        } else {
+            puppet_value_t *undef_val = puppet_value_create_undef();
+            puppet_scope_set_var(class_scope, param_name, undef_val);
+        }
+    }
+
+    /* Execute the class body */
+    puppet_exec_stmt_list(&class_def->data.class_def.body, env);
+
+    /* Add class to catalog if building */
+    if (env->build_catalog && env->catalog) {
+        puppet_catalog_add_class(env->catalog, class_name);
+    }
+
+    /* Restore old class scope */
+    env->class_scope = old_class_scope;
+
+    /* Pop the class scope */
+    puppet_scope_t *old_scope = puppet_scope_pop(env);
+    puppet_scope_destroy(old_scope);
+
+    return true;
+}
+
 void puppet_exec_include(puppet_stmt_t *include_stmt, puppet_env_t *env) {
     if (!include_stmt || include_stmt->type != PUPPET_STMT_INCLUDE) return;
-
-    /* Check if loader is available */
-    if (!env->loader) {
-        puppet_warn("Include statements require a module loader to be configured");
-        return;
-    }
 
     /* Process each included class */
     for (size_t i = 0; i < include_stmt->data.names.count; i++) {
@@ -1446,9 +1436,20 @@ void puppet_exec_include(puppet_stmt_t *include_stmt, puppet_env_t *env) {
 
             const char *class_name = name_expr->data.value->data.string.data;
 
-            /* Include the class using the loader */
-            if (!puppet_loader_include_class(env->loader, class_name, env)) {
-                puppet_warn("Failed to include class '%s'", class_name);
+            /* First, try to find the class in registered definitions */
+            puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
+            if (class_def) {
+                puppet_include_class_from_def(class_def, env);
+                continue;
+            }
+
+            /* If not found, try to load from module files using the loader */
+            if (env->loader) {
+                if (!puppet_loader_include_class(env->loader, class_name, env)) {
+                    puppet_warn("Failed to include class '%s'", class_name);
+                }
+            } else {
+                puppet_error("Class '%s' not found", class_name);
             }
         }
     }
@@ -1464,11 +1465,6 @@ void puppet_exec_require(puppet_stmt_t *require_stmt, puppet_env_t *env) {
      * TODO: Add dependency tracking for proper ordering.
      */
 
-    if (!env->loader) {
-        puppet_warn("Require statements require a module loader to be configured");
-        return;
-    }
-
     for (size_t i = 0; i < require_stmt->data.names.count; i++) {
         puppet_expr_t *name_expr = require_stmt->data.names.exprs[i];
 
@@ -1477,8 +1473,20 @@ void puppet_exec_require(puppet_stmt_t *require_stmt, puppet_env_t *env) {
 
             const char *class_name = name_expr->data.value->data.string.data;
 
-            if (!puppet_loader_include_class(env->loader, class_name, env)) {
-                puppet_warn("Failed to require class '%s'", class_name);
+            /* First, try to find the class in registered definitions */
+            puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
+            if (class_def) {
+                puppet_include_class_from_def(class_def, env);
+                continue;
+            }
+
+            /* If not found, try to load from module files using the loader */
+            if (env->loader) {
+                if (!puppet_loader_include_class(env->loader, class_name, env)) {
+                    puppet_warn("Failed to require class '%s'", class_name);
+                }
+            } else {
+                puppet_error("Class '%s' not found", class_name);
             }
         }
     }
@@ -1495,11 +1503,6 @@ void puppet_exec_contain(puppet_stmt_t *contain_stmt, puppet_env_t *env) {
      * TODO: Add containment tracking for proper dependency propagation.
      */
 
-    if (!env->loader) {
-        puppet_warn("Contain statements require a module loader to be configured");
-        return;
-    }
-
     for (size_t i = 0; i < contain_stmt->data.names.count; i++) {
         puppet_expr_t *name_expr = contain_stmt->data.names.exprs[i];
 
@@ -1508,8 +1511,20 @@ void puppet_exec_contain(puppet_stmt_t *contain_stmt, puppet_env_t *env) {
 
             const char *class_name = name_expr->data.value->data.string.data;
 
-            if (!puppet_loader_include_class(env->loader, class_name, env)) {
-                puppet_warn("Failed to contain class '%s'", class_name);
+            /* First, try to find the class in registered definitions */
+            puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
+            if (class_def) {
+                puppet_include_class_from_def(class_def, env);
+                continue;
+            }
+
+            /* If not found, try to load from module files using the loader */
+            if (env->loader) {
+                if (!puppet_loader_include_class(env->loader, class_name, env)) {
+                    puppet_warn("Failed to contain class '%s'", class_name);
+                }
+            } else {
+                puppet_error("Class '%s' not found", class_name);
             }
         }
     }
@@ -1541,8 +1556,30 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
         /* No node specified - only execute 'default' node */
         should_execute = is_default;
     } else {
-        /* Specific node requested - check for exact match (not default) */
-        should_execute = !is_default && (strcmp(node_name, env->node_name) == 0);
+        /* Specific node requested - check for match (not default) */
+        if (!is_default) {
+            size_t name_len = strlen(node_name);
+            /* Check if node name is a regex pattern (starts and ends with /) */
+            if (name_len > 2 && node_name[0] == '/' && node_name[name_len - 1] == '/') {
+                /* Extract regex pattern (without the slashes) */
+                char *pattern = puppet_malloc(name_len - 1);
+                strncpy(pattern, node_name + 1, name_len - 2);
+                pattern[name_len - 2] = '\0';
+
+                /* Compile and execute regex */
+                regex_t regex;
+                int ret = regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB);
+                if (ret == 0) {
+                    ret = regexec(&regex, env->node_name, 0, NULL, 0);
+                    should_execute = (ret == 0);
+                    regfree(&regex);
+                }
+                puppet_free(pattern);
+            } else {
+                /* Literal string match */
+                should_execute = (strcmp(node_name, env->node_name) == 0);
+            }
+        }
     }
     
     if (should_execute) {

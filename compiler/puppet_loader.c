@@ -206,9 +206,16 @@ bool puppet_loader_include_class(puppet_loader_t *loader,
                                  const char *class_name,
                                  puppet_env_t *env) {
     if (!loader || !class_name || !env) return false;
-    
-    /* Load the class */
-    puppet_stmt_t *class_def = puppet_loader_load_class(loader, class_name);
+
+    /* First, check if class is already registered in the environment
+     * (defined in the same file or previously parsed) */
+    puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
+
+    /* If not found in registered definitions, try to load from module files */
+    if (!class_def) {
+        class_def = puppet_loader_load_class(loader, class_name);
+    }
+
     if (!class_def) {
         fprintf(stderr, "Error: Cannot include class '%s'\n", class_name);
         return false;
