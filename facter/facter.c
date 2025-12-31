@@ -25,7 +25,6 @@
 #include <dirent.h>
 #include <ctype.h>
 #include <errno.h>
-#include <sys/sysctl.h>
 
 /* Platform-specific includes */
 #ifdef __linux__
@@ -33,6 +32,7 @@
 #endif
 
 #ifdef __APPLE__
+#include <sys/sysctl.h>
 #include <mach/mach.h>
 #include <mach/mach_host.h>
 #include <sys/param.h>
