@@ -46,14 +46,27 @@ if test -n "$ruby_prefix"; then
         ruby_version=`$RUBY -e 'puts RUBY_VERSION'`
         ruby_arch=`$RUBY -e 'puts RUBY_PLATFORM'`
 
-        # Check Ruby version - reject Ruby 4.0 and later
+        # Check Ruby version - require Ruby 3.0-3.3
         AC_MSG_CHECKING([if Ruby version $ruby_version is supported])
         ruby_major=`echo $ruby_version | cut -d. -f1`
+        ruby_minor=`echo $ruby_version | cut -d. -f2`
+
+        if test "$ruby_major" -lt 3; then
+            AC_MSG_RESULT([no])
+            AC_MSG_ERROR([Ruby $ruby_version is not supported. Ruby 3.0 or later is required. Please use Ruby 3.0-3.3 (Ruby 3.4+ has ERB embedding incompatibilities)])
+        fi
+
         if test "$ruby_major" -ge 4; then
             AC_MSG_RESULT([no])
-            AC_MSG_ERROR([Ruby $ruby_version is not supported. Ruby 4.0+ has breaking changes that are incompatible with ERB embedding. Please use Ruby 3.x (recommended: Ruby 3.4)])
+            AC_MSG_ERROR([Ruby $ruby_version is not supported. Ruby 4.0+ has breaking changes incompatible with ERB embedding. Please use Ruby 3.0-3.3])
         fi
-        AC_MSG_RESULT([yes])
+
+        if test "$ruby_major" -eq 3 -a "$ruby_minor" -ge 4; then
+            AC_MSG_RESULT([no])
+            AC_MSG_ERROR([Ruby $ruby_version is not supported. Ruby 3.4+ has ERB embedding incompatibilities. Please use Ruby 3.0-3.3 (recommended: Ruby 3.2 or 3.3)])
+        fi
+
+        AC_MSG_RESULT([yes (Ruby $ruby_version)])
 
         # Try to find the actual Ruby include directory
         ruby_include_base="$ruby_prefix/include"
@@ -84,13 +97,26 @@ else
             AC_MSG_CHECKING([for Ruby configuration])
             ruby_version=`$RUBY -e 'puts RUBY_VERSION'`
 
-            # Check Ruby version - reject Ruby 4.0 and later
+            # Check Ruby version - require Ruby 3.0-3.3
             AC_MSG_CHECKING([if Ruby version $ruby_version is supported])
             ruby_major=`echo $ruby_version | cut -d. -f1`
+            ruby_minor=`echo $ruby_version | cut -d. -f2`
+
+            if test "$ruby_major" -lt 3; then
+                AC_MSG_RESULT([no])
+                AC_MSG_ERROR([Ruby $ruby_version is not supported. Ruby 3.0 or later is required. Please use Ruby 3.0-3.3 (Ruby 3.4+ has ERB embedding incompatibilities)])
+            fi
+
             if test "$ruby_major" -ge 4; then
                 AC_MSG_RESULT([no])
-                AC_MSG_ERROR([Ruby $ruby_version is not supported. Ruby 4.0+ has breaking changes that are incompatible with ERB embedding. Please use Ruby 3.x (recommended: Ruby 3.4)])
+                AC_MSG_ERROR([Ruby $ruby_version is not supported. Ruby 4.0+ has breaking changes incompatible with ERB embedding. Please use Ruby 3.0-3.3])
             fi
+
+            if test "$ruby_major" -eq 3 -a "$ruby_minor" -ge 4; then
+                AC_MSG_RESULT([no])
+                AC_MSG_ERROR([Ruby $ruby_version is not supported. Ruby 3.4+ has ERB embedding incompatibilities. Please use Ruby 3.0-3.3 (recommended: Ruby 3.2 or 3.3)])
+            fi
+
             AC_MSG_RESULT([yes])
 
             ruby_archdir=`$RUBY -e 'puts RbConfig::CONFIG[["archdir"]]'`
