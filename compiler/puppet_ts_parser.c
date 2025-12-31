@@ -592,6 +592,42 @@ static puppet_expr_t *convert_expression(TSNode node, const char *source) {
 
     const char *type = ts_node_type(node);
 
+    /* Handle resource references: Type[title] where type and access are siblings in "argument" node
+     * Parse tree looks like:
+     *   argument: 'Type[title]'
+     *     type: 'Type'
+     *     access: 'title'
+     */
+    if (strcmp(type, "argument") == 0) {
+        TSNode type_child = find_child(node, "type");
+        TSNode access_child = find_child(node, "access");
+
+        if (!ts_node_is_null(type_child) && !ts_node_is_null(access_child)) {
+            /* This is a resource reference Type[title] */
+            puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
+            expr->type = PUPPET_EXPR_RESOURCE_REF;
+            expr->loc = node_location(node);
+
+            /* Get the type name from the type node */
+            char *type_str = node_text(type_child, source);
+            expr->data.resource_ref.type = puppet_string_create(type_str);
+            puppet_free(type_str);
+
+            /* Get the title from the first access_element */
+            TSNode access_elem = find_child(access_child, "access_element");
+            if (!ts_node_is_null(access_elem)) {
+                /* Get the first named child of access_element (the actual value) */
+                TSNode value_node = ts_node_named_child(access_elem, 0);
+                expr->data.resource_ref.title = convert_expression(value_node, source);
+            } else {
+                /* Fallback: use entire access content */
+                expr->data.resource_ref.title = convert_expression(access_child, source);
+            }
+
+            return expr;
+        }
+    }
+
     if (strcmp(type, "variable") == 0)
         return convert_variable(node, source);
     if (strcmp(type, "number") == 0)
@@ -650,6 +686,18 @@ static puppet_attribute_t convert_attribute(TSNode node, const char *source) {
             attr.name = puppet_string_create(name);
             puppet_free(name);
         } else if (strcmp(type, "arrow") != 0) {
+            // Check if this could be the attribute name (for keywords like unless, onlyif, etc.)
+            if (attr.name.data == NULL && i == 0) {
+                // First child might be the attribute name if it's not "name" type
+                char *name = node_text(child, source);
+                // Check if it's a valid identifier (not an expression)
+                if (name && strlen(name) > 0 && !strchr(name, ' ') && !strchr(name, '(')) {
+                    attr.name = puppet_string_create(name);
+                    puppet_free(name);
+                    continue;
+                }
+                puppet_free(name);
+            }
             attr.value = convert_expression(child, source);
         }
     }
@@ -675,6 +723,29 @@ static puppet_expr_t *build_index_expr(puppet_expr_t *object, TSNode access_node
         return object;  /* No valid index, return object unchanged */
     }
 
+    /* Check if this is a resource reference (Type[title]) instead of an index expression
+     * Resource references have:
+     * - A variable base (type name)
+     * - The variable name starts with an uppercase letter (capitalized type)
+     */
+    if (object->type == PUPPET_EXPR_VARIABLE) {
+        const char *var_name = object->data.variable.data;
+        if (var_name && var_name[0] >= 'A' && var_name[0] <= 'Z') {
+            /* This is a resource reference Type[title] */
+            puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
+            expr->type = PUPPET_EXPR_RESOURCE_REF;
+            expr->loc = node_location(access_node);
+            expr->data.resource_ref.type = puppet_string_create(var_name);
+            expr->data.resource_ref.title = index_expr;
+
+            /* Free the object variable expression since we've copied its data */
+            puppet_free(object);
+
+            return expr;
+        }
+    }
+
+    /* Regular index expression */
     puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
     expr->type = PUPPET_EXPR_INDEX;
     expr->loc = node_location(access_node);

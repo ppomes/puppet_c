@@ -17,7 +17,7 @@ cd "$SCRIPT_DIR/.."
 
 # Run the collector test with catalog output to see what resources were realized
 # Set library path for both Linux (LD_LIBRARY_PATH) and macOS (DYLD_LIBRARY_PATH)
-export LD_LIBRARY_PATH=./compiler/.libs:./common/.libs
+export DYLD_LIBRARY_PATH=./compiler/.libs:./common/.libs
 export DYLD_LIBRARY_PATH=./compiler/.libs:./common/.libs
 OUTPUT=$(./compiler/.libs/puppetc-compile -e -c tests/puppet/collector_test.pp 2>&1)
 EXIT_CODE=$?

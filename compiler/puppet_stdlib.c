@@ -8,6 +8,7 @@
 #include "puppet_stdlib.h"
 #include "puppet_memory.h"
 #include "puppet_loader.h"
+#include "puppet_interpreter.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -421,6 +422,7 @@ puppet_value_t *puppet_func_realize(puppet_expr_list_t *args, puppet_env_t *env)
 
     /* Process each resource reference */
     for (size_t i = 0; i < args->count; i++) {
+        /* Evaluate the resource reference expression */
         puppet_value_t *val = puppet_eval_expr(args->exprs[i], env);
         char *ref_str = NULL;
         bool needs_free = false;

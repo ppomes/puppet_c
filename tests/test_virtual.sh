@@ -9,6 +9,7 @@ FAILED=0
 PASSED=0
 
 # Set library path
+export DYLD_LIBRARY_PATH="$PROJECT_DIR/compiler/.libs:$PROJECT_DIR/common/.libs:$DYLD_LIBRARY_PATH"
 export LD_LIBRARY_PATH="$PROJECT_DIR/compiler/.libs:$PROJECT_DIR/common/.libs:$LD_LIBRARY_PATH"
 
 # Color codes for output

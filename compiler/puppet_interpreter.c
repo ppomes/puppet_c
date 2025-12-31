@@ -1128,7 +1128,14 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                     }
 
                     // Show attributes for this instance
+                    size_t param_idx = 0;  // Separate index for params array
                     for (size_t j = 0; j < instance->attr_count; j++) {
+                        // Skip attributes with NULL names (parser bug workaround)
+                        if (!instance->attributes[j].name.data) {
+                            puppet_debug("    [WARN] Skipping attribute with NULL name");
+                            continue;
+                        }
+
                         puppet_value_t *attr_val = puppet_eval_expr(instance->attributes[j].value, env);
                         const char *attr_str = puppet_value_to_string(attr_val);
                         puppet_debug("    %s => %s", instance->attributes[j].name.data, attr_str);
@@ -1144,8 +1151,9 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
 
                         // Store in catalog params if building catalog
                         if (env->build_catalog && params) {
-                            params[j].name = puppet_strdup(instance->attributes[j].name.data);
-                            params[j].value = puppet_value_copy(attr_val);
+                            params[param_idx].name = puppet_strdup(instance->attributes[j].name.data);
+                            params[param_idx].value = puppet_value_copy(attr_val);
+                            param_idx++;  // Increment only when we add a parameter
                         }
 
                         puppet_value_destroy(attr_val);
@@ -1157,7 +1165,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                                                     stmt->data.resource.type.data,
                                                     title_str,
                                                     params,
-                                                    param_count);
+                                                    param_idx);  // Use actual count, not attr_count
                     }
 
                     puppet_free(resource_id);
