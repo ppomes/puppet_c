@@ -8,13 +8,29 @@ LT_INIT
 AC_PROG_CC
 
 # Check for tree-sitter library (required for parsing)
-PKG_CHECK_MODULES([TREESITTER], [tree-sitter], [
-    AC_DEFINE([HAVE_TREESITTER], [1], [Define if tree-sitter is available])
-    AC_SUBST([TREESITTER_CFLAGS])
-    AC_SUBST([TREESITTER_LIBS])
-], [
-    AC_MSG_ERROR([tree-sitter not found. Install libtree-sitter-dev package.])
-])
+AC_ARG_WITH([treesitter],
+    [AS_HELP_STRING([--with-treesitter=PATH], [Path to tree-sitter installation])],
+    [treesitter_prefix=$withval],
+    [treesitter_prefix=])
+
+if test -n "$treesitter_prefix"; then
+    AC_MSG_CHECKING([for tree-sitter in $treesitter_prefix])
+    if test -f "$treesitter_prefix/include/tree_sitter/api.h"; then
+        TREESITTER_CFLAGS="-I$treesitter_prefix/include"
+        TREESITTER_LIBS="-L$treesitter_prefix/lib -ltree-sitter"
+        AC_MSG_RESULT([yes])
+    else
+        AC_MSG_RESULT([no])
+        AC_MSG_ERROR([tree-sitter headers not found in $treesitter_prefix/include])
+    fi
+else
+    PKG_CHECK_MODULES([TREESITTER], [tree-sitter], [], [
+        AC_MSG_ERROR([tree-sitter not found. Install libtree-sitter-dev package or use --with-treesitter=PATH])
+    ])
+fi
+AC_DEFINE([HAVE_TREESITTER], [1], [Define if tree-sitter is available])
+AC_SUBST([TREESITTER_CFLAGS])
+AC_SUBST([TREESITTER_LIBS])
 
 # Check for Ruby (required for ERB templates)
 AC_ARG_WITH([ruby],
@@ -74,53 +90,132 @@ else
         fi
     ])
 fi
-
 AC_SUBST([RUBY_CFLAGS])
 AC_SUBST([RUBY_LIBS])
 
 # Check for libyaml (required for Hiera support)
-PKG_CHECK_MODULES([YAML], [yaml-0.1], [
-    AC_SUBST([YAML_CFLAGS])
-    AC_SUBST([YAML_LIBS])
-], [
-    AC_MSG_ERROR([libyaml not found. Install libyaml-dev package.])
-])
+AC_ARG_WITH([yaml],
+    [AS_HELP_STRING([--with-yaml=PATH], [Path to libyaml installation])],
+    [yaml_prefix=$withval],
+    [yaml_prefix=])
+
+if test -n "$yaml_prefix"; then
+    AC_MSG_CHECKING([for libyaml in $yaml_prefix])
+    if test -f "$yaml_prefix/include/yaml.h"; then
+        YAML_CFLAGS="-I$yaml_prefix/include"
+        YAML_LIBS="-L$yaml_prefix/lib -lyaml"
+        AC_MSG_RESULT([yes])
+    else
+        AC_MSG_RESULT([no])
+        AC_MSG_ERROR([libyaml headers not found in $yaml_prefix/include])
+    fi
+else
+    PKG_CHECK_MODULES([YAML], [yaml-0.1], [], [
+        AC_MSG_ERROR([libyaml not found. Install libyaml-dev package or use --with-yaml=PATH])
+    ])
+fi
+AC_SUBST([YAML_CFLAGS])
+AC_SUBST([YAML_LIBS])
 
 # Check for OpenSSL (required for crypto functions)
-PKG_CHECK_MODULES([OPENSSL], [openssl], [
-    AC_DEFINE([HAVE_OPENSSL], [1], [Define if OpenSSL is available])
-    AC_SUBST([OPENSSL_CFLAGS])
-    AC_SUBST([OPENSSL_LIBS])
-], [
-    AC_MSG_ERROR([OpenSSL not found. Install libssl-dev package.])
-])
+AC_ARG_WITH([openssl],
+    [AS_HELP_STRING([--with-openssl=PATH], [Path to OpenSSL installation])],
+    [openssl_prefix=$withval],
+    [openssl_prefix=])
+
+if test -n "$openssl_prefix"; then
+    AC_MSG_CHECKING([for OpenSSL in $openssl_prefix])
+    if test -f "$openssl_prefix/include/openssl/ssl.h"; then
+        OPENSSL_CFLAGS="-I$openssl_prefix/include"
+        OPENSSL_LIBS="-L$openssl_prefix/lib -lssl -lcrypto"
+        AC_MSG_RESULT([yes])
+    else
+        AC_MSG_RESULT([no])
+        AC_MSG_ERROR([OpenSSL headers not found in $openssl_prefix/include])
+    fi
+else
+    PKG_CHECK_MODULES([OPENSSL], [openssl], [], [
+        AC_MSG_ERROR([OpenSSL not found. Install libssl-dev package or use --with-openssl=PATH])
+    ])
+fi
+AC_DEFINE([HAVE_OPENSSL], [1], [Define if OpenSSL is available])
+AC_SUBST([OPENSSL_CFLAGS])
+AC_SUBST([OPENSSL_LIBS])
 
 # Check for libmicrohttpd (required for puppetc-server)
-PKG_CHECK_MODULES([MHD], [libmicrohttpd], [
-    AC_DEFINE([HAVE_MICROHTTPD], [1], [Define if libmicrohttpd is available])
-    AC_SUBST([MHD_CFLAGS])
-    AC_SUBST([MHD_LIBS])
-], [
-    AC_MSG_ERROR([libmicrohttpd not found. Install libmicrohttpd-dev package.])
-])
+AC_ARG_WITH([microhttpd],
+    [AS_HELP_STRING([--with-microhttpd=PATH], [Path to libmicrohttpd installation])],
+    [microhttpd_prefix=$withval],
+    [microhttpd_prefix=])
+
+if test -n "$microhttpd_prefix"; then
+    AC_MSG_CHECKING([for libmicrohttpd in $microhttpd_prefix])
+    if test -f "$microhttpd_prefix/include/microhttpd.h"; then
+        MHD_CFLAGS="-I$microhttpd_prefix/include"
+        MHD_LIBS="-L$microhttpd_prefix/lib -lmicrohttpd"
+        AC_MSG_RESULT([yes])
+    else
+        AC_MSG_RESULT([no])
+        AC_MSG_ERROR([libmicrohttpd headers not found in $microhttpd_prefix/include])
+    fi
+else
+    PKG_CHECK_MODULES([MHD], [libmicrohttpd], [], [
+        AC_MSG_ERROR([libmicrohttpd not found. Install libmicrohttpd-dev package or use --with-microhttpd=PATH])
+    ])
+fi
+AC_DEFINE([HAVE_MICROHTTPD], [1], [Define if libmicrohttpd is available])
+AC_SUBST([MHD_CFLAGS])
+AC_SUBST([MHD_LIBS])
 
 # Check for libcurl (required for puppetc-agent)
-PKG_CHECK_MODULES([CURL], [libcurl], [
-    AC_DEFINE([HAVE_CURL], [1], [Define if libcurl is available])
-    AC_SUBST([CURL_CFLAGS])
-    AC_SUBST([CURL_LIBS])
-], [
-    AC_MSG_ERROR([libcurl not found. Install libcurl4-openssl-dev package.])
-])
+AC_ARG_WITH([curl],
+    [AS_HELP_STRING([--with-curl=PATH], [Path to libcurl installation])],
+    [curl_prefix=$withval],
+    [curl_prefix=])
+
+if test -n "$curl_prefix"; then
+    AC_MSG_CHECKING([for libcurl in $curl_prefix])
+    if test -f "$curl_prefix/include/curl/curl.h"; then
+        CURL_CFLAGS="-I$curl_prefix/include"
+        CURL_LIBS="-L$curl_prefix/lib -lcurl"
+        AC_MSG_RESULT([yes])
+    else
+        AC_MSG_RESULT([no])
+        AC_MSG_ERROR([libcurl headers not found in $curl_prefix/include])
+    fi
+else
+    PKG_CHECK_MODULES([CURL], [libcurl], [], [
+        AC_MSG_ERROR([libcurl not found. Install libcurl4-openssl-dev package or use --with-curl=PATH])
+    ])
+fi
+AC_DEFINE([HAVE_CURL], [1], [Define if libcurl is available])
+AC_SUBST([CURL_CFLAGS])
+AC_SUBST([CURL_LIBS])
 
 # Check for SQLite3 (required for PuppetDB)
-PKG_CHECK_MODULES([SQLITE], [sqlite3], [
-    AC_DEFINE([HAVE_SQLITE], [1], [Define if SQLite3 is available])
-    AC_SUBST([SQLITE_CFLAGS])
-    AC_SUBST([SQLITE_LIBS])
-], [
-    AC_MSG_ERROR([SQLite3 not found. Install libsqlite3-dev package.])
-])
+AC_ARG_WITH([sqlite],
+    [AS_HELP_STRING([--with-sqlite=PATH], [Path to SQLite3 installation])],
+    [sqlite_prefix=$withval],
+    [sqlite_prefix=])
+
+if test -n "$sqlite_prefix"; then
+    AC_MSG_CHECKING([for SQLite3 in $sqlite_prefix])
+    if test -f "$sqlite_prefix/include/sqlite3.h"; then
+        SQLITE_CFLAGS="-I$sqlite_prefix/include"
+        SQLITE_LIBS="-L$sqlite_prefix/lib -lsqlite3"
+        AC_MSG_RESULT([yes])
+    else
+        AC_MSG_RESULT([no])
+        AC_MSG_ERROR([SQLite3 headers not found in $sqlite_prefix/include])
+    fi
+else
+    PKG_CHECK_MODULES([SQLITE], [sqlite3], [], [
+        AC_MSG_ERROR([SQLite3 not found. Install libsqlite3-dev package or use --with-sqlite=PATH])
+    ])
+fi
+AC_DEFINE([HAVE_SQLITE], [1], [Define if SQLite3 is available])
+AC_SUBST([SQLITE_CFLAGS])
+AC_SUBST([SQLITE_LIBS])
 
 # Check for standard library functions
 AC_CHECK_FUNCS([malloc realloc free strdup strlen strcpy snprintf])
