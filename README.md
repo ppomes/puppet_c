@@ -22,7 +22,7 @@ Prerequisites:
 
 **macOS (Homebrew):**
 ```bash
-brew install tree-sitter ruby@3.3 libyaml openssl libmicrohttpd curl sqlite3 autoconf automake libtool
+brew install pkg-config tree-sitter ruby@3.3 libyaml openssl libmicrohttpd curl sqlite3 autoconf automake libtool
 ```
 
 **Debian/Ubuntu (APT):**
