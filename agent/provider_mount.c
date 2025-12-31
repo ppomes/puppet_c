@@ -20,14 +20,22 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <errno.h>
+
+#ifdef __linux__
 #include <mntent.h>
+#define FSTAB_PATH "/etc/fstab"
+#define MTAB_PATH "/proc/mounts"
+#elif defined(__APPLE__)
+#include <fstab.h>
+#include <sys/param.h>
+#include <sys/mount.h>
+#define FSTAB_PATH "/etc/fstab"
+#define MTAB_PATH "/etc/mtab"
+#endif
 
 #include "puppet_provider.h"
 #include "puppet_memory.h"
 #include "color_output.h"
-
-#define FSTAB_PATH "/etc/fstab"
-#define MTAB_PATH "/proc/mounts"
 
 /* ============================================================================
  * Fstab Entry Structure
@@ -81,6 +89,7 @@ static void fstab_free(fstab_t *fstab) {
  * @brief Read and parse /etc/fstab
  */
 static fstab_t *read_fstab(void) {
+#ifdef __linux__
     FILE *fp = setmntent(FSTAB_PATH, "r");
     if (!fp) return NULL;
 
@@ -111,6 +120,39 @@ static fstab_t *read_fstab(void) {
 
     endmntent(fp);
     return fstab;
+#elif defined(__APPLE__)
+    fstab_t *fstab = puppet_calloc(1, sizeof(fstab_t));
+    if (!fstab) return NULL;
+
+    struct fstab *fs;
+    if (setfsent() == 0) {
+        puppet_free(fstab);
+        return NULL;
+    }
+
+    while ((fs = getfsent()) != NULL) {
+        fstab_entry_t *new_entries = puppet_realloc(fstab->entries,
+                                              (fstab->count + 1) * sizeof(fstab_entry_t));
+        if (!new_entries) break;
+
+        fstab->entries = new_entries;
+        fstab_entry_t *entry = &fstab->entries[fstab->count];
+
+        entry->device = puppet_strdup(fs->fs_spec);
+        entry->mountpoint = puppet_strdup(fs->fs_file);
+        entry->fstype = puppet_strdup(fs->fs_vfstype);
+        entry->options = puppet_strdup(fs->fs_mntops);
+        entry->dump = fs->fs_freq;
+        entry->pass = fs->fs_passno;
+
+        fstab->count++;
+    }
+
+    endfsent();
+    return fstab;
+#else
+    return NULL;
+#endif
 }
 
 /**
@@ -269,6 +311,7 @@ static int fstab_remove(fstab_t *fstab, const char *mountpoint) {
  * @brief Check if a filesystem is currently mounted
  */
 static int is_mounted(const char *mountpoint) {
+#ifdef __linux__
     FILE *fp = setmntent(MTAB_PATH, "r");
     if (!fp) return 0;
 
@@ -282,6 +325,20 @@ static int is_mounted(const char *mountpoint) {
 
     endmntent(fp);
     return 0;
+#elif defined(__APPLE__)
+    struct statfs *mounts;
+    int count = getmntinfo(&mounts, MNT_NOWAIT);
+    if (count == 0) return 0;
+
+    for (int i = 0; i < count; i++) {
+        if (strcmp(mounts[i].f_mntonname, mountpoint) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+#else
+    return 0;
+#endif
 }
 
 /**

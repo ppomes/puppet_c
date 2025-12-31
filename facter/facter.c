@@ -12,8 +12,8 @@
 #include <string.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <time.h>
 #include <sys/utsname.h>
-#include <sys/sysinfo.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -25,6 +25,22 @@
 #include <dirent.h>
 #include <ctype.h>
 #include <errno.h>
+#include <sys/sysctl.h>
+
+/* Platform-specific includes */
+#ifdef __linux__
+#include <sys/sysinfo.h>
+#endif
+
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <mach/mach_host.h>
+#include <sys/param.h>
+#include <sys/mount.h>
+#include <net/if_dl.h>
+#include <IOKit/IOKitLib.h>
+#include <CoreFoundation/CoreFoundation.h>
+#endif
 
 #include "facter.h"
 
@@ -266,6 +282,9 @@ char *facter_architecture(void) {
 }
 
 char *facter_os_name(void) {
+#ifdef __APPLE__
+    return puppet_strdup("macOS");
+#elif defined(__linux__)
     /* Try /etc/os-release first (modern distros) */
     char *content = read_file_contents("/etc/os-release", 0);
     if (content) {
@@ -293,9 +312,19 @@ char *facter_os_name(void) {
     }
 
     return puppet_strdup("Linux");
+#else
+    struct utsname buf;
+    if (uname(&buf) == 0) {
+        return puppet_strdup(buf.sysname);
+    }
+    return puppet_strdup("Unknown");
+#endif
 }
 
 char *facter_os_family(void) {
+#ifdef __APPLE__
+    return puppet_strdup("Darwin");
+#elif defined(__linux__)
     char *content = read_file_contents("/etc/os-release", 0);
     if (content) {
         char *id_like = NULL;
@@ -347,9 +376,24 @@ char *facter_os_family(void) {
     }
 
     return puppet_strdup("Linux");
+#else
+    return puppet_strdup("Unknown");
+#endif
 }
 
 char *facter_os_release(void) {
+#ifdef __APPLE__
+    char osversion[256];
+    size_t len = sizeof(osversion);
+    if (sysctlbyname("kern.osproductversion", osversion, &len, NULL, 0) == 0) {
+        return puppet_strdup(osversion);
+    }
+    /* Fallback to kern.osrelease */
+    if (sysctlbyname("kern.osrelease", osversion, &len, NULL, 0) == 0) {
+        return puppet_strdup(osversion);
+    }
+    return NULL;
+#elif defined(__linux__)
     char *content = read_file_contents("/etc/os-release", 0);
     if (content) {
         char *line = strtok(content, "\n");
@@ -369,21 +413,47 @@ char *facter_os_release(void) {
     }
 
     return NULL;
+#else
+    return NULL;
+#endif
 }
 
 unsigned long facter_memory_total(void) {
+#ifdef __linux__
     struct sysinfo info;
     if (sysinfo(&info) == 0) {
         return info.totalram * info.mem_unit;
     }
+#elif defined(__APPLE__)
+    int mib[2] = {CTL_HW, HW_MEMSIZE};
+    uint64_t memsize;
+    size_t len = sizeof(memsize);
+    if (sysctl(mib, 2, &memsize, &len, NULL, 0) == 0) {
+        return (unsigned long)memsize;
+    }
+#endif
     return 0;
 }
 
 unsigned long facter_memory_free(void) {
+#ifdef __linux__
     struct sysinfo info;
     if (sysinfo(&info) == 0) {
         return info.freeram * info.mem_unit;
     }
+#elif defined(__APPLE__)
+    mach_port_t host_port = mach_host_self();
+    vm_size_t page_size;
+    vm_statistics64_data_t vm_stat;
+    mach_msg_type_number_t host_count = HOST_VM_INFO64_COUNT;
+
+    if (host_page_size(host_port, &page_size) == KERN_SUCCESS &&
+        host_statistics64(host_port, HOST_VM_INFO64, (host_info64_t)&vm_stat, &host_count) == KERN_SUCCESS) {
+        unsigned long free_mem = (unsigned long)(vm_stat.free_count * page_size);
+        unsigned long inactive_mem = (unsigned long)(vm_stat.inactive_count * page_size);
+        return free_mem + inactive_mem;
+    }
+#endif
     return 0;
 }
 
@@ -393,10 +463,21 @@ int facter_processor_count(void) {
 }
 
 long facter_uptime_seconds(void) {
+#ifdef __linux__
     struct sysinfo info;
     if (sysinfo(&info) == 0) {
         return info.uptime;
     }
+#elif defined(__APPLE__)
+    struct timeval boottime;
+    size_t len = sizeof(boottime);
+    int mib[2] = {CTL_KERN, KERN_BOOTTIME};
+
+    if (sysctl(mib, 2, &boottime, &len, NULL, 0) == 0) {
+        time_t now = time(NULL);
+        return (long)(now - boottime.tv_sec);
+    }
+#endif
     return 0;
 }
 
@@ -546,6 +627,7 @@ char *facter_macaddress(void) {
         /* Skip down interfaces */
         if (!(ifa->ifa_flags & IFF_UP)) continue;
 
+#ifdef __linux__
         /* Read MAC from /sys */
         char path[256];
         snprintf(path, sizeof(path), "/sys/class/net/%s/address", ifa->ifa_name);
@@ -555,6 +637,22 @@ char *facter_macaddress(void) {
             break;
         }
         puppet_free(mac);
+#elif defined(__APPLE__)
+        /* Get MAC address from link-layer address */
+        if (ifa->ifa_addr->sa_family == AF_LINK) {
+            struct sockaddr_dl *sdl = (struct sockaddr_dl *)ifa->ifa_addr;
+            if (sdl->sdl_alen == 6) {
+                unsigned char *mac = (unsigned char *)LLADDR(sdl);
+                char mac_str[18];
+                snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
+                        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+                if (strcmp(mac_str, "00:00:00:00:00:00") != 0) {
+                    result = puppet_strdup(mac_str);
+                    break;
+                }
+            }
+        }
+#endif
     }
 
     freeifaddrs(ifaddr);
@@ -602,7 +700,8 @@ facter_interface_t *facter_interfaces(size_t *count) {
     for (size_t i = 0; i < seen_count; i++) {
         interfaces[iface_count].name = puppet_strdup(seen[i]);
 
-        /* Get MAC address */
+#ifdef __linux__
+        /* Get MAC address from /sys */
         char path[256];
         snprintf(path, sizeof(path), "/sys/class/net/%s/address", seen[i]);
         interfaces[iface_count].mac = read_file_line(path);
@@ -614,12 +713,29 @@ facter_interface_t *facter_interfaces(size_t *count) {
             interfaces[iface_count].mtu = atoi(mtu_str);
             puppet_free(mtu_str);
         }
+#endif
 
         /* Get UP status and addresses from ifaddrs */
         for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
             if (strcmp(ifa->ifa_name, seen[i]) != 0) continue;
 
             interfaces[iface_count].up = (ifa->ifa_flags & IFF_UP) != 0;
+
+#ifdef __APPLE__
+            /* Get MAC address from link-layer address */
+            if (ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_LINK) {
+                struct sockaddr_dl *sdl = (struct sockaddr_dl *)ifa->ifa_addr;
+                if (sdl->sdl_alen == 6) {
+                    unsigned char *mac = (unsigned char *)LLADDR(sdl);
+                    char mac_str[18];
+                    snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
+                            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+                    interfaces[iface_count].mac = puppet_strdup(mac_str);
+                }
+                /* Get MTU on macOS */
+                interfaces[iface_count].mtu = sdl->sdl_data[sdl->sdl_nlen];
+            }
+#endif
 
             if (ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_INET) {
                 struct sockaddr_in *addr = (struct sockaddr_in *)ifa->ifa_addr;
@@ -780,6 +896,7 @@ static void collect_processor_facts(facter_ctx_t *ctx) {
     facter_set_integer(ctx, "processorcount", count);
     facter_set_integer(ctx, "processors.count", count);
 
+#ifdef __linux__
     /* Get processor model from /proc/cpuinfo */
     char *cpuinfo = read_file_contents("/proc/cpuinfo", 0);
     if (cpuinfo) {
@@ -798,6 +915,15 @@ static void collect_processor_facts(facter_ctx_t *ctx) {
         }
         puppet_free(cpuinfo);
     }
+#elif defined(__APPLE__)
+    /* Get processor model from sysctl */
+    char cpu_brand[256];
+    size_t len = sizeof(cpu_brand);
+    if (sysctlbyname("machdep.cpu.brand_string", &cpu_brand, &len, NULL, 0) == 0) {
+        facter_set_string(ctx, "processor0", cpu_brand);
+        facter_set_string(ctx, "processors.models.0", cpu_brand);
+    }
+#endif
 }
 
 static void collect_network_facts(facter_ctx_t *ctx) {

@@ -8,8 +8,9 @@ TEST_DIR="$SCRIPT_DIR/puppet"
 FAILED=0
 PASSED=0
 
-# Set library path
+# Set library path (LD_LIBRARY_PATH for Linux, DYLD_LIBRARY_PATH for macOS)
 export LD_LIBRARY_PATH="$PROJECT_DIR/compiler/.libs:$PROJECT_DIR/common/.libs:$LD_LIBRARY_PATH"
+export DYLD_LIBRARY_PATH="$PROJECT_DIR/compiler/.libs:$PROJECT_DIR/common/.libs:$DYLD_LIBRARY_PATH"
 
 # Color codes for output
 RED='\033[0;31m'
