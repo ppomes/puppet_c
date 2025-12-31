@@ -525,6 +525,80 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "reduce") == 0) {
                 return puppet_func_reduce(expr, env);
             }
+
+            // Validation functions (legacy stdlib)
+            else if (strcmp(func_name, "validate_re") == 0) {
+                return puppet_func_validate_re(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "validate_hash") == 0) {
+                return puppet_func_validate_hash(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "validate_string") == 0) {
+                return puppet_func_validate_string(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "validate_array") == 0) {
+                return puppet_func_validate_array(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "validate_bool") == 0) {
+                return puppet_func_validate_bool(&expr->data.funcall.args, env);
+            }
+
+            // Version comparison
+            else if (strcmp(func_name, "versioncmp") == 0) {
+                return puppet_func_versioncmp(&expr->data.funcall.args, env);
+            }
+
+            // Domain/IP validation
+            else if (strcmp(func_name, "is_domain_name") == 0) {
+                return puppet_func_is_domain_name(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "is_ip_address") == 0) {
+                return puppet_func_is_ip_address(&expr->data.funcall.args, env);
+            }
+
+            // Resource creation
+            else if (strcmp(func_name, "create_resources") == 0) {
+                return puppet_func_create_resources(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "ensure_packages") == 0) {
+                return puppet_func_ensure_packages(&expr->data.funcall.args, env);
+            }
+
+            // Conversion functions
+            else if (strcmp(func_name, "any2array") == 0) {
+                return puppet_func_any2array(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "str2bool") == 0) {
+                return puppet_func_str2bool(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "bool2str") == 0) {
+                return puppet_func_bool2str(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "type") == 0 || strcmp(func_name, "type_of") == 0) {
+                return puppet_func_type(&expr->data.funcall.args, env);
+            }
+
+            // Random functions
+            else if (strcmp(func_name, "fqdn_rand") == 0) {
+                return puppet_func_fqdn_rand(&expr->data.funcall.args, env);
+            }
+
+            // Type assertion
+            else if (strcmp(func_name, "assert_type") == 0) {
+                return puppet_func_assert_type(&expr->data.funcall.args, env);
+            }
+
+            // Data access
+            else if (strcmp(func_name, "dig") == 0) {
+                return puppet_func_dig(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "pick") == 0) {
+                return puppet_func_pick(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "pick_default") == 0) {
+                return puppet_func_pick_default(&expr->data.funcall.args, env);
+            }
+
             else {
                 puppet_error("Unknown function: %s", func_name);
                 return puppet_value_create_undef();

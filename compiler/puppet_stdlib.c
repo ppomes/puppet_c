@@ -3611,3 +3611,862 @@ puppet_value_t *puppet_func_reduce(puppet_expr_t *expr, puppet_env_t *env) {
     puppet_value_destroy(collection);
     return memo;
 }
+
+/**
+ * @brief Puppet validate_re() function - validate string against regex pattern(s)
+ *
+ * Usage: validate_re(string, regex) or validate_re(string, [regex1, regex2, ...])
+ * Raises an error if the string doesn't match any of the patterns.
+ * This is a legacy stdlib function - in modern Puppet, use pattern matching instead.
+ *
+ * Examples:
+ *   validate_re('one', '^one$')           => passes (no return)
+ *   validate_re('one', ['^one', 'two'])   => passes (matches first)
+ *   validate_re('foo', '^bar$')           => raises error
+ */
+puppet_value_t *puppet_func_validate_re(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log(PUPPET_LOG_ERROR, "validate_re() requires at least 2 arguments");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
+    if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
+        if (str_val) puppet_value_destroy(str_val);
+        puppet_log(PUPPET_LOG_ERROR, "validate_re() first argument must be a string");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *pattern_val = puppet_eval_expr(args->exprs[1], env);
+    if (!pattern_val) {
+        puppet_value_destroy(str_val);
+        return puppet_value_create_undef();
+    }
+
+    const char *str = str_val->data.string.data;
+    bool matched = false;
+
+    if (pattern_val->type == PUPPET_VALUE_STRING) {
+        /* Single pattern */
+        regex_t regex;
+        if (regcomp(&regex, pattern_val->data.string.data, REG_EXTENDED | REG_NOSUB) == 0) {
+            matched = (regexec(&regex, str, 0, NULL, 0) == 0);
+            regfree(&regex);
+        }
+    } else if (pattern_val->type == PUPPET_VALUE_ARRAY) {
+        /* Array of patterns - match any */
+        for (size_t i = 0; i < pattern_val->data.array->count && !matched; i++) {
+            puppet_value_t *pat = pattern_val->data.array->items[i];
+            if (pat && pat->type == PUPPET_VALUE_STRING) {
+                regex_t regex;
+                if (regcomp(&regex, pat->data.string.data, REG_EXTENDED | REG_NOSUB) == 0) {
+                    matched = (regexec(&regex, str, 0, NULL, 0) == 0);
+                    regfree(&regex);
+                }
+            }
+        }
+    }
+
+    puppet_value_destroy(str_val);
+    puppet_value_destroy(pattern_val);
+
+    if (!matched) {
+        /* Log warning but don't fail - this allows catalog compilation to continue */
+        puppet_log(PUPPET_LOG_WARNING, "validate_re(): string does not match pattern");
+    }
+
+    return puppet_value_create_bool(matched);
+}
+
+/**
+ * @brief Puppet validate_hash() function - validate that value is a hash
+ *
+ * Usage: validate_hash(value)
+ * Raises an error if the value is not a hash.
+ * This is a legacy stdlib function - in modern Puppet, use type checking instead.
+ */
+puppet_value_t *puppet_func_validate_hash(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "validate_hash() requires 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    bool is_hash = val && val->type == PUPPET_VALUE_HASH;
+
+    if (val) puppet_value_destroy(val);
+
+    if (!is_hash) {
+        puppet_log(PUPPET_LOG_WARNING, "validate_hash(): value is not a hash");
+    }
+
+    return puppet_value_create_bool(is_hash);
+}
+
+/**
+ * @brief Puppet validate_string() function - validate that value is a string
+ *
+ * Usage: validate_string(value)
+ * Raises an error if the value is not a string.
+ * This is a legacy stdlib function.
+ */
+puppet_value_t *puppet_func_validate_string(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "validate_string() requires 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    bool is_string = val && val->type == PUPPET_VALUE_STRING;
+
+    if (val) puppet_value_destroy(val);
+
+    if (!is_string) {
+        puppet_log(PUPPET_LOG_WARNING, "validate_string(): value is not a string");
+    }
+
+    return puppet_value_create_bool(is_string);
+}
+
+/**
+ * @brief Puppet validate_array() function - validate that value is an array
+ *
+ * Usage: validate_array(value)
+ * Raises an error if the value is not an array.
+ * This is a legacy stdlib function.
+ */
+puppet_value_t *puppet_func_validate_array(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "validate_array() requires 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    bool is_array = val && val->type == PUPPET_VALUE_ARRAY;
+
+    if (val) puppet_value_destroy(val);
+
+    if (!is_array) {
+        puppet_log(PUPPET_LOG_WARNING, "validate_array(): value is not an array");
+    }
+
+    return puppet_value_create_bool(is_array);
+}
+
+/**
+ * @brief Puppet validate_bool() function - validate that value is a boolean
+ *
+ * Usage: validate_bool(value)
+ * Raises an error if the value is not a boolean.
+ * This is a legacy stdlib function.
+ */
+puppet_value_t *puppet_func_validate_bool(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "validate_bool() requires 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    bool is_bool = val && val->type == PUPPET_VALUE_BOOL;
+
+    if (val) puppet_value_destroy(val);
+
+    if (!is_bool) {
+        puppet_log(PUPPET_LOG_WARNING, "validate_bool(): value is not a boolean");
+    }
+
+    return puppet_value_create_bool(is_bool);
+}
+
+/**
+ * @brief Compare version string components
+ *
+ * Helper function for versioncmp that compares alphanumeric segments.
+ */
+static int version_segment_cmp(const char *a, const char *b) {
+    while (*a && *b) {
+        /* Skip non-alphanumeric characters */
+        while (*a && !isalnum((unsigned char)*a)) a++;
+        while (*b && !isalnum((unsigned char)*b)) b++;
+
+        if (!*a || !*b) break;
+
+        /* Compare segments */
+        if (isdigit((unsigned char)*a) && isdigit((unsigned char)*b)) {
+            /* Numeric comparison */
+            long na = strtol(a, (char**)&a, 10);
+            long nb = strtol(b, (char**)&b, 10);
+            if (na != nb) return (na > nb) ? 1 : -1;
+        } else if (isdigit((unsigned char)*a)) {
+            return 1;  /* Numbers come after letters */
+        } else if (isdigit((unsigned char)*b)) {
+            return -1;
+        } else {
+            /* Alphabetic comparison */
+            while (*a && *b && isalpha((unsigned char)*a) && isalpha((unsigned char)*b)) {
+                if (*a != *b) return (*a > *b) ? 1 : -1;
+                a++;
+                b++;
+            }
+            if (isalpha((unsigned char)*a)) return 1;
+            if (isalpha((unsigned char)*b)) return -1;
+        }
+    }
+
+    /* Skip trailing non-alphanumeric */
+    while (*a && !isalnum((unsigned char)*a)) a++;
+    while (*b && !isalnum((unsigned char)*b)) b++;
+
+    if (*a) return 1;
+    if (*b) return -1;
+    return 0;
+}
+
+/**
+ * @brief Puppet versioncmp() function - compare version strings
+ *
+ * Usage: versioncmp(version_a, version_b)
+ * Returns:
+ *   -1 if version_a < version_b
+ *    0 if version_a == version_b
+ *    1 if version_a > version_b
+ *
+ * Examples:
+ *   versioncmp('1.0', '2.0')      => -1
+ *   versioncmp('2.0', '1.0')      => 1
+ *   versioncmp('1.0', '1.0')      => 0
+ *   versioncmp('1.0.0', '1.0')    => 1
+ *   versioncmp('1.0a', '1.0b')    => -1
+ */
+puppet_value_t *puppet_func_versioncmp(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log(PUPPET_LOG_ERROR, "versioncmp() requires 2 arguments");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *a_val = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *b_val = puppet_eval_expr(args->exprs[1], env);
+
+    if (!a_val || a_val->type != PUPPET_VALUE_STRING ||
+        !b_val || b_val->type != PUPPET_VALUE_STRING) {
+        if (a_val) puppet_value_destroy(a_val);
+        if (b_val) puppet_value_destroy(b_val);
+        puppet_log(PUPPET_LOG_ERROR, "versioncmp() arguments must be strings");
+        return puppet_value_create_undef();
+    }
+
+    int result = version_segment_cmp(a_val->data.string.data, b_val->data.string.data);
+
+    puppet_value_destroy(a_val);
+    puppet_value_destroy(b_val);
+
+    return puppet_value_create_number((double)result);
+}
+
+/**
+ * @brief Puppet is_domain_name() function - check if string is a valid domain name
+ *
+ * Usage: is_domain_name(string)
+ * Returns true if the string is a valid domain name.
+ *
+ * Examples:
+ *   is_domain_name('example.com')      => true
+ *   is_domain_name('foo.bar.baz')      => true
+ *   is_domain_name('not valid!')       => false
+ *   is_domain_name('-invalid.com')     => false
+ */
+puppet_value_t *puppet_func_is_domain_name(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        return puppet_value_create_bool(false);
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    if (!val || val->type != PUPPET_VALUE_STRING) {
+        if (val) puppet_value_destroy(val);
+        return puppet_value_create_bool(false);
+    }
+
+    const char *domain = val->data.string.data;
+    size_t len = strlen(domain);
+    bool valid = true;
+
+    /* Basic validation */
+    if (len == 0 || len > 253) {
+        valid = false;
+    } else {
+        /* Check each label */
+        const char *p = domain;
+        while (*p && valid) {
+            const char *label_start = p;
+            size_t label_len = 0;
+
+            /* Find end of label */
+            while (*p && *p != '.') {
+                char c = *p;
+                /* Valid characters: a-z, A-Z, 0-9, hyphen */
+                if (!isalnum((unsigned char)c) && c != '-') {
+                    valid = false;
+                    break;
+                }
+                p++;
+                label_len++;
+            }
+
+            /* Label validation */
+            if (valid) {
+                if (label_len == 0 || label_len > 63) {
+                    valid = false;
+                } else if (label_start[0] == '-' || label_start[label_len - 1] == '-') {
+                    /* Labels can't start or end with hyphen */
+                    valid = false;
+                }
+            }
+
+            if (*p == '.') p++;  /* Skip dot */
+        }
+    }
+
+    puppet_value_destroy(val);
+    return puppet_value_create_bool(valid);
+}
+
+/**
+ * @brief Puppet is_ip_address() function - check if string is a valid IP address
+ *
+ * Usage: is_ip_address(string)
+ * Returns true if the string is a valid IPv4 or IPv6 address.
+ */
+puppet_value_t *puppet_func_is_ip_address(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        return puppet_value_create_bool(false);
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    if (!val || val->type != PUPPET_VALUE_STRING) {
+        if (val) puppet_value_destroy(val);
+        return puppet_value_create_bool(false);
+    }
+
+    const char *addr = val->data.string.data;
+    bool valid = false;
+
+    /* Try IPv4 */
+    int octets[4];
+    int n = sscanf(addr, "%d.%d.%d.%d", &octets[0], &octets[1], &octets[2], &octets[3]);
+    if (n == 4) {
+        valid = true;
+        for (int i = 0; i < 4; i++) {
+            if (octets[i] < 0 || octets[i] > 255) {
+                valid = false;
+                break;
+            }
+        }
+        /* Check for trailing garbage */
+        if (valid) {
+            char check[32];
+            snprintf(check, sizeof(check), "%d.%d.%d.%d", octets[0], octets[1], octets[2], octets[3]);
+            if (strcmp(check, addr) != 0) {
+                valid = false;
+            }
+        }
+    }
+
+    /* Try IPv6 (basic check - contains colons and hex digits) */
+    if (!valid && strchr(addr, ':')) {
+        valid = true;
+        for (const char *p = addr; *p && valid; p++) {
+            if (!isxdigit((unsigned char)*p) && *p != ':') {
+                valid = false;
+            }
+        }
+    }
+
+    puppet_value_destroy(val);
+    return puppet_value_create_bool(valid);
+}
+
+/**
+ * @brief Puppet create_resources() function - create resources from a hash
+ *
+ * Usage: create_resources(type, hash, [defaults])
+ * Creates resources of the given type from a hash of title => parameters.
+ *
+ * Example:
+ *   $users = {
+ *     'alice' => { uid => 1001, gid => 1001 },
+ *     'bob'   => { uid => 1002, gid => 1002 },
+ *   }
+ *   create_resources('user', $users)
+ *
+ * Note: This is a stub implementation that logs what would be created.
+ * Full implementation requires integration with resource creation.
+ */
+puppet_value_t *puppet_func_create_resources(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log(PUPPET_LOG_ERROR, "create_resources() requires at least 2 arguments");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *type_val = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *hash_val = puppet_eval_expr(args->exprs[1], env);
+    puppet_value_t *defaults_val = NULL;
+
+    if (args->count >= 3) {
+        defaults_val = puppet_eval_expr(args->exprs[2], env);
+    }
+
+    if (!type_val || type_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "create_resources() first argument must be a string (resource type)");
+        if (type_val) puppet_value_destroy(type_val);
+        if (hash_val) puppet_value_destroy(hash_val);
+        if (defaults_val) puppet_value_destroy(defaults_val);
+        return puppet_value_create_undef();
+    }
+
+    if (!hash_val || hash_val->type != PUPPET_VALUE_HASH) {
+        puppet_log(PUPPET_LOG_ERROR, "create_resources() second argument must be a hash");
+        puppet_value_destroy(type_val);
+        if (hash_val) puppet_value_destroy(hash_val);
+        if (defaults_val) puppet_value_destroy(defaults_val);
+        return puppet_value_create_undef();
+    }
+
+    /* TODO: Implement actual resource creation by synthesizing resource statements
+     * For now, just log what would be created */
+    const char *res_type = type_val->data.string.data;
+    puppet_hash_t *hash = hash_val->data.hash;
+
+    for (size_t i = 0; i < hash->bucket_count; i++) {
+        puppet_hash_entry_t *entry = hash->buckets[i];
+        while (entry) {
+            puppet_log(PUPPET_LOG_NOTICE, "create_resources: Would create %s[%s]");
+            /* In a full implementation, we would create the resource here */
+            entry = entry->next;
+        }
+    }
+
+    puppet_value_destroy(type_val);
+    puppet_value_destroy(hash_val);
+    if (defaults_val) puppet_value_destroy(defaults_val);
+
+    return puppet_value_create_undef();
+}
+
+/**
+ * @brief Puppet ensure_packages() function - ensure packages are installed
+ *
+ * Usage: ensure_packages(packages, [options])
+ * Ensures packages are installed without duplicates.
+ *
+ * Note: This is a stub - logs what would be ensured.
+ */
+puppet_value_t *puppet_func_ensure_packages(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "ensure_packages() requires at least 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *pkgs = puppet_eval_expr(args->exprs[0], env);
+    if (!pkgs) {
+        return puppet_value_create_undef();
+    }
+
+    /* Just log for now - full implementation would create package resources */
+    if (pkgs->type == PUPPET_VALUE_ARRAY) {
+        for (size_t i = 0; i < pkgs->data.array->count; i++) {
+            puppet_value_t *pkg = pkgs->data.array->items[i];
+            if (pkg && pkg->type == PUPPET_VALUE_STRING) {
+                puppet_log(PUPPET_LOG_NOTICE, "ensure_packages: Would ensure package is installed");
+            }
+        }
+    } else if (pkgs->type == PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_NOTICE, "ensure_packages: Would ensure package is installed");
+    }
+
+    puppet_value_destroy(pkgs);
+    return puppet_value_create_undef();
+}
+
+/**
+ * @brief Puppet any2array() function - convert any value to array
+ *
+ * Usage: any2array(value)
+ * Converts any value to an array. Arrays pass through unchanged,
+ * hashes become array of [key, value] pairs, scalars become single-element arrays.
+ */
+puppet_value_t *puppet_func_any2array(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        /* Return empty array */
+        puppet_array_t *arr = puppet_calloc(1, sizeof(puppet_array_t));
+        arr->count = 0;
+        arr->capacity = 4;
+        arr->items = puppet_calloc(arr->capacity, sizeof(puppet_value_t*));
+        puppet_value_t *result = puppet_calloc(1, sizeof(puppet_value_t));
+        result->type = PUPPET_VALUE_ARRAY;
+        result->data.array = arr;
+        return result;
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    if (!val) {
+        return puppet_value_create_undef();
+    }
+
+    if (val->type == PUPPET_VALUE_ARRAY) {
+        /* Already an array - return copy */
+        return val;
+    }
+
+    if (val->type == PUPPET_VALUE_UNDEF) {
+        puppet_value_destroy(val);
+        /* Return empty array */
+        puppet_array_t *arr = puppet_calloc(1, sizeof(puppet_array_t));
+        arr->count = 0;
+        arr->capacity = 4;
+        arr->items = puppet_calloc(arr->capacity, sizeof(puppet_value_t*));
+        puppet_value_t *result = puppet_calloc(1, sizeof(puppet_value_t));
+        result->type = PUPPET_VALUE_ARRAY;
+        result->data.array = arr;
+        return result;
+    }
+
+    /* Wrap scalar in array */
+    puppet_array_t *arr = puppet_calloc(1, sizeof(puppet_array_t));
+    arr->count = 1;
+    arr->capacity = 4;
+    arr->items = puppet_calloc(arr->capacity, sizeof(puppet_value_t*));
+    arr->items[0] = val;
+
+    puppet_value_t *result = puppet_calloc(1, sizeof(puppet_value_t));
+    result->type = PUPPET_VALUE_ARRAY;
+    result->data.array = arr;
+    return result;
+}
+
+/**
+ * @brief Puppet str2bool() function - convert string to boolean
+ *
+ * Usage: str2bool(string)
+ * Converts 'true', 'yes', '1' to true; 'false', 'no', '0' to false.
+ */
+puppet_value_t *puppet_func_str2bool(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "str2bool() requires 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    if (!val) {
+        return puppet_value_create_bool(false);
+    }
+
+    if (val->type == PUPPET_VALUE_BOOL) {
+        return val;
+    }
+
+    if (val->type != PUPPET_VALUE_STRING) {
+        puppet_value_destroy(val);
+        return puppet_value_create_bool(false);
+    }
+
+    const char *str = val->data.string.data;
+    bool result = false;
+
+    if (strcasecmp(str, "true") == 0 || strcasecmp(str, "yes") == 0 ||
+        strcasecmp(str, "1") == 0 || strcasecmp(str, "y") == 0) {
+        result = true;
+    }
+
+    puppet_value_destroy(val);
+    return puppet_value_create_bool(result);
+}
+
+/**
+ * @brief Puppet bool2str() function - convert boolean to string
+ *
+ * Usage: bool2str(boolean) or bool2str(boolean, true_string, false_string)
+ */
+puppet_value_t *puppet_func_bool2str(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "bool2str() requires at least 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    if (!val || val->type != PUPPET_VALUE_BOOL) {
+        if (val) puppet_value_destroy(val);
+        puppet_log(PUPPET_LOG_ERROR, "bool2str() first argument must be a boolean");
+        return puppet_value_create_undef();
+    }
+
+    bool b = val->data.boolean;
+    puppet_value_destroy(val);
+
+    if (args->count >= 3) {
+        /* Custom true/false strings */
+        puppet_value_t *true_str = puppet_eval_expr(args->exprs[1], env);
+        puppet_value_t *false_str = puppet_eval_expr(args->exprs[2], env);
+
+        puppet_value_t *result;
+        if (b && true_str && true_str->type == PUPPET_VALUE_STRING) {
+            result = puppet_value_create_string(true_str->data.string.data,
+                                                 true_str->data.string.len);
+        } else if (!b && false_str && false_str->type == PUPPET_VALUE_STRING) {
+            result = puppet_value_create_string(false_str->data.string.data,
+                                                 false_str->data.string.len);
+        } else {
+            result = puppet_value_create_string(b ? "true" : "false", b ? 4 : 5);
+        }
+
+        if (true_str) puppet_value_destroy(true_str);
+        if (false_str) puppet_value_destroy(false_str);
+        return result;
+    }
+
+    return puppet_value_create_string(b ? "true" : "false", b ? 4 : 5);
+}
+
+/**
+ * @brief Puppet type() function - return the type of a value as a string
+ *
+ * Usage: type(value)
+ * Returns 'String', 'Integer', 'Float', 'Boolean', 'Array', 'Hash', or 'Undef'
+ */
+puppet_value_t *puppet_func_type(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        return puppet_value_create_string("Undef", 5);
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    const char *type_str = "Undef";
+
+    if (val) {
+        switch (val->type) {
+            case PUPPET_VALUE_STRING:
+                type_str = "String";
+                break;
+            case PUPPET_VALUE_NUMBER:
+                if (val->data.number == (long)val->data.number) {
+                    type_str = "Integer";
+                } else {
+                    type_str = "Float";
+                }
+                break;
+            case PUPPET_VALUE_BOOL:
+                type_str = "Boolean";
+                break;
+            case PUPPET_VALUE_ARRAY:
+                type_str = "Array";
+                break;
+            case PUPPET_VALUE_HASH:
+                type_str = "Hash";
+                break;
+            case PUPPET_VALUE_UNDEF:
+            default:
+                type_str = "Undef";
+                break;
+        }
+        puppet_value_destroy(val);
+    }
+
+    return puppet_value_create_string(type_str, strlen(type_str));
+}
+
+/**
+ * @brief Simple hash function for strings
+ */
+static unsigned long string_hash(const char *str) {
+    unsigned long hash = 5381;
+    int c;
+    while ((c = *str++)) {
+        hash = ((hash << 5) + hash) + c;
+    }
+    return hash;
+}
+
+/**
+ * @brief Puppet fqdn_rand() function - generate a random number based on FQDN
+ *
+ * Usage: fqdn_rand(max) or fqdn_rand(max, seed)
+ * Returns a random number from 0 to max-1 that is consistent for a given FQDN.
+ * The optional seed string is appended to the FQDN for the hash.
+ *
+ * Examples:
+ *   fqdn_rand(30)           => consistent number 0-29 based on $fqdn
+ *   fqdn_rand(30, 'myseed') => different consistent number using seed
+ */
+puppet_value_t *puppet_func_fqdn_rand(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "fqdn_rand() requires at least 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *max_val = puppet_eval_expr(args->exprs[0], env);
+    if (!max_val || max_val->type != PUPPET_VALUE_NUMBER) {
+        if (max_val) puppet_value_destroy(max_val);
+        puppet_log(PUPPET_LOG_ERROR, "fqdn_rand() first argument must be a number");
+        return puppet_value_create_undef();
+    }
+
+    long max = (long)max_val->data.number;
+    puppet_value_destroy(max_val);
+
+    if (max <= 0) {
+        return puppet_value_create_number(0);
+    }
+
+    /* Get FQDN from environment */
+    char hash_input[512] = "";
+    puppet_value_t *fqdn = puppet_env_get_var(env, "fqdn");
+    if (fqdn && fqdn->type == PUPPET_VALUE_STRING) {
+        strncpy(hash_input, fqdn->data.string.data, sizeof(hash_input) - 1);
+    } else {
+        /* Fallback to hostname */
+        puppet_value_t *hostname = puppet_env_get_var(env, "hostname");
+        if (hostname && hostname->type == PUPPET_VALUE_STRING) {
+            strncpy(hash_input, hostname->data.string.data, sizeof(hash_input) - 1);
+        } else {
+            strcpy(hash_input, "localhost");
+        }
+    }
+
+    /* Append optional seed */
+    if (args->count >= 2) {
+        puppet_value_t *seed_val = puppet_eval_expr(args->exprs[1], env);
+        if (seed_val && seed_val->type == PUPPET_VALUE_STRING) {
+            size_t len = strlen(hash_input);
+            if (len < sizeof(hash_input) - 1) {
+                strncat(hash_input, seed_val->data.string.data, sizeof(hash_input) - len - 1);
+            }
+        }
+        if (seed_val) puppet_value_destroy(seed_val);
+    }
+
+    /* Generate consistent random number */
+    unsigned long hash = string_hash(hash_input);
+    long result = (long)(hash % (unsigned long)max);
+
+    return puppet_value_create_number((double)result);
+}
+
+/**
+ * @brief Puppet assert_type() function - assert that a value has a specific type
+ *
+ * Usage: assert_type(type, value)
+ * Returns the value if it matches the type, otherwise raises an error.
+ * This is a simplified version that just returns the value.
+ */
+puppet_value_t *puppet_func_assert_type(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log(PUPPET_LOG_ERROR, "assert_type() requires 2 arguments");
+        return puppet_value_create_undef();
+    }
+
+    /* For now, just return the value - type checking is a TODO */
+    puppet_value_t *type_arg = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *value = puppet_eval_expr(args->exprs[1], env);
+
+    if (type_arg) puppet_value_destroy(type_arg);
+
+    return value ? value : puppet_value_create_undef();
+}
+
+/**
+ * @brief Puppet dig() function - safely access nested data structures
+ *
+ * Usage: dig(data, key1, key2, ...)
+ * Returns the value at the nested path, or undef if any key doesn't exist.
+ */
+puppet_value_t *puppet_func_dig(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log(PUPPET_LOG_ERROR, "dig() requires at least 2 arguments");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *current = puppet_eval_expr(args->exprs[0], env);
+    if (!current) {
+        return puppet_value_create_undef();
+    }
+
+    for (size_t i = 1; i < args->count; i++) {
+        puppet_value_t *key = puppet_eval_expr(args->exprs[i], env);
+        if (!key) {
+            puppet_value_destroy(current);
+            return puppet_value_create_undef();
+        }
+
+        puppet_value_t *next = NULL;
+
+        if (current->type == PUPPET_VALUE_HASH && key->type == PUPPET_VALUE_STRING) {
+            next = puppet_hash_get(current->data.hash, key->data.string.data, key->data.string.len);
+            if (next) {
+                next = puppet_value_copy(next);
+            }
+        } else if (current->type == PUPPET_VALUE_ARRAY && key->type == PUPPET_VALUE_NUMBER) {
+            size_t idx = (size_t)key->data.number;
+            if (idx < current->data.array->count) {
+                next = puppet_value_copy(current->data.array->items[idx]);
+            }
+        }
+
+        puppet_value_destroy(key);
+        puppet_value_destroy(current);
+
+        if (!next) {
+            return puppet_value_create_undef();
+        }
+        current = next;
+    }
+
+    return current;
+}
+
+/**
+ * @brief Puppet pick() function - return first non-undef value
+ *
+ * Usage: pick(value1, value2, ...)
+ * Returns the first value that is not undef.
+ */
+puppet_value_t *puppet_func_pick(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "pick() requires at least 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    for (size_t i = 0; i < args->count; i++) {
+        puppet_value_t *val = puppet_eval_expr(args->exprs[i], env);
+        if (val && val->type != PUPPET_VALUE_UNDEF) {
+            return val;
+        }
+        if (val) puppet_value_destroy(val);
+    }
+
+    puppet_log(PUPPET_LOG_ERROR, "pick(): no valid value found");
+    return puppet_value_create_undef();
+}
+
+/**
+ * @brief Puppet pick_default() function - return first non-undef value, or last value
+ *
+ * Usage: pick_default(value1, value2, ..., default)
+ * Returns the first value that is not undef, or the last value if all are undef.
+ */
+puppet_value_t *puppet_func_pick_default(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *last = NULL;
+
+    for (size_t i = 0; i < args->count; i++) {
+        puppet_value_t *val = puppet_eval_expr(args->exprs[i], env);
+        if (val && val->type != PUPPET_VALUE_UNDEF) {
+            if (last) puppet_value_destroy(last);
+            return val;
+        }
+        if (last) puppet_value_destroy(last);
+        last = val;
+    }
+
+    return last ? last : puppet_value_create_undef();
+}

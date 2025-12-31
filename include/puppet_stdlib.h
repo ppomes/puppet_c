@@ -93,6 +93,41 @@ puppet_value_t *puppet_func_map(puppet_expr_t *expr, puppet_env_t *env);
 puppet_value_t *puppet_func_filter(puppet_expr_t *expr, puppet_env_t *env);
 puppet_value_t *puppet_func_reduce(puppet_expr_t *expr, puppet_env_t *env);
 
+// Validation functions (legacy stdlib)
+puppet_value_t *puppet_func_validate_re(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_validate_hash(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_validate_string(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_validate_array(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_validate_bool(puppet_expr_list_t *args, puppet_env_t *env);
+
+// Version comparison
+puppet_value_t *puppet_func_versioncmp(puppet_expr_list_t *args, puppet_env_t *env);
+
+// Domain/IP validation
+puppet_value_t *puppet_func_is_domain_name(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_is_ip_address(puppet_expr_list_t *args, puppet_env_t *env);
+
+// Resource creation
+puppet_value_t *puppet_func_create_resources(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_ensure_packages(puppet_expr_list_t *args, puppet_env_t *env);
+
+// Conversion functions
+puppet_value_t *puppet_func_any2array(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_str2bool(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_bool2str(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_type(puppet_expr_list_t *args, puppet_env_t *env);
+
+// Random functions
+puppet_value_t *puppet_func_fqdn_rand(puppet_expr_list_t *args, puppet_env_t *env);
+
+// Type assertion
+puppet_value_t *puppet_func_assert_type(puppet_expr_list_t *args, puppet_env_t *env);
+
+// Data access
+puppet_value_t *puppet_func_dig(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_pick(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_pick_default(puppet_expr_list_t *args, puppet_env_t *env);
+
 // Utility function to convert values to strings for logging
 char *puppet_value_to_display_string(puppet_value_t *value);
 
