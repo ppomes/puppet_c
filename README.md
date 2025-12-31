@@ -18,11 +18,32 @@ Prerequisites:
 - libcurl (for puppetc-agent)
 - libsqlite3 (for PuppetDB)
 
+### Installing Dependencies
+
+**macOS (Homebrew):**
+```bash
+brew install tree-sitter ruby@3.3 libyaml openssl libmicrohttpd curl sqlite3 autoconf automake libtool
+```
+
+**Debian/Ubuntu (APT):**
+```bash
+sudo apt-get install build-essential autoconf automake libtool \
+  libtree-sitter-dev ruby3.0-dev libyaml-dev libssl-dev \
+  libmicrohttpd-dev libcurl4-openssl-dev libsqlite3-dev
+```
+
+### Building from Source
+
 ```bash
 autoreconf -i
 ./configure
 make
 make check
+```
+
+If using a specific Ruby version on macOS:
+```bash
+./configure --with-ruby=/opt/homebrew/opt/ruby@3.3
 ```
 
 ## Docker
