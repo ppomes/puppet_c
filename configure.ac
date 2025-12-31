@@ -45,6 +45,16 @@ if test -n "$ruby_prefix"; then
     if test -x "$RUBY"; then
         ruby_version=`$RUBY -e 'puts RUBY_VERSION'`
         ruby_arch=`$RUBY -e 'puts RUBY_PLATFORM'`
+
+        # Check Ruby version - reject Ruby 4.0 and later
+        AC_MSG_CHECKING([if Ruby version $ruby_version is supported])
+        ruby_major=`echo $ruby_version | cut -d. -f1`
+        if test "$ruby_major" -ge 4; then
+            AC_MSG_RESULT([no])
+            AC_MSG_ERROR([Ruby $ruby_version is not supported. Ruby 4.0+ has breaking changes that are incompatible with ERB embedding. Please use Ruby 3.x (recommended: Ruby 3.4)])
+        fi
+        AC_MSG_RESULT([yes])
+
         # Try to find the actual Ruby include directory
         ruby_include_base="$ruby_prefix/include"
         if test -d "$ruby_include_base/ruby-$ruby_version"; then
@@ -73,6 +83,16 @@ else
         if test -n "$RUBY"; then
             AC_MSG_CHECKING([for Ruby configuration])
             ruby_version=`$RUBY -e 'puts RUBY_VERSION'`
+
+            # Check Ruby version - reject Ruby 4.0 and later
+            AC_MSG_CHECKING([if Ruby version $ruby_version is supported])
+            ruby_major=`echo $ruby_version | cut -d. -f1`
+            if test "$ruby_major" -ge 4; then
+                AC_MSG_RESULT([no])
+                AC_MSG_ERROR([Ruby $ruby_version is not supported. Ruby 4.0+ has breaking changes that are incompatible with ERB embedding. Please use Ruby 3.x (recommended: Ruby 3.4)])
+            fi
+            AC_MSG_RESULT([yes])
+
             ruby_archdir=`$RUBY -e 'puts RbConfig::CONFIG[["archdir"]]'`
             ruby_includedir=`$RUBY -e 'puts RbConfig::CONFIG[["rubyhdrdir"]]'`
             ruby_libdir=`$RUBY -e 'puts RbConfig::CONFIG[["libdir"]]'`
