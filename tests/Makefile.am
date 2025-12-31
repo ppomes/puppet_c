@@ -45,10 +45,13 @@ EXTRA_DIST = \
     puppet/node_test.pp \
     data/common.yaml \
     test_iterators.sh \
-    test_collectors.sh
+    test_collectors.sh \
+    test_virtual.sh \
+    test_simple_core.sh \
+    test_erb.sh
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb
 	@echo "All tests completed."
 
 check-parser:
@@ -363,4 +366,37 @@ check-collectors:
 		exit 1; \
 	fi
 
-.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-memory check-asan
+check-virtual:
+	@echo "Running virtual resource realization tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_virtual.sh > output/virtual.out 2>&1; then \
+		echo "✅ All virtual resource tests passed!"; \
+	else \
+		echo "❌ Some virtual resource tests failed:"; \
+		sed 's/^/  /' output/virtual.out; \
+		exit 1; \
+	fi
+
+check-simple-core:
+	@echo "Running simple core function tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_simple_core.sh > output/simple_core.out 2>&1; then \
+		echo "✅ All simple core tests passed!"; \
+	else \
+		echo "❌ Some simple core tests failed:"; \
+		sed 's/^/  /' output/simple_core.out; \
+		exit 1; \
+	fi
+
+check-erb:
+	@echo "Running ERB template tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_erb.sh > output/erb.out 2>&1; then \
+		echo "✅ All ERB tests passed!"; \
+	else \
+		echo "❌ Some ERB tests failed:"; \
+		sed 's/^/  /' output/erb.out; \
+		exit 1; \
+	fi
+
+.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-memory check-asan
