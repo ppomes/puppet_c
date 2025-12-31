@@ -36,7 +36,7 @@ sudo apt-get install build-essential autoconf automake libtool \
 
 **Linux:**
 ```bash
-autoreconf -i
+./autogen.sh
 ./configure
 make
 make check
@@ -44,7 +44,7 @@ make check
 
 **macOS (with Homebrew dependencies):**
 ```bash
-autoreconf -i
+./autogen.sh
 ./configure \
   --with-treesitter=/opt/homebrew/opt/tree-sitter \
   --with-ruby=/opt/homebrew/opt/ruby@3.3 \
