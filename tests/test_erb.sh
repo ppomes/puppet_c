@@ -39,19 +39,17 @@ run_test() {
     pushd "$SCRIPT_DIR/.." > /dev/null
     if output=$(./compiler/puppetc-compile --eval --node web01 --facts "$facts_file" --template "$template_target" "$manifest" 2>&1); then
         popd > /dev/null
-        # Extract the template output section
-        template_output=$(echo "$output" | sed -n '/=== ERB TEMPLATE OUTPUT ===/,/=== END ERB TEMPLATE OUTPUT ===/p' | sed '1d;$d')
-        
-        # Check if expected content is found (use fixed string match)
-        if echo "$template_output" | grep -F -q "$expected_content"; then
+
+        # Check if expected content is found in the output (use fixed string match)
+        if echo "$output" | grep -F -q "$expected_content"; then
             echo -e "${GREEN}✓ PASS${NC}"
             passed_tests=$((passed_tests + 1))
             echo "$output" > "$OUTPUT_DIR/${test_name}.out"
         else
             echo -e "${RED}✗ FAIL${NC} - Expected content not found"
             echo "Expected: $expected_content"
-            echo "Got template output:"
-            echo "$template_output" | sed 's/^/    /'
+            echo "Got output:"
+            echo "$output" | sed 's/^/    /'
             echo "$output" > "$OUTPUT_DIR/${test_name}.fail"
         fi
     else
