@@ -18,8 +18,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Check if Ruby support was compiled in
-#ifdef HAVE_RUBY
 #include <ruby.h>
 #include <ruby/encoding.h>
 
@@ -351,50 +349,6 @@ int puppet_ruby_available(void) {
 const char *puppet_ruby_version(void) {
     return "Ruby 3.4.0";  // Static version string
 }
-
-#else  // No Ruby support
-
-puppet_ruby_context_t *puppet_ruby_init(void) {
-    printf("Warning: Ruby support not compiled in - ERB templates unavailable\n");
-    return NULL;
-}
-
-void puppet_ruby_cleanup(puppet_ruby_context_t *ctx) {
-    (void)ctx;  // Suppress unused parameter warning
-}
-
-void *puppet_value_to_ruby(puppet_value_t *value, puppet_ruby_context_t *ctx) {
-    (void)value; (void)ctx;
-    return NULL;
-}
-
-puppet_value_t *ruby_to_puppet_value(void *ruby_obj, puppet_ruby_context_t *ctx) {
-    (void)ruby_obj; (void)ctx;
-    return puppet_value_create_undef();
-}
-
-char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx) {
-    (void)env; (void)ruby_ctx;
-    printf("Error: ERB templates require Ruby support (template content: %.50s...)\n", 
-           template_content);
-    return NULL;
-}
-
-char *puppet_erb_file(const char *template_path, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx) {
-    (void)env; (void)ruby_ctx;
-    printf("Error: ERB templates require Ruby support (file: %s)\n", template_path);
-    return NULL;
-}
-
-int puppet_ruby_available(void) {
-    return 0;
-}
-
-const char *puppet_ruby_version(void) {
-    return "Not available";
-}
-
-#endif
 
 // Forward declaration for loader
 #include "puppet_loader.h"

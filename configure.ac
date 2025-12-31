@@ -16,91 +16,67 @@ PKG_CHECK_MODULES([TREESITTER], [tree-sitter], [
     AC_MSG_ERROR([tree-sitter not found. Install libtree-sitter-dev package.])
 ])
 
-# Check for Ruby support (optional)
-AC_ARG_ENABLE([ruby],
-    [AS_HELP_STRING([--enable-ruby], [Enable Ruby/ERB support])],
-    [enable_ruby=$enableval],
-    [enable_ruby=auto])
-
+# Check for Ruby (required for ERB templates)
 AC_ARG_WITH([ruby],
     [AS_HELP_STRING([--with-ruby=PATH], [Path to Ruby installation])],
     [ruby_prefix=$withval],
     [ruby_prefix=])
 
-if test "x$enable_ruby" != "xno"; then
-    if test -n "$ruby_prefix"; then
-        # User specified Ruby path
-        AC_MSG_CHECKING([for Ruby in $ruby_prefix])
-        RUBY="$ruby_prefix/bin/ruby"
-        if test -x "$RUBY"; then
-            ruby_version=`$RUBY -e 'puts RUBY_VERSION'`
-            ruby_arch=`$RUBY -e 'puts RUBY_PLATFORM'`
-            # Try to find the actual Ruby include directory
-            ruby_include_base="$ruby_prefix/include"
-            if test -d "$ruby_include_base/ruby-$ruby_version"; then
-                ruby_include_dir="$ruby_include_base/ruby-$ruby_version"
-            else
-                # Find any ruby-* directory
-                ruby_include_dir=`find $ruby_include_base -name "ruby-*" -type d 2>/dev/null | head -1`
-            fi
-            if test -n "$ruby_include_dir" -a -d "$ruby_include_dir"; then
-                RUBY_CFLAGS="-I$ruby_include_dir -I$ruby_include_dir/$ruby_arch"
-                RUBY_LIBS="-L$ruby_prefix/lib -lruby"
-                AC_MSG_RESULT([yes (found $ruby_include_dir)])
-                ruby_support=yes
-            else
-                AC_MSG_RESULT([no])
-                AC_MSG_ERROR([Ruby include directory not found in $ruby_prefix/include])
-            fi
+if test -n "$ruby_prefix"; then
+    # User specified Ruby path
+    AC_MSG_CHECKING([for Ruby in $ruby_prefix])
+    RUBY="$ruby_prefix/bin/ruby"
+    if test -x "$RUBY"; then
+        ruby_version=`$RUBY -e 'puts RUBY_VERSION'`
+        ruby_arch=`$RUBY -e 'puts RUBY_PLATFORM'`
+        # Try to find the actual Ruby include directory
+        ruby_include_base="$ruby_prefix/include"
+        if test -d "$ruby_include_base/ruby-$ruby_version"; then
+            ruby_include_dir="$ruby_include_base/ruby-$ruby_version"
+        else
+            # Find any ruby-* directory
+            ruby_include_dir=`find $ruby_include_base -name "ruby-*" -type d 2>/dev/null | head -1`
+        fi
+        if test -n "$ruby_include_dir" -a -d "$ruby_include_dir"; then
+            RUBY_CFLAGS="-I$ruby_include_dir -I$ruby_include_dir/$ruby_arch"
+            RUBY_LIBS="-L$ruby_prefix/lib -lruby"
+            AC_MSG_RESULT([yes (found $ruby_include_dir)])
         else
             AC_MSG_RESULT([no])
-            AC_MSG_ERROR([Ruby not found in $ruby_prefix])
+            AC_MSG_ERROR([Ruby include directory not found in $ruby_prefix/include])
         fi
     else
-        # Try pkg-config first
-        PKG_CHECK_MODULES([RUBY], [ruby], [
-            ruby_support=yes
-        ], [
-            # Fallback to finding Ruby executable
-            AC_PATH_PROG([RUBY], [ruby])
-            if test -n "$RUBY"; then
-                AC_MSG_CHECKING([for Ruby configuration])
-                ruby_version=`$RUBY -e 'puts RUBY_VERSION'`
-                ruby_archdir=`$RUBY -e 'puts RbConfig::CONFIG[["archdir"]]'`
-                ruby_includedir=`$RUBY -e 'puts RbConfig::CONFIG[["rubyhdrdir"]]'`
-                ruby_libdir=`$RUBY -e 'puts RbConfig::CONFIG[["libdir"]]'`
-                
-                if test -d "$ruby_includedir"; then
-                    RUBY_CFLAGS="-I$ruby_includedir -I$ruby_archdir"
-                    RUBY_LIBS="-L$ruby_libdir -lruby"
-                    AC_MSG_RESULT([yes])
-                    ruby_support=yes
-                else
-                    AC_MSG_RESULT([no])
-                    if test "x$enable_ruby" = "xyes"; then
-                        AC_MSG_ERROR([Ruby development headers not found. Try --with-ruby=PATH])
-                    fi
-                    ruby_support=no
-                fi
-            else
-                if test "x$enable_ruby" = "xyes"; then
-                    AC_MSG_ERROR([Ruby not found. Try --with-ruby=PATH])
-                fi
-                ruby_support=no
-            fi
-        ])
-    fi
-    
-    if test "x$ruby_support" = "xyes"; then
-        AC_DEFINE([HAVE_RUBY], [1], [Define if Ruby support is available])
-        AC_SUBST([RUBY_CFLAGS])
-        AC_SUBST([RUBY_LIBS])
+        AC_MSG_RESULT([no])
+        AC_MSG_ERROR([Ruby not found in $ruby_prefix])
     fi
 else
-    ruby_support=no
+    # Try pkg-config first
+    PKG_CHECK_MODULES([RUBY], [ruby], [], [
+        # Fallback to finding Ruby executable
+        AC_PATH_PROG([RUBY], [ruby])
+        if test -n "$RUBY"; then
+            AC_MSG_CHECKING([for Ruby configuration])
+            ruby_version=`$RUBY -e 'puts RUBY_VERSION'`
+            ruby_archdir=`$RUBY -e 'puts RbConfig::CONFIG[["archdir"]]'`
+            ruby_includedir=`$RUBY -e 'puts RbConfig::CONFIG[["rubyhdrdir"]]'`
+            ruby_libdir=`$RUBY -e 'puts RbConfig::CONFIG[["libdir"]]'`
+
+            if test -d "$ruby_includedir"; then
+                RUBY_CFLAGS="-I$ruby_includedir -I$ruby_archdir"
+                RUBY_LIBS="-L$ruby_libdir -lruby"
+                AC_MSG_RESULT([yes])
+            else
+                AC_MSG_RESULT([no])
+                AC_MSG_ERROR([Ruby development headers not found. Install ruby-dev package or use --with-ruby=PATH])
+            fi
+        else
+            AC_MSG_ERROR([Ruby not found. Install ruby package or use --with-ruby=PATH])
+        fi
+    ])
 fi
 
-AM_CONDITIONAL([HAVE_RUBY], [test "x$ruby_support" = "xyes"])
+AC_SUBST([RUBY_CFLAGS])
+AC_SUBST([RUBY_LIBS])
 
 # Check for libyaml (required for Hiera support)
 PKG_CHECK_MODULES([YAML], [yaml-0.1], [
@@ -175,7 +151,6 @@ AC_OUTPUT
 
 echo ""
 echo "Configuration summary:"
-echo "  Ruby support:     $ruby_support"
 echo "  Debug mode:       $enable_debug"
 echo "  CC:               $CC"
 echo "  CFLAGS:           $CFLAGS"
