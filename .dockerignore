@@ -1,0 +1,94 @@
+# Build artifacts and configuration
+*.o
+*.lo
+*.la
+*.a
+*.so
+*.so.*
+*.dylib
+.libs/
+.deps/
+config.status
+config.log
+config.cache
+autom4te.cache/
+Makefile
+Makefile.in
+stamp-h1
+libtool
+
+# Compiler output
+compiler/puppetc-compile
+compiler/Makefile
+compiler/Makefile.in
+compiler/.deps/
+compiler/.libs/
+compiler/*.o
+compiler/*.lo
+compiler/*.la
+
+# Server output
+server/puppetc-server
+server/Makefile
+server/Makefile.in
+server/.deps/
+server/.libs/
+server/*.o
+server/*.lo
+
+# Agent output
+agent/puppetc-agent
+agent/Makefile
+agent/Makefile.in
+agent/.deps/
+agent/.libs/
+agent/*.o
+agent/*.lo
+
+# Facter output
+facter/facter_c
+facter/Makefile
+facter/Makefile.in
+facter/.deps/
+facter/.libs/
+facter/*.o
+facter/*.lo
+facter/*.la
+
+# Common output
+common/Makefile
+common/Makefile.in
+common/.deps/
+common/.libs/
+common/*.o
+common/*.lo
+common/*.la
+
+# Test output
+tests/Makefile
+tests/Makefile.in
+tests/output/
+
+# Docker
+.dockerignore
+
+# Git
+.git/
+.gitignore
+
+# Editor and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Tree-sitter-puppet build artifacts
+tree-sitter-puppet/src/*.o
+tree-sitter-puppet/src/*.lo
+tree-sitter-puppet/src/.libs/
+tree-sitter-puppet/src/.deps/
+
+# Documentation
+*.md
