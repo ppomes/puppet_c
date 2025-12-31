@@ -9,7 +9,9 @@ A C implementation of a Puppet language parser and interpreter using tree-sitter
 Prerequisites:
 - GCC
 - libtree-sitter (tree-sitter runtime library)
-- Ruby development headers (for ERB templates)
+- Ruby 3.0-3.3 with development headers (for ERB templates)
+  - Ruby 3.4+ has incompatible embedding API changes
+  - Recommended: Ruby 3.2 or 3.3
 - libyaml (for Hiera)
 - libssl/openssl (for crypto functions)
 - libmicrohttpd (for puppetc-server)
