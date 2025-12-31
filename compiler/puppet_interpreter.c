@@ -1048,6 +1048,78 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
         case PUPPET_STMT_RESOURCE:
             puppet_debug("Executing resource: %s", stmt->data.resource.type.data);
 
+            // Handle class resources specially - they instantiate classes
+            if (strcmp(stmt->data.resource.type.data, "class") == 0) {
+                for (size_t i = 0; i < stmt->data.resource.instance_count; i++) {
+                    puppet_resource_instance_t *instance = &stmt->data.resource.instances[i];
+                    if (instance->title) {
+                        puppet_value_t *title_val = puppet_eval_expr(instance->title, env);
+                        const char *class_name = puppet_value_to_string(title_val);
+                        puppet_debug("  Class resource: %s", class_name);
+
+                        // Find the class definition
+                        puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
+                        if (!class_def && env->loader) {
+                            class_def = puppet_loader_load_class(env->loader, class_name);
+                        }
+
+                        if (!class_def) {
+                            puppet_error("Class '%s' not found", class_name);
+                            puppet_value_destroy(title_val);
+                            continue;
+                        }
+
+                        // Create scope for class
+                        puppet_scope_t *class_scope = puppet_scope_create(env->current_scope, class_name);
+                        puppet_scope_push(env, class_scope);
+                        puppet_scope_t *old_class_scope = env->class_scope;
+                        env->class_scope = class_scope;
+
+                        // Process class parameters from resource attributes
+                        for (size_t pi = 0; pi < class_def->data.class_def.params.count; pi++) {
+                            puppet_param_t *param = &class_def->data.class_def.params.params[pi];
+                            const char *param_name = param->name.data;
+                            puppet_value_t *param_value = NULL;
+                            bool found = false;
+
+                            // Look for matching attribute
+                            for (size_t ai = 0; ai < instance->attr_count; ai++) {
+                                if (instance->attributes[ai].name.data &&
+                                    strcmp(instance->attributes[ai].name.data, param_name) == 0) {
+                                    param_value = puppet_eval_expr(instance->attributes[ai].value, env);
+                                    found = true;
+                                    break;
+                                }
+                            }
+
+                            if (!found && param->default_value) {
+                                param_value = puppet_eval_expr(param->default_value, env);
+                            } else if (!found) {
+                                param_value = puppet_value_create_undef();
+                            }
+
+                            puppet_scope_set_var(class_scope, param_name, param_value);
+                        }
+
+                        // Execute class body
+                        printf("Including class: %s\n", class_name);
+                        puppet_exec_stmt_list(&class_def->data.class_def.body, env);
+
+                        // Add to catalog
+                        if (env->build_catalog && env->catalog) {
+                            puppet_catalog_add_class(env->catalog, class_name);
+                        }
+
+                        // Cleanup
+                        env->class_scope = old_class_scope;
+                        puppet_scope_t *old_scope = puppet_scope_pop(env);
+                        puppet_scope_destroy(old_scope);
+                        puppet_value_destroy(title_val);
+                    }
+                }
+                break;
+            }
+
             // Handle virtual resources - store but don't apply
             if (stmt->data.resource.style == PUPPET_RES_VIRTUAL) {
                 for (size_t i = 0; i < stmt->data.resource.instance_count; i++) {
@@ -1681,8 +1753,14 @@ void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t
     const char *class_name = class_instance_stmt->data.class_instance.class_name.data;
     puppet_debug("Instantiating class: %s", class_name);
 
-    // Find the class definition
+    // Find the class definition - first check registered definitions
     puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
+
+    // If not found in registered definitions, try to load from module files
+    if (!class_def && env->loader) {
+        class_def = puppet_loader_load_class(env->loader, class_name);
+    }
+
     if (!class_def) {
         puppet_error("Class '%s' not found", class_name);
         return;
