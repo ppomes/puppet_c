@@ -18,6 +18,103 @@ static int puppet_register_node_def(puppet_env_t *env, puppet_stmt_t *node_def);
 static puppet_stmt_t *puppet_find_matching_node(puppet_env_t *env, const char *certname);
 static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *certname, puppet_env_t *env);
 
+/**
+ * Automatic Parameter Lookup (APL) for class parameters.
+ * Looks up class_name::param_name in Hiera data providers and module-specific data.
+ * Returns the found value or NULL if not found.
+ */
+static puppet_value_t *puppet_apl_lookup(const char *class_name, const char *param_name, puppet_env_t *env) {
+    if (!class_name || !param_name || !env) return NULL;
+
+    /* Build the lookup key: classname::paramname */
+    size_t key_len = strlen(class_name) + 2 + strlen(param_name) + 1;
+    char *key = puppet_malloc(key_len);
+    snprintf(key, key_len, "%s::%s", class_name, param_name);
+
+    /* Look up in data providers (Hiera) */
+    puppet_value_t *result = NULL;
+    for (size_t i = 0; i < env->data_provider_count; i++) {
+        puppet_data_provider_t *provider = env->data_providers[i];
+        if (provider && provider->lookup) {
+            result = provider->lookup(key, env, provider->data);
+            if (result) {
+                puppet_debug("APL: Found %s via provider", key);
+                break;
+            }
+        }
+    }
+
+    /* If not found, try module-specific hieradata files */
+    if (!result) {
+        /* Extract module name (first component of class_name) */
+        const char *sep = strchr(class_name, ':');
+        char *module_name;
+        if (sep) {
+            size_t len = sep - class_name;
+            module_name = puppet_malloc(len + 1);
+            strncpy(module_name, class_name, len);
+            module_name[len] = '\0';
+        } else {
+            module_name = puppet_strdup(class_name);
+        }
+
+        /* Get environment name from scope (try jbossenv, then env) */
+        const char *env_name = NULL;
+        puppet_value_t *env_val = puppet_scope_get_var(env->current_scope, "jbossenv", true);
+        if (env_val && env_val->type == PUPPET_VALUE_STRING) {
+            env_name = env_val->data.string.data;
+        }
+        if (!env_name) {
+            env_val = puppet_scope_get_var(env->current_scope, "environment", true);
+            if (env_val && env_val->type == PUPPET_VALUE_STRING) {
+                env_name = env_val->data.string.data;
+            }
+        }
+
+        /* Try various hieradata paths - including preprod-relative paths */
+        char path[1024];
+        const char *hieradata_dirs[] = {
+            "hieradata", "data", "hieralocal", "hieradata/local",
+            "preprod/hieradata", "preprod/hieralocal", "preprod/hieradata/local"
+        };
+
+        for (size_t i = 0; i < sizeof(hieradata_dirs)/sizeof(hieradata_dirs[0]) && !result; i++) {
+            /* Try module/env.yaml */
+            if (env_name) {
+                snprintf(path, sizeof(path), "%s/%s/%s.yaml", hieradata_dirs[i], module_name, env_name);
+                puppet_value_t *data = puppet_hiera_load_yaml(path);
+                if (data && data->type == PUPPET_VALUE_HASH) {
+                    result = puppet_hash_get(data->data.hash, key, strlen(key));
+                    if (result) {
+                        result = puppet_value_copy(result);
+                        puppet_debug("APL: Found %s in %s", key, path);
+                    }
+                    puppet_value_destroy(data);
+                }
+            }
+
+            /* Try module/global.yaml */
+            if (!result) {
+                snprintf(path, sizeof(path), "%s/%s/global.yaml", hieradata_dirs[i], module_name);
+                puppet_value_t *data = puppet_hiera_load_yaml(path);
+                if (data && data->type == PUPPET_VALUE_HASH) {
+                    result = puppet_hash_get(data->data.hash, key, strlen(key));
+                    if (result) {
+                        result = puppet_value_copy(result);
+                        puppet_debug("APL: Found %s in %s", key, path);
+                    }
+                    puppet_value_destroy(data);
+                }
+            }
+        }
+
+        puppet_free(module_name);
+    }
+
+    puppet_free(key);
+    return result;
+}
+
 // Helper function to convert value to string
 /* Forward declaration for recursive use */
 static void puppet_value_to_string_buffer(puppet_value_t *value, char *buf, size_t *pos, size_t max_len);
@@ -1518,11 +1615,17 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                             if (attr_found[pi]) {
                                 // Use pre-evaluated value from caller's scope
                                 param_value = pre_eval_values[pi];
-                            } else if (param->default_value) {
-                                // Evaluate default in new class scope
-                                param_value = puppet_eval_expr(param->default_value, env);
                             } else {
-                                param_value = puppet_value_create_undef();
+                                // Try Automatic Parameter Lookup (APL) from Hiera
+                                param_value = puppet_apl_lookup(class_name, param_name, env);
+                                if (!param_value) {
+                                    // Fall back to default value if APL didn't find anything
+                                    if (param->default_value) {
+                                        param_value = puppet_eval_expr(param->default_value, env);
+                                    } else {
+                                        param_value = puppet_value_create_undef();
+                                    }
+                                }
                             }
 
                             puppet_scope_set_var(class_scope, param_name, param_value);
@@ -1971,18 +2074,25 @@ static bool puppet_include_class_from_def(puppet_stmt_t *class_def, puppet_env_t
     /* Store class scope BEFORE executing body - allows $class::var lookups during execution */
     puppet_hash_set(env->class_scopes, class_name, strlen(class_name), (puppet_value_t *)class_scope);
 
-    /* Process class parameters and set default values */
+    /* Process class parameters - use APL (Automatic Parameter Lookup) for unset params */
     for (size_t i = 0; i < class_def->data.class_def.params.count; i++) {
         puppet_param_t *param = &class_def->data.class_def.params.params[i];
         const char *param_name = param->name.data;
+        puppet_value_t *param_value = NULL;
 
-        if (param->default_value) {
-            puppet_value_t *default_val = puppet_eval_expr(param->default_value, env);
-            puppet_scope_set_var(class_scope, param_name, default_val);
-        } else {
-            puppet_value_t *undef_val = puppet_value_create_undef();
-            puppet_scope_set_var(class_scope, param_name, undef_val);
+        /* Try Automatic Parameter Lookup (APL) from Hiera first */
+        param_value = puppet_apl_lookup(class_name, param_name, env);
+
+        if (!param_value) {
+            /* Fall back to default value if APL didn't find anything */
+            if (param->default_value) {
+                param_value = puppet_eval_expr(param->default_value, env);
+            } else {
+                param_value = puppet_value_create_undef();
+            }
         }
+
+        puppet_scope_set_var(class_scope, param_name, param_value);
     }
 
     /* Execute the class body */
