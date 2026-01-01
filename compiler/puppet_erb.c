@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include <ruby.h>
 #include <ruby/encoding.h>
@@ -62,9 +63,7 @@ puppet_ruby_context_t *puppet_ruby_init(void) {
     // Load ERB library
     int state = 0;
     (void)rb_eval_string_protect("require 'erb'", &state);
-    if (state == 0) {
-        ctx->initialized = 1;
-    } else {
+    if (state != 0) {
         printf("Error: Failed to load ERB library (state=%d)\n", state);
         if (state == 6) {  // TAG_RAISE - exception occurred
             VALUE exception = rb_errinfo();
@@ -75,6 +74,36 @@ puppet_ruby_context_t *puppet_ruby_init(void) {
         }
         ctx->initialized = 0;
     }
+
+    // Define a Puppet scope class for lookupvar support in ERB templates
+    // This mimics Puppet's scope.lookupvar('classname::varname') behavior
+    (void)rb_eval_string_protect(
+        "class PuppetScope\n"
+        "  def initialize(vars)\n"
+        "    @vars = vars\n"
+        "  end\n"
+        "  def lookupvar(name)\n"
+        "    # Remove leading :: if present\n"
+        "    name = name.sub(/^::/, '') if name.start_with?('::')\n"
+        "    # Try direct lookup first\n"
+        "    return @vars[name] if @vars.key?(name)\n"
+        "    # Try with underscores replaced for nested names (classname::varname)\n"
+        "    safe_name = name.gsub('::', '__')\n"
+        "    return @vars[safe_name] if @vars.key?(safe_name)\n"
+        "    # Return empty string for undefined (prevents nil errors)\n"
+        "    ''\n"
+        "  end\n"
+        "  def [](name)\n"
+        "    lookupvar(name)\n"
+        "  end\n"
+        "end\n"
+        "$puppet_vars = {}\n",
+        &state);
+    if (state != 0) {
+        printf("Warning: Failed to define PuppetScope class (state=%d)\n", state);
+    }
+
+    ctx->initialized = 1;
 
     global_ruby_ctx = ctx;
     return ctx;
@@ -216,7 +245,7 @@ puppet_value_t *ruby_to_puppet_value(void *ruby_obj, puppet_ruby_context_t *ctx)
 
 static void puppet_set_ruby_variable(const char *name, puppet_value_t *value, puppet_ruby_context_t *ctx) {
     VALUE ruby_val = (VALUE)puppet_value_to_ruby(value, ctx);
-    
+
     // Convert variable name to Ruby instance variable format (for ERB templates)
     // ERB templates access variables as @variable, not $variable
     // Also convert dots to underscores since Ruby variables can't contain dots
@@ -224,22 +253,34 @@ static void puppet_set_ruby_variable(const char *name, puppet_value_t *value, pu
     char clean_name[256];
     strncpy(clean_name, name, sizeof(clean_name) - 1);
     clean_name[sizeof(clean_name) - 1] = '\0';
-    
+
     // Replace dots with underscores for Ruby variable names
     for (char *p = clean_name; *p; p++) {
         if (*p == '.') *p = '_';
     }
-    
+
     snprintf(var_name, sizeof(var_name), "@%s", clean_name);
-    
+
     // Set as instance variable in the main object
     VALUE main_obj = rb_eval_string("self");
     rb_iv_set(main_obj, var_name, ruby_val);
-    
+
     // Also set as global variable for backward compatibility
     char global_var_name[256];
     snprintf(global_var_name, sizeof(global_var_name), "$%s", clean_name);
     rb_gv_set(global_var_name, ruby_val);
+
+    // Also add to $puppet_vars hash for scope.lookupvar() support
+    VALUE puppet_vars = rb_gv_get("$puppet_vars");
+    if (!NIL_P(puppet_vars) && TYPE(puppet_vars) == T_HASH) {
+        VALUE key = rb_str_new2(name);  // Use original name with :: for scope lookups
+        rb_hash_aset(puppet_vars, key, ruby_val);
+        // Also store with clean name
+        if (strcmp(name, clean_name) != 0) {
+            VALUE clean_key = rb_str_new2(clean_name);
+            rb_hash_aset(puppet_vars, clean_key, ruby_val);
+        }
+    }
 }
 
 static void puppet_export_env_to_ruby(puppet_env_t *env, puppet_ruby_context_t *ruby_ctx) {
@@ -289,19 +330,29 @@ char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_
         printf("Error: Ruby ERB context not initialized\n");
         return NULL;
     }
-    
+
+    // Clear $puppet_vars hash before populating
+    int state = 0;
+    (void)rb_eval_string_protect("$puppet_vars = {}", &state);
+
     // Export Puppet variables to Ruby globals
     puppet_export_env_to_ruby(env, ruby_ctx);
-    
-    int state = 0;
-    
+
+    // Create scope object for scope.lookupvar() support in templates
+    // Use a method to define local 'scope' variable in the ERB binding context
+    (void)rb_eval_string_protect("$scope = PuppetScope.new($puppet_vars)", &state);
+    if (state != 0) {
+        printf("Warning: Failed to create scope object (state=%d)\n", state);
+    }
+
     // Create ERB template string
     VALUE template_str = rb_str_new2(template_content);
     rb_gv_set("$template_content", template_str);
-    
-    // Process with ERB without binding to avoid stdin issues
+
+    // Process with ERB - define 'scope' as local variable in the binding
+    // Use trim_mode: '-' to handle -%> (strip trailing newlines after tags)
     VALUE result = rb_eval_string_protect(
-        "erb = ERB.new($template_content); erb.result", &state);
+        "scope = $scope; erb = ERB.new($template_content, trim_mode: '-'); erb.result(binding)", &state);
     
     if (state == 0) {
         const char *rendered = StringValueCStr(result);
@@ -320,23 +371,39 @@ char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_
 }
 
 char *puppet_erb_file(const char *template_path, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx) {
+    /* Check if path is a directory (happens with invalid template paths) */
+    struct stat st;
+    if (stat(template_path, &st) != 0) {
+        printf("Error: Cannot stat template file: %s\n", template_path);
+        return NULL;
+    }
+    if (S_ISDIR(st.st_mode)) {
+        printf("Error: Template path is a directory, not a file: %s\n", template_path);
+        return NULL;
+    }
+
     FILE *file = fopen(template_path, "r");
     if (!file) {
         printf("Error: Cannot open template file: %s\n", template_path);
         return NULL;
     }
-    
+
     // Read entire file
     fseek(file, 0, SEEK_END);
     long file_size = ftell(file);
+    if (file_size < 0) {
+        printf("Error: Cannot determine size of template file: %s\n", template_path);
+        fclose(file);
+        return NULL;
+    }
     fseek(file, 0, SEEK_SET);
-    
+
     char *content = puppet_malloc(file_size + 1);
     size_t bytes_read = fread(content, 1, file_size, file);
     (void)bytes_read; /* Suppress warning - we trust file_size from ftell */
     content[file_size] = '\0';
     fclose(file);
-    
+
     char *result = puppet_erb_render(content, env, ruby_ctx);
     puppet_free(content);
     return result;
@@ -437,46 +504,71 @@ static char *resolve_template_path(const char *template_path, puppet_env_t *env)
 
 // Common template() function implementation
 puppet_value_t *puppet_func_template(puppet_expr_list_t *args, puppet_env_t *env) {
-    if (!args || args->count != 1) {
-        printf("Error: template() function requires exactly 1 argument\n");
+    if (!args || args->count < 1) {
+        printf("Error: template() function requires at least 1 argument\n");
         return puppet_value_create_undef();
     }
 
-    // Evaluate the template path argument
-    puppet_value_t *path_value = puppet_eval_expr(args->exprs[0], env);
-    if (path_value->type != PUPPET_VALUE_STRING) {
-        printf("Error: template() function requires a string argument\n");
-        puppet_value_destroy(path_value);
-        return puppet_value_create_undef();
-    }
-
-    // Resolve the template path to a filesystem path
-    char *resolved_path = resolve_template_path(path_value->data.string.data, env);
-    puppet_value_destroy(path_value);
-
-    if (!resolved_path) {
-        return puppet_value_create_undef();
-    }
-
-    // Initialize Ruby if needed
+    // Initialize Ruby if needed (once for all templates)
     static puppet_ruby_context_t *ruby_ctx = NULL;
     if (!ruby_ctx) {
         ruby_ctx = puppet_ruby_init();
         if (!ruby_ctx) {
-            puppet_free(resolved_path);
             return puppet_value_create_undef();
         }
     }
 
-    // Render the template
-    char *rendered = puppet_erb_file(resolved_path, env, ruby_ctx);
-    puppet_free(resolved_path);
+    // Concatenate all template outputs
+    char *full_output = NULL;
+    size_t full_len = 0;
 
-    if (!rendered) {
+    for (size_t i = 0; i < args->count; i++) {
+        // Evaluate the template path argument
+        puppet_value_t *path_value = puppet_eval_expr(args->exprs[i], env);
+        if (path_value->type != PUPPET_VALUE_STRING) {
+            printf("Error: template() function requires string arguments\n");
+            puppet_value_destroy(path_value);
+            if (full_output) puppet_free(full_output);
+            return puppet_value_create_undef();
+        }
+
+        // Resolve the template path to a filesystem path
+        char *resolved_path = resolve_template_path(path_value->data.string.data, env);
+        puppet_value_destroy(path_value);
+
+        if (!resolved_path) {
+            if (full_output) puppet_free(full_output);
+            return puppet_value_create_undef();
+        }
+
+        // Render the template
+        char *rendered = puppet_erb_file(resolved_path, env, ruby_ctx);
+        puppet_free(resolved_path);
+
+        if (!rendered) {
+            if (full_output) puppet_free(full_output);
+            return puppet_value_create_undef();
+        }
+
+        // Append to full output
+        size_t rendered_len = strlen(rendered);
+        if (full_output) {
+            full_output = puppet_realloc(full_output, full_len + rendered_len + 1);
+            memcpy(full_output + full_len, rendered, rendered_len + 1);
+            full_len += rendered_len;
+        } else {
+            full_output = rendered;
+            full_len = rendered_len;
+            rendered = NULL;  // Don't free - transferred ownership
+        }
+        if (rendered) puppet_free(rendered);
+    }
+
+    if (!full_output) {
         return puppet_value_create_undef();
     }
 
-    puppet_value_t *result = puppet_value_create_string(rendered, strlen(rendered));
-    puppet_free(rendered);
+    puppet_value_t *result = puppet_value_create_string(full_output, full_len);
+    puppet_free(full_output);
     return result;
 }

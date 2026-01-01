@@ -60,19 +60,25 @@ bool puppet_loader_resolve_class_path(puppet_loader_t *loader,
                                       char *path_buffer,
                                       size_t buffer_size) {
     if (!loader || !class_name || !path_buffer) return false;
-    
+
+    /* Strip leading :: if present (top-level scope indicator) */
+    const char *name = class_name;
+    if (strncmp(name, "::", 2) == 0) {
+        name = class_name + 2;
+    }
+
     /* Handle simple class names (no :: separator) */
-    const char *separator = strstr(class_name, "::");
+    const char *separator = strstr(name, "::");
     if (!separator) {
         /* Simple class: modules/classname/manifests/init.pp */
         snprintf(path_buffer, buffer_size, "%s/%s/manifests/init.pp",
-                loader->modules_path, class_name);
+                loader->modules_path, name);
     } else {
         /* Namespaced class: modules/module/manifests/subclass.pp */
         /* Extract module name (part before first ::) */
-        size_t module_len = separator - class_name;
+        size_t module_len = separator - name;
         char *module_name = puppet_malloc(module_len + 1);
-        strncpy(module_name, class_name, module_len);
+        strncpy(module_name, name, module_len);
         module_name[module_len] = '\0';
         
         /* Convert remaining :: to / for path */

@@ -2064,9 +2064,15 @@ puppet_value_t *puppet_func_merge(puppet_expr_list_t *args, puppet_env_t *env) {
     for (size_t i = 0; i < args->count; i++) {
         puppet_value_t *hash_val = puppet_eval_expr(args->exprs[i], env);
 
-        if (!hash_val || hash_val->type != PUPPET_VALUE_HASH) {
-            puppet_log(PUPPET_LOG_ERROR, "merge() arguments must be hashes");
+        /* Skip undef values silently - common pattern in Puppet */
+        if (!hash_val || hash_val->type == PUPPET_VALUE_UNDEF) {
             if (hash_val) puppet_value_destroy(hash_val);
+            continue;
+        }
+
+        if (hash_val->type != PUPPET_VALUE_HASH) {
+            puppet_log(PUPPET_LOG_WARNING, "merge() skipping non-hash argument");
+            puppet_value_destroy(hash_val);
             continue;
         }
 
@@ -3631,7 +3637,13 @@ puppet_value_t *puppet_func_validate_re(puppet_expr_list_t *args, puppet_env_t *
     }
 
     puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
-    if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
+    /* Handle undef gracefully - treat as empty string for validation */
+    if (!str_val || str_val->type == PUPPET_VALUE_UNDEF) {
+        if (str_val) puppet_value_destroy(str_val);
+        puppet_log(PUPPET_LOG_WARNING, "validate_re() first argument is undef, skipping validation");
+        return puppet_value_create_bool(true);  /* Allow undef to pass validation */
+    }
+    if (str_val->type != PUPPET_VALUE_STRING) {
         if (str_val) puppet_value_destroy(str_val);
         puppet_log(PUPPET_LOG_ERROR, "validate_re() first argument must be a string");
         return puppet_value_create_undef();
@@ -3847,8 +3859,16 @@ puppet_value_t *puppet_func_versioncmp(puppet_expr_list_t *args, puppet_env_t *e
     puppet_value_t *a_val = puppet_eval_expr(args->exprs[0], env);
     puppet_value_t *b_val = puppet_eval_expr(args->exprs[1], env);
 
-    if (!a_val || a_val->type != PUPPET_VALUE_STRING ||
-        !b_val || b_val->type != PUPPET_VALUE_STRING) {
+    /* Handle undef values gracefully - return 0 (equal) if either is undef */
+    if (!a_val || a_val->type == PUPPET_VALUE_UNDEF ||
+        !b_val || b_val->type == PUPPET_VALUE_UNDEF) {
+        if (a_val) puppet_value_destroy(a_val);
+        if (b_val) puppet_value_destroy(b_val);
+        puppet_log(PUPPET_LOG_WARNING, "versioncmp() received undef argument, returning 0");
+        return puppet_value_create_number(0);
+    }
+
+    if (a_val->type != PUPPET_VALUE_STRING || b_val->type != PUPPET_VALUE_STRING) {
         if (a_val) puppet_value_destroy(a_val);
         if (b_val) puppet_value_destroy(b_val);
         puppet_log(PUPPET_LOG_ERROR, "versioncmp() arguments must be strings");

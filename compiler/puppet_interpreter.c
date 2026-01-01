@@ -2005,52 +2005,66 @@ puppet_stmt_t *puppet_find_class_def(puppet_env_t *env, const char *class_name) 
  */
 puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name) {
     if (!env || !name) return NULL;
-    
+
     puppet_value_t *value = NULL;
-    
-    // 1. Local scope (current scope, non-recursive)
-    value = puppet_scope_get_var(env->current_scope, name, false);
-    if (value) return value;
-    
-    // 2. Class scope (if we're inside a class)
-    if (env->class_scope && env->class_scope != env->current_scope) {
-        value = puppet_scope_get_var(env->class_scope, name, false);
-        if (value) return value;
+
+    // Handle :: prefix (top-level/global scope indicator)
+    // Variables like $::fqdn, $::hostname explicitly request top-level scope
+    const char *lookup_name = name;
+    bool top_level_only = false;
+    if (strncmp(name, "::", 2) == 0) {
+        lookup_name = name + 2;  // Skip the :: prefix
+        top_level_only = true;
     }
-    
-    // 3. Node scope (node-specific variables)
-    if (env->node_scope && env->node_scope != env->current_scope) {
-        value = puppet_scope_get_var(env->node_scope, name, false);
+
+    // If top-level only, skip local and class scopes
+    if (!top_level_only) {
+        // 1. Local scope (current scope, non-recursive)
+        value = puppet_scope_get_var(env->current_scope, lookup_name, false);
         if (value) return value;
+
+        // 2. Class scope (if we're inside a class)
+        if (env->class_scope && env->class_scope != env->current_scope) {
+            value = puppet_scope_get_var(env->class_scope, lookup_name, false);
+            if (value) return value;
+        }
+
+        // 3. Node scope (node-specific variables)
+        if (env->node_scope && env->node_scope != env->current_scope) {
+            value = puppet_scope_get_var(env->node_scope, lookup_name, false);
+            if (value) return value;
+        }
     }
-    
+
     // 4. Global scope (top-level variables)
-    if (env->global_scope != env->current_scope) {
-        value = puppet_scope_get_var(env->global_scope, name, false);
+    if (env->global_scope != env->current_scope || top_level_only) {
+        value = puppet_scope_get_var(env->global_scope, lookup_name, false);
         if (value) return value;
     }
-    
+
     // 5. Facts lookup
     if (env->facts_db) {
         // Special handling for $facts - return the whole facts hash
-        if (strcmp(name, "facts") == 0) {
+        if (strcmp(lookup_name, "facts") == 0) {
             value = puppet_facts_get_all_as_hash(env);
             if (value) return value;
         }
         // Direct fact access (e.g., $hostname, $operatingsystem)
-        value = puppet_facts_get(env, name);
+        value = puppet_facts_get(env, lookup_name);
         if (value) return value;
     }
     
     // 6. Data providers (Hiera, external data sources)
-    for (size_t i = 0; i < env->data_provider_count; i++) {
-        puppet_data_provider_t *provider = env->data_providers[i];
-        if (provider && provider->lookup) {
-            value = provider->lookup(name, env, provider->data);
-            if (value) return value;
+    if (!top_level_only) {
+        for (size_t i = 0; i < env->data_provider_count; i++) {
+            puppet_data_provider_t *provider = env->data_providers[i];
+            if (provider && provider->lookup) {
+                value = provider->lookup(lookup_name, env, provider->data);
+                if (value) return value;
+            }
         }
     }
-    
+
     // 7. Not found
     return NULL;
 }

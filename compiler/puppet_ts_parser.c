@@ -829,13 +829,35 @@ static puppet_stmt_t *convert_resource(TSNode node, const char *source) {
         puppet_free(type_name);
     }
 
-    /* Find resource body */
-    TSNode body = find_child(node, "resource_body");
-    if (!ts_node_is_null(body)) {
-        /* Create single instance */
-        stmt->data.resource.instances = puppet_calloc(1, sizeof(puppet_resource_instance_t));
-        stmt->data.resource.instance_count = 1;
-        puppet_resource_instance_t *inst = &stmt->data.resource.instances[0];
+    /* Count all resource_body nodes (for multi-instance declarations like:
+     * class { 'c1': ; 'c2': ; 'c3': ; }
+     */
+    uint32_t body_count = 0;
+    uint32_t child_count = ts_node_named_child_count(node);
+    for (uint32_t i = 0; i < child_count; i++) {
+        TSNode child = ts_node_named_child(node, i);
+        if (node_is(child, "resource_body")) {
+            body_count++;
+        }
+    }
+
+    if (body_count == 0) {
+        return stmt;
+    }
+
+    /* Allocate instances for all bodies */
+    stmt->data.resource.instances = puppet_calloc(body_count, sizeof(puppet_resource_instance_t));
+    stmt->data.resource.instance_count = body_count;
+
+    /* Process each resource_body */
+    size_t inst_idx = 0;
+    for (uint32_t i = 0; i < child_count && inst_idx < body_count; i++) {
+        TSNode body = ts_node_named_child(node, i);
+        if (!node_is(body, "resource_body")) {
+            continue;
+        }
+
+        puppet_resource_instance_t *inst = &stmt->data.resource.instances[inst_idx++];
 
         /* Get title */
         TSNode title = find_child(body, "resource_title");
@@ -853,8 +875,8 @@ static puppet_stmt_t *convert_resource(TSNode node, const char *source) {
             inst->attributes = puppet_calloc(attr_count, sizeof(puppet_attribute_t));
             inst->attr_count = 0;
 
-            for (uint32_t i = 0; i < attr_count; i++) {
-                TSNode attr_node = ts_node_named_child(attr_list, i);
+            for (uint32_t j = 0; j < attr_count; j++) {
+                TSNode attr_node = ts_node_named_child(attr_list, j);
                 if (node_is(attr_node, "attribute")) {
                     inst->attributes[inst->attr_count++] = convert_attribute(attr_node, source);
                 }
@@ -885,8 +907,47 @@ static puppet_stmt_t *convert_class_def(TSNode node, const char *source) {
             }
         } else if (strcmp(type, "block") == 0) {
             stmt->data.class_def.body = convert_block(child, source);
+        } else if (strcmp(type, "parameter_list") == 0) {
+            /* Parse class parameters */
+            uint32_t param_count = ts_node_named_child_count(child);
+            stmt->data.class_def.params.params = puppet_calloc(param_count, sizeof(puppet_param_t));
+            stmt->data.class_def.params.count = 0;
+
+            for (uint32_t j = 0; j < param_count; j++) {
+                TSNode param = ts_node_named_child(child, j);
+                if (!node_is(param, "parameter")) continue;
+
+                /* parameter -> regular_parameter -> variable -> name */
+                TSNode reg_param = find_child(param, "regular_parameter");
+                if (ts_node_is_null(reg_param)) reg_param = param;
+
+                TSNode var_node = find_child(reg_param, "variable");
+                if (ts_node_is_null(var_node)) continue;
+
+                TSNode name_node = find_child(var_node, "name");
+                if (ts_node_is_null(name_node)) continue;
+
+                /* Get parameter name */
+                char *name_str = node_text(name_node, source);
+                puppet_param_t *p = &stmt->data.class_def.params.params[stmt->data.class_def.params.count];
+                p->name = puppet_string_create(name_str);
+                puppet_free(name_str);
+
+                /* Check for default value (second child of regular_parameter after variable) */
+                uint32_t reg_param_children = ts_node_named_child_count(reg_param);
+                for (uint32_t k = 0; k < reg_param_children; k++) {
+                    TSNode child_node = ts_node_named_child(reg_param, k);
+                    if (!node_is(child_node, "variable")) {
+                        /* This is the default value expression */
+                        p->default_value = convert_expression(child_node, source);
+                        break;
+                    }
+                }
+
+                stmt->data.class_def.params.count++;
+            }
         }
-        /* TODO: parameters, inherits */
+        /* TODO: inherits */
     }
 
     return stmt;
