@@ -843,7 +843,7 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             size_t total_len = 0;
             char **parts = puppet_calloc(expr->data.interpolated.count * 2 + 1, sizeof(char*));
             size_t part_count = 0;
-            
+
             // Evaluate all parts
             for (size_t i = 0; i < expr->data.interpolated.count; i++) {
                 // Add literal part if present
@@ -852,7 +852,7 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
                     total_len += expr->data.interpolated.parts[i].len;
                     part_count++;
                 }
-                
+
                 // Evaluate expression if present
                 if (expr->data.interpolated.exprs && expr->data.interpolated.exprs[i]) {
                     puppet_value_t *val = puppet_eval_expr(expr->data.interpolated.exprs[i], env);
@@ -867,6 +867,15 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
                     }
                     puppet_value_destroy(val);
                 }
+            }
+
+            // Add trailing literal part (stored in parts[count])
+            if (expr->data.interpolated.parts &&
+                expr->data.interpolated.parts[expr->data.interpolated.count].data &&
+                expr->data.interpolated.parts[expr->data.interpolated.count].len > 0) {
+                parts[part_count] = puppet_strdup(expr->data.interpolated.parts[expr->data.interpolated.count].data);
+                total_len += expr->data.interpolated.parts[expr->data.interpolated.count].len;
+                part_count++;
             }
             
             // Build final string
@@ -1526,6 +1535,14 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         const char *class_name = puppet_value_to_string(title_val);
                         puppet_debug("  Class resource: %s", class_name);
 
+                        // Check if this class is already declared - resource-style declarations are NOT idempotent
+                        if (puppet_hash_get(env->class_scopes, class_name, strlen(class_name))) {
+                            fprintf(stderr, "Error: Duplicate declaration - class[%s] is already declared\n", class_name);
+                            fprintf(stderr, "       Use 'include' for idempotent class inclusion\n");
+                            puppet_value_destroy(title_val);
+                            continue;
+                        }
+
                         // Find the class definition
                         puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
                         if (!class_def && env->loader) {
@@ -2026,6 +2043,13 @@ static bool puppet_include_class_from_def(puppet_stmt_t *class_def, puppet_env_t
     if (!class_def || class_def->type != PUPPET_STMT_CLASS_DEF || !env) return false;
 
     const char *class_name = class_def->data.class_def.name.data;
+
+    /* Check if this class is already included - classes are idempotent */
+    if (puppet_hash_get(env->class_scopes, class_name, strlen(class_name))) {
+        puppet_debug("Class %s already included, skipping", class_name);
+        return true;
+    }
+
     printf("Including class: %s\n", class_name);
 
     /* Handle class inheritance - include parent class first */
