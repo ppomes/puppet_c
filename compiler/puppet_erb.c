@@ -35,9 +35,9 @@ static puppet_ruby_context_t *global_ruby_ctx = NULL;
  * @return Initialized Ruby context
  */
 puppet_ruby_context_t *puppet_ruby_init(void) {
-    // Replace any existing context without cleanup to avoid Ruby VM state issues
-    if (global_ruby_ctx) {
-        global_ruby_ctx = NULL;
+    // Return existing context if already initialized - Ruby can only be initialized once
+    if (global_ruby_ctx && global_ruby_ctx->initialized) {
+        return global_ruby_ctx;
     }
 
     puppet_ruby_context_t *ctx = puppet_calloc(1, sizeof(puppet_ruby_context_t));
