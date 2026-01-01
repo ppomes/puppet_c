@@ -19,7 +19,8 @@ void realize_single_resource(puppet_stmt_t *stmt, size_t instance_idx, puppet_en
 puppet_value_t *puppet_func_tag(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_tagged(puppet_expr_list_t *args, puppet_env_t *env);
 
-// Data lookup functions
+// Data lookup functions (Hiera)
+puppet_value_t *puppet_func_hiera(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_lookup(puppet_expr_list_t *args, puppet_env_t *env);
 
 // String manipulation functions

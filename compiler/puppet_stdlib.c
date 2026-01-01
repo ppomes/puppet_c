@@ -4494,3 +4494,63 @@ puppet_value_t *puppet_func_pick_default(puppet_expr_list_t *args, puppet_env_t 
 
     return last ? last : puppet_value_create_undef();
 }
+
+/**
+ * @brief Puppet hiera() function - lookup value from Hiera data
+ *
+ * Usage: hiera(key)
+ *        hiera(key, default)
+ *        hiera(key, default, override)
+ * Returns the value from Hiera or the default if not found.
+ */
+puppet_value_t *puppet_func_hiera(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "hiera() requires at least 1 argument (key)");
+        return puppet_value_create_undef();
+    }
+
+    /* Get the key */
+    puppet_value_t *key_val = puppet_eval_expr(args->exprs[0], env);
+    if (!key_val || key_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "hiera() first argument must be a string key");
+        if (key_val) puppet_value_destroy(key_val);
+        return puppet_value_create_undef();
+    }
+    const char *key = key_val->data.string.data;
+
+    /* Get optional default value */
+    puppet_value_t *default_val = NULL;
+    if (args->count >= 2) {
+        default_val = puppet_eval_expr(args->exprs[1], env);
+    }
+
+    /* Look up in Hiera via data providers */
+    puppet_value_t *result = NULL;
+
+    /* Check data providers (Hiera should be registered as one) */
+    for (size_t i = 0; i < env->data_provider_count; i++) {
+        puppet_data_provider_t *provider = env->data_providers[i];
+        if (provider && provider->lookup) {
+            result = provider->lookup(key, env, provider->data);
+            if (result) {
+                break;
+            }
+        }
+    }
+
+    puppet_value_destroy(key_val);
+
+    if (result) {
+        if (default_val) puppet_value_destroy(default_val);
+        return result;
+    }
+
+    /* Return default or undef */
+    if (default_val) {
+        return default_val;
+    }
+
+    puppet_log(PUPPET_LOG_WARNING, "hiera(): key not found and no default provided");
+    return puppet_value_create_undef();
+}
+
