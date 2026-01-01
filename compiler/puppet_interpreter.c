@@ -2727,7 +2727,32 @@ static int puppet_facts_load_yaml(puppet_facts_db_t *facts_db, const char *filep
         return -1;
     }
 
-    /* Determine node name from fqdn or hostname */
+    /* Check for multi-node format: { facts: { node1: {...}, node2: {...} } } */
+    puppet_value_t *facts_root = puppet_hash_get(root->data.hash, "facts", 5);
+    if (facts_root && facts_root->type == PUPPET_VALUE_HASH) {
+        /* Multi-node format - iterate over all nodes */
+        puppet_hash_t *nodes_hash = facts_root->data.hash;
+        for (size_t b = 0; b < nodes_hash->bucket_count; b++) {
+            puppet_hash_entry_t *entry = nodes_hash->buckets[b];
+            while (entry) {
+                const char *node_name = entry->key.data;
+                puppet_value_t *node_facts = entry->value;
+
+                if (node_facts && node_facts->type == PUPPET_VALUE_HASH) {
+                    /* Add this node */
+                    if (puppet_facts_db_add_node(facts_db, node_name, NULL) == 0) {
+                        puppet_node_facts_t *node = &facts_db->nodes[facts_db->node_count - 1];
+                        puppet_facts_process_value(node, NULL, node_facts);
+                    }
+                }
+                entry = entry->next;
+            }
+        }
+        puppet_value_destroy(root);
+        return 0;
+    }
+
+    /* Single-node format - determine node name from fqdn or hostname */
     const char *node_name = "localhost";
     puppet_value_t *fqdn_val = puppet_hash_get(root->data.hash, "fqdn", 4);
     puppet_value_t *hostname_val = puppet_hash_get(root->data.hash, "hostname", 8);
