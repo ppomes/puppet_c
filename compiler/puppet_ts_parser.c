@@ -468,10 +468,17 @@ static puppet_lambda_t *convert_lambda(TSNode node, const char *source) {
 
             for (uint32_t j = 0; j < param_count; j++) {
                 TSNode param = ts_node_named_child(child, j);
-                /* parameter -> regular_parameter -> variable -> name */
-                TSNode var = find_child(param, "regular_parameter");
-                if (ts_node_is_null(var)) var = param;
-                TSNode var_node = find_child(var, "variable");
+                /*
+                 * Handle both typed and untyped parameters:
+                 * - typed: parameter -> typed_parameter -> regular_parameter -> variable -> name
+                 * - untyped: parameter -> regular_parameter -> variable -> name
+                 */
+                TSNode typed = find_child(param, "typed_parameter");
+                TSNode reg = ts_node_is_null(typed) ?
+                    find_child(param, "regular_parameter") :
+                    find_child(typed, "regular_parameter");
+                if (ts_node_is_null(reg)) reg = param;
+                TSNode var_node = find_child(reg, "variable");
                 if (ts_node_is_null(var_node)) var_node = find_child(param, "variable");
                 if (!ts_node_is_null(var_node)) {
                     TSNode name = find_child(var_node, "name");
@@ -892,6 +899,9 @@ static puppet_stmt_t *convert_class_def(TSNode node, const char *source) {
     puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
     stmt->type = PUPPET_STMT_CLASS_DEF;
     stmt->loc = node_location(node);
+    stmt->data.class_def.inherits = NULL;  /* Initialize inherits to NULL */
+
+    bool found_classname = false;  /* Track if we've seen the first classname (the class name itself) */
 
     uint32_t count = ts_node_named_child_count(node);
     for (uint32_t i = 0; i < count; i++) {
@@ -902,7 +912,15 @@ static puppet_stmt_t *convert_class_def(TSNode node, const char *source) {
             TSNode name = find_child(child, "name");
             if (!ts_node_is_null(name)) {
                 char *name_str = node_text(name, source);
-                stmt->data.class_def.name = puppet_string_create(name_str);
+                if (!found_classname) {
+                    /* First classname is the class name */
+                    stmt->data.class_def.name = puppet_string_create(name_str);
+                    found_classname = true;
+                } else {
+                    /* Second classname is the parent class (inherits clause) */
+                    stmt->data.class_def.inherits = puppet_calloc(1, sizeof(puppet_string_t));
+                    *stmt->data.class_def.inherits = puppet_string_create(name_str);
+                }
                 puppet_free(name_str);
             }
         } else if (strcmp(type, "block") == 0) {
@@ -947,7 +965,6 @@ static puppet_stmt_t *convert_class_def(TSNode node, const char *source) {
                 stmt->data.class_def.params.count++;
             }
         }
-        /* TODO: inherits */
     }
 
     return stmt;

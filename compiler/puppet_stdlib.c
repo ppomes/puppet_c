@@ -3043,6 +3043,7 @@ puppet_value_t *puppet_func_each(puppet_expr_t *expr, puppet_env_t *env) {
 
     puppet_value_t *collection = puppet_eval_expr(expr->data.funcall.args.exprs[0], env);
     if (!collection) {
+        puppet_debug("each(): collection argument evaluated to NULL");
         return puppet_value_create_undef();
     }
 

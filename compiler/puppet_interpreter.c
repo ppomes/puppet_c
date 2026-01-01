@@ -13,6 +13,11 @@
 /* Global verbose flag */
 bool puppet_verbose = false;
 
+/* Forward declarations for node definition management */
+static int puppet_register_node_def(puppet_env_t *env, puppet_stmt_t *node_def);
+static puppet_stmt_t *puppet_find_matching_node(puppet_env_t *env, const char *certname);
+static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *certname, puppet_env_t *env);
+
 // Helper function to convert value to string
 static const char *puppet_value_to_string(puppet_value_t *value) {
     if (!value) return "";
@@ -58,6 +63,12 @@ puppet_env_t *puppet_env_create(void) {
     env->class_def_capacity = 4;
     env->class_definitions = puppet_calloc(env->class_def_capacity, sizeof(puppet_stmt_t*));
     env->class_def_count = 0;
+
+    /* Initialize node definition registry (for facts_db iteration mode) */
+    env->node_def_capacity = 4;
+    env->node_definitions = puppet_calloc(env->node_def_capacity, sizeof(puppet_stmt_t*));
+    env->node_def_count = 0;
+    env->defer_node_execution = false;
 
     /* Initialize class scope registry for $class::var lookups */
     env->class_scopes = puppet_calloc(1, sizeof(puppet_hash_t));
@@ -135,6 +146,9 @@ void puppet_env_destroy(puppet_env_t *env) {
     
     // Clean up class definition registry (don't destroy statements, they're owned by AST)
     puppet_free(env->class_definitions);
+
+    // Clean up node definition registry (don't destroy statements, they're owned by AST)
+    puppet_free(env->node_definitions);
 
     // Clean up class scopes registry
     if (env->class_scopes) {
@@ -1093,6 +1107,9 @@ puppet_value_t *puppet_eval_unop(puppet_unop_t op, puppet_value_t *operand) {
     return puppet_value_create_undef();
 }
 
+/* Forward declaration */
+static bool puppet_include_class_from_def(puppet_stmt_t *class_def, puppet_env_t *env);
+
 /* ============================================================================
  * Resource Collector Helpers
  * ============================================================================ */
@@ -1324,11 +1341,44 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                             continue;
                         }
 
-                        // Create scope for class
-                        puppet_scope_t *class_scope = puppet_scope_create(env->current_scope, class_name);
+                        // Handle class inheritance - include parent class first
+                        puppet_scope_t *parent_class_scope = NULL;
+                        if (class_def->data.class_def.inherits && class_def->data.class_def.inherits->data) {
+                            const char *parent_name = class_def->data.class_def.inherits->data;
+                            /* Strip leading :: from parent name for lookups */
+                            const char *parent_lookup_name = parent_name;
+                            if (strncmp(parent_lookup_name, "::", 2) == 0) {
+                                parent_lookup_name = parent_name + 2;
+                            }
+                            puppet_debug("Class %s inherits from %s", class_name, parent_name);
+
+                            puppet_stmt_t *parent_def = puppet_find_class_def(env, parent_lookup_name);
+                            if (!parent_def && env->loader) {
+                                parent_def = puppet_loader_load_class(env->loader, parent_lookup_name);
+                            }
+
+                            if (parent_def) {
+                                parent_class_scope = (puppet_scope_t *)puppet_hash_get(
+                                    env->class_scopes, parent_lookup_name, strlen(parent_lookup_name));
+                                if (!parent_class_scope) {
+                                    puppet_include_class_from_def(parent_def, env);
+                                    parent_class_scope = (puppet_scope_t *)puppet_hash_get(
+                                        env->class_scopes, parent_lookup_name, strlen(parent_lookup_name));
+                                }
+                            } else {
+                                puppet_warn("Parent class '%s' not found for class '%s'", parent_name, class_name);
+                            }
+                        }
+
+                        // Create scope for class, parented by inherited class scope if any
+                        puppet_scope_t *scope_parent = parent_class_scope ? parent_class_scope : env->current_scope;
+                        puppet_scope_t *class_scope = puppet_scope_create(scope_parent, class_name);
                         puppet_scope_push(env, class_scope);
                         puppet_scope_t *old_class_scope = env->class_scope;
                         env->class_scope = class_scope;
+
+                        // Store class scope BEFORE executing body for $class::var lookups
+                        puppet_hash_set(env->class_scopes, class_name, strlen(class_name), (puppet_value_t *)class_scope);
 
                         // Process class parameters from resource attributes
                         for (size_t pi = 0; pi < class_def->data.class_def.params.count; pi++) {
@@ -1364,10 +1414,6 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         if (env->build_catalog && env->catalog) {
                             puppet_catalog_add_class(env->catalog, class_name);
                         }
-
-                        // Store class scope for later $class::var lookups
-                        // Don't destroy - it's needed for class-qualified variable access
-                        puppet_hash_set(env->class_scopes, class_name, strlen(class_name), (puppet_value_t *)class_scope);
 
                         // Cleanup - pop scope but don't destroy (it's stored in class_scopes)
                         env->class_scope = old_class_scope;
@@ -1691,18 +1737,58 @@ void puppet_exec_program(puppet_program_t *program, puppet_env_t *env) {
     /* Reset node matching state */
     env->node_matched = false;
     env->default_node = NULL;
+    env->node_def_count = 0;  /* Reset node definition registry */
 
-    /* Execute all statements */
+    /*
+     * Special mode: when execute_all_nodes AND facts_db is set with multiple nodes,
+     * we iterate over nodes in the facts database rather than executing node blocks
+     * as we encounter them.
+     */
+    bool facts_db_iteration_mode = env->execute_all_nodes &&
+                                    env->facts_db &&
+                                    puppet_facts_db_node_count(env->facts_db) > 0;
+
+    if (facts_db_iteration_mode) {
+        /* Enable deferred node execution - collect node definitions */
+        env->defer_node_execution = true;
+        puppet_debug("Facts DB iteration mode: collecting node definitions");
+    }
+
+    /* Execute all statements (in defer mode, nodes are registered not executed) */
     puppet_exec_stmt_list(&program->statements, env);
 
-    /* Fallback to default node if specific node was requested but not found */
-    if (env->node_name && !env->node_matched && env->default_node) {
-        puppet_debug("Node '%s' not found, falling back to 'default' node", env->node_name);
-        /* Temporarily allow default node execution */
-        char *saved_node_name = env->node_name;
-        env->node_name = NULL;
-        puppet_exec_node(env->default_node, env);
-        env->node_name = saved_node_name;
+    if (facts_db_iteration_mode) {
+        /* Disable defer mode */
+        env->defer_node_execution = false;
+
+        /* Now iterate over all nodes in the facts database */
+        size_t node_count = puppet_facts_db_node_count(env->facts_db);
+        puppet_debug("Executing %zu nodes from facts database", node_count);
+
+        for (size_t i = 0; i < node_count; i++) {
+            const char *certname = puppet_facts_db_get_node_name(env->facts_db, i);
+            if (!certname) continue;
+
+            /* Find matching node definition */
+            puppet_stmt_t *matching_node = puppet_find_matching_node(env, certname);
+
+            if (matching_node) {
+                /* Execute the matching node block for this certname */
+                puppet_exec_node_for_certname(matching_node, certname, env);
+            } else {
+                puppet_warn("No matching node block found for '%s'", certname);
+            }
+        }
+    } else {
+        /* Fallback to default node if specific node was requested but not found */
+        if (env->node_name && !env->node_matched && env->default_node) {
+            puppet_debug("Node '%s' not found, falling back to 'default' node", env->node_name);
+            /* Temporarily allow default node execution */
+            char *saved_node_name = env->node_name;
+            env->node_name = NULL;
+            puppet_exec_node(env->default_node, env);
+            env->node_name = saved_node_name;
+        }
     }
 }
 
@@ -1713,13 +1799,51 @@ static bool puppet_include_class_from_def(puppet_stmt_t *class_def, puppet_env_t
     const char *class_name = class_def->data.class_def.name.data;
     printf("Including class: %s\n", class_name);
 
-    /* Create a new scope for the class */
-    puppet_scope_t *class_scope = puppet_scope_create(env->current_scope, class_name);
+    /* Handle class inheritance - include parent class first */
+    puppet_scope_t *parent_class_scope = NULL;
+    if (class_def->data.class_def.inherits && class_def->data.class_def.inherits->data) {
+        const char *parent_name = class_def->data.class_def.inherits->data;
+
+        /* Strip leading :: from parent name for lookups */
+        const char *parent_lookup_name = parent_name;
+        if (strncmp(parent_lookup_name, "::", 2) == 0) {
+            parent_lookup_name = parent_name + 2;
+        }
+
+        puppet_debug("Class %s inherits from %s", class_name, parent_name);
+
+        /* Find and include the parent class */
+        puppet_stmt_t *parent_def = puppet_find_class_def(env, parent_lookup_name);
+        if (!parent_def && env->loader) {
+            parent_def = puppet_loader_load_class(env->loader, parent_lookup_name);
+        }
+
+        if (parent_def) {
+            /* Check if parent is already included */
+            parent_class_scope = (puppet_scope_t *)puppet_hash_get(
+                env->class_scopes, parent_lookup_name, strlen(parent_lookup_name));
+            if (!parent_class_scope) {
+                /* Include the parent class first */
+                puppet_include_class_from_def(parent_def, env);
+                parent_class_scope = (puppet_scope_t *)puppet_hash_get(
+                    env->class_scopes, parent_lookup_name, strlen(parent_lookup_name));
+            }
+        } else {
+            puppet_warn("Parent class '%s' not found for class '%s'", parent_name, class_name);
+        }
+    }
+
+    /* Create a new scope for the class, parented by the inherited class scope if any */
+    puppet_scope_t *scope_parent = parent_class_scope ? parent_class_scope : env->current_scope;
+    puppet_scope_t *class_scope = puppet_scope_create(scope_parent, class_name);
     puppet_scope_push(env, class_scope);
 
     /* Set class scope in environment for enhanced variable lookup */
     puppet_scope_t *old_class_scope = env->class_scope;
     env->class_scope = class_scope;
+
+    /* Store class scope BEFORE executing body - allows $class::var lookups during execution */
+    puppet_hash_set(env->class_scopes, class_name, strlen(class_name), (puppet_value_t *)class_scope);
 
     /* Process class parameters and set default values */
     for (size_t i = 0; i < class_def->data.class_def.params.count; i++) {
@@ -1742,9 +1866,6 @@ static bool puppet_include_class_from_def(puppet_stmt_t *class_def, puppet_env_t
     if (env->build_catalog && env->catalog) {
         puppet_catalog_add_class(env->catalog, class_name);
     }
-
-    /* Store class scope for later $class::var lookups */
-    puppet_hash_set(env->class_scopes, class_name, strlen(class_name), (puppet_value_t *)class_scope);
 
     /* Restore old class scope */
     env->class_scope = old_class_scope;
@@ -1867,6 +1988,62 @@ void puppet_env_set_loader(puppet_env_t *env, puppet_loader_t *loader) {
     env->loader = loader;
 }
 
+/**
+ * @brief Execute a node definition for a specific certname
+ *
+ * This is used when iterating over facts_db nodes. The certname is used
+ * to set the correct facts before executing the node body.
+ *
+ * @param node_stmt Node definition to execute
+ * @param certname Node certname (for facts lookup)
+ * @param env Execution environment
+ */
+static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *certname, puppet_env_t *env) {
+    if (!node_stmt || node_stmt->type != PUPPET_STMT_NODE || !certname) return;
+
+    puppet_debug("Executing node block for certname: %s", certname);
+    env->node_matched = true;
+
+    /* Clear resource catalog for this node (each node has its own catalog) */
+    if (env->resource_catalog) {
+        for (size_t i = 0; i < env->resource_catalog->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->resource_catalog->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                puppet_value_destroy(entry->value);
+                puppet_free(entry);
+                entry = next;
+            }
+            env->resource_catalog->buckets[i] = NULL;
+        }
+    }
+
+    /* Switch to node-specific facts */
+    if (env->facts_db) {
+        if (puppet_facts_db_set_current_node(env->facts_db, certname) == 0) {
+            puppet_debug("Using facts for node: %s", certname);
+        } else {
+            puppet_warn("No facts found for node %s", certname);
+        }
+    }
+
+    /* Create a new scope for the node using the certname */
+    puppet_scope_t *node_scope = puppet_scope_create(env->current_scope, certname);
+    puppet_scope_push(env, node_scope);
+
+    /* Set automatic variables using the certname */
+    puppet_value_t *hostname_value = puppet_value_create_string(certname, strlen(certname));
+    puppet_scope_set_var(node_scope, "hostname", hostname_value);
+
+    /* Execute node body */
+    puppet_exec_stmt_list(&node_stmt->data.node.body, env);
+
+    /* Pop the node scope */
+    puppet_scope_t *old_scope = puppet_scope_pop(env);
+    puppet_scope_destroy(old_scope);
+}
+
 void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
     if (!node_stmt || node_stmt->type != PUPPET_STMT_NODE) return;
 
@@ -1876,6 +2053,12 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
     /* Store default node for potential fallback */
     if (is_default) {
         env->default_node = node_stmt;
+    }
+
+    /* If in defer mode (facts_db iteration), just register the node */
+    if (env->defer_node_execution) {
+        puppet_register_node_def(env, node_stmt);
+        return;
     }
 
     /* Check if we should execute this node */
@@ -1913,7 +2096,7 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
             }
         }
     }
-    
+
     if (should_execute) {
         puppet_debug("Executing node: %s", node_name);
         env->node_matched = true;
@@ -1934,7 +2117,7 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
             }
             /* Size tracking is handled internally */
         }
-        
+
         /* Switch to node-specific facts if available */
         if (env->facts_db) {
             if (puppet_facts_db_set_current_node(env->facts_db, node_name) == 0) {
@@ -1943,18 +2126,18 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
                 puppet_debug("No facts found for node %s, using default facts", node_name);
             }
         }
-        
+
         /* Create a new scope for the node */
         puppet_scope_t *node_scope = puppet_scope_create(env->current_scope, node_name);
         puppet_scope_push(env, node_scope);
-        
+
         /* Set automatic variables like $hostname */
         puppet_value_t *hostname_value = puppet_value_create_string(node_name, strlen(node_name));
         puppet_scope_set_var(node_scope, "hostname", hostname_value);
-        
+
         /* Execute node body */
         puppet_exec_stmt_list(&node_stmt->data.node.body, env);
-        
+
         /* Pop the node scope */
         puppet_scope_t *old_scope = puppet_scope_pop(env);
         puppet_scope_destroy(old_scope);
@@ -2155,7 +2338,7 @@ int puppet_register_class_def(puppet_env_t *env, puppet_stmt_t *class_def) {
  */
 puppet_stmt_t *puppet_find_class_def(puppet_env_t *env, const char *class_name) {
     if (!env || !class_name) return NULL;
-    
+
     for (size_t i = 0; i < env->class_def_count; i++) {
         puppet_stmt_t *class_def = env->class_definitions[i];
         if (class_def && class_def->type == PUPPET_STMT_CLASS_DEF) {
@@ -2165,8 +2348,101 @@ puppet_stmt_t *puppet_find_class_def(puppet_env_t *env, const char *class_name) 
             }
         }
     }
-    
+
     return NULL;
+}
+
+/*
+ * ===========================================================================
+ * NODE DEFINITION MANAGEMENT
+ * ===========================================================================
+ */
+
+/**
+ * @brief Register a node definition for later execution
+ *
+ * @param env Execution environment
+ * @param node_def Node definition statement
+ * @return 0 on success, -1 on error
+ */
+static int puppet_register_node_def(puppet_env_t *env, puppet_stmt_t *node_def) {
+    if (!env || !node_def || node_def->type != PUPPET_STMT_NODE) return -1;
+
+    // Expand node definition array if needed
+    if (env->node_def_count >= env->node_def_capacity) {
+        env->node_def_capacity *= 2;
+        env->node_definitions = puppet_realloc(env->node_definitions,
+            env->node_def_capacity * sizeof(puppet_stmt_t*));
+        if (!env->node_definitions) {
+            return -1;
+        }
+    }
+
+    // Add node definition to registry
+    env->node_definitions[env->node_def_count] = node_def;
+    env->node_def_count++;
+
+    return 0;
+}
+
+/**
+ * @brief Find a node definition matching a certname
+ *
+ * Searches through registered node definitions to find one matching the certname.
+ * Handles both literal node names and regex patterns.
+ *
+ * @param env Execution environment
+ * @param certname Node certname to match
+ * @return Matching node definition or NULL if not found
+ */
+static puppet_stmt_t *puppet_find_matching_node(puppet_env_t *env, const char *certname) {
+    if (!env || !certname) return NULL;
+
+    puppet_stmt_t *default_node = NULL;
+
+    for (size_t i = 0; i < env->node_def_count; i++) {
+        puppet_stmt_t *node_def = env->node_definitions[i];
+        if (!node_def || node_def->type != PUPPET_STMT_NODE) continue;
+
+        const char *node_name = node_def->data.node.name.data;
+
+        // Check for default node
+        if (strcmp(node_name, "default") == 0) {
+            default_node = node_def;
+            continue;
+        }
+
+        size_t name_len = strlen(node_name);
+
+        // Check if node name is a regex pattern (starts and ends with /)
+        if (name_len > 2 && node_name[0] == '/' && node_name[name_len - 1] == '/') {
+            // Extract regex pattern (without the slashes)
+            char *pattern = puppet_malloc(name_len - 1);
+            strncpy(pattern, node_name + 1, name_len - 2);
+            pattern[name_len - 2] = '\0';
+
+            // Compile and execute regex
+            regex_t regex;
+            int ret = regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB);
+            if (ret == 0) {
+                ret = regexec(&regex, certname, 0, NULL, 0);
+                regfree(&regex);
+                if (ret == 0) {
+                    puppet_free(pattern);
+                    return node_def;  // Regex match found
+                }
+            }
+            puppet_free(pattern);
+        } else {
+            // Literal string match
+            if (strcmp(node_name, certname) == 0) {
+                return node_def;
+            }
+        }
+    }
+
+    // Return default node if no specific match found
+    return default_node;
 }
 
 /*
@@ -2220,9 +2496,12 @@ puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name
             puppet_scope_t *stored_scope = (puppet_scope_t *)puppet_hash_get(
                 env->class_scopes, class_name, strlen(class_name));
             if (stored_scope) {
-                value = puppet_scope_get_var(stored_scope, var_name, false);
+                // Use recursive=true to search parent scopes (for inherited class variables)
+                value = puppet_scope_get_var(stored_scope, var_name, true);
                 puppet_free(class_name);
                 return value;
+            } else {
+                puppet_debug("Class %s not found in class_scopes", class_name);
             }
         }
 
@@ -2230,7 +2509,8 @@ puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name
         puppet_scope_t *scope = env->current_scope;
         while (scope) {
             if (scope->name.data && strcmp(scope->name.data, class_name) == 0) {
-                value = puppet_scope_get_var(scope, var_name, false);
+                // Use recursive=true to search parent scopes
+                value = puppet_scope_get_var(scope, var_name, true);
                 puppet_free(class_name);
                 return value;  // Return even if NULL - variable should be in this scope
             }
@@ -2240,7 +2520,8 @@ puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name
         // Also check if class_scope matches (current class being executed)
         if (env->class_scope && env->class_scope->name.data &&
             strcmp(env->class_scope->name.data, class_name) == 0) {
-            value = puppet_scope_get_var(env->class_scope, var_name, false);
+            // Use recursive=true to search parent scopes
+            value = puppet_scope_get_var(env->class_scope, var_name, true);
             puppet_free(class_name);
             return value;
         }
@@ -2846,7 +3127,7 @@ int puppet_facts_db_load_json(puppet_facts_db_t *facts_db, const char *certname,
 
 int puppet_facts_db_set_current_node(puppet_facts_db_t *facts_db, const char *certname) {
     if (!facts_db || !certname) return -1;
-    
+
     // Find node index
     puppet_value_t *index_value = puppet_hash_get(facts_db->node_index, certname, strlen(certname));
     if (!index_value || index_value->type != PUPPET_VALUE_NUMBER) {
@@ -2859,19 +3140,38 @@ int puppet_facts_db_set_current_node(puppet_facts_db_t *facts_db, const char *ce
         puppet_warn("Invalid node index for '%s'", certname);
         return -1;
     }
-    
+
     // Set current node
     puppet_free(facts_db->current_node);
     facts_db->current_node = puppet_strdup(certname);
-    
+
     return 0;
 }
 
+size_t puppet_facts_db_node_count(puppet_facts_db_t *facts_db) {
+    if (!facts_db) return 0;
+    return facts_db->node_count;
+}
+
+const char *puppet_facts_db_get_node_name(puppet_facts_db_t *facts_db, size_t index) {
+    if (!facts_db || index >= facts_db->node_count) return NULL;
+    return facts_db->nodes[index].certname;
+}
+
 puppet_value_t *puppet_facts_get(puppet_env_t *env, const char *fact_name) {
-    if (!env || !env->facts_db || !fact_name) {
+    if (!fact_name) {
         return NULL;
     }
-    
+
+    /* Hardcoded facts - puppetversion is always "puppetc" */
+    if (strcmp(fact_name, "puppetversion") == 0) {
+        return puppet_value_create_string("puppetc", 7);
+    }
+
+    if (!env || !env->facts_db) {
+        return NULL;
+    }
+
     puppet_facts_db_t *facts_db = env->facts_db;
     if (!facts_db->current_node) {
         return NULL;
@@ -2972,6 +3272,10 @@ puppet_value_t *puppet_facts_get_all_as_hash(puppet_env_t *env) {
             entry = entry->next;
         }
     }
+
+    /* Add hardcoded facts */
+    puppet_value_t *puppetversion = puppet_value_create_string("puppetc", 7);
+    puppet_hash_set(root->data.hash, "puppetversion", 13, puppetversion);
 
     return root;
 }

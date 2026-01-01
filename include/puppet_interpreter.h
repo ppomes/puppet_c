@@ -133,6 +133,12 @@ typedef struct puppet_env {
     size_t class_def_count;                   /**< Number of registered class definitions */
     size_t class_def_capacity;                /**< Class definition array capacity */
 
+    /* Node definition registry (for facts_db iteration mode) */
+    puppet_stmt_t **node_definitions;         /**< Array of node definition statements */
+    size_t node_def_count;                    /**< Number of registered node definitions */
+    size_t node_def_capacity;                 /**< Node definition array capacity */
+    bool defer_node_execution;                /**< Defer node execution for facts_db iteration */
+
     /* Class scope registry - stores scopes for included classes for $class::var lookups */
     puppet_hash_t *class_scopes;              /**< class_name → scope mapping */
     
@@ -226,6 +232,8 @@ int puppet_facts_db_set_current_node(puppet_facts_db_t *facts_db, const char *ce
 puppet_value_t *puppet_facts_get(puppet_env_t *env, const char *fact_name);
 puppet_value_t *puppet_facts_get_all_as_hash(puppet_env_t *env);
 int puppet_env_set_facts_db(puppet_env_t *env, puppet_facts_db_t *facts_db);
+size_t puppet_facts_db_node_count(puppet_facts_db_t *facts_db);
+const char *puppet_facts_db_get_node_name(puppet_facts_db_t *facts_db, size_t index);
 
 /* Expression evaluation */
 puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env);

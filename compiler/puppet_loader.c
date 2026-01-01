@@ -226,17 +226,48 @@ bool puppet_loader_include_class(puppet_loader_t *loader,
         fprintf(stderr, "Error: Cannot include class '%s'\n", class_name);
         return false;
     }
-    
+
     /* Execute the class definition */
     printf("Including class: %s\n", class_name);
 
-    /* Create a new scope for the class */
-    puppet_scope_t *class_scope = puppet_scope_create(env->current_scope, class_name);
+    /* Handle class inheritance - include parent class first */
+    puppet_scope_t *parent_class_scope = NULL;
+    if (class_def->data.class_def.inherits && class_def->data.class_def.inherits->data) {
+        const char *parent_name = class_def->data.class_def.inherits->data;
+
+        /* Strip leading :: from parent name for lookups */
+        const char *parent_lookup_name = parent_name;
+        if (strncmp(parent_lookup_name, "::", 2) == 0) {
+            parent_lookup_name = parent_name + 2;
+        }
+
+        puppet_stmt_t *parent_def = puppet_find_class_def(env, parent_lookup_name);
+        if (!parent_def) {
+            parent_def = puppet_loader_load_class(loader, parent_lookup_name);
+        }
+
+        if (parent_def) {
+            parent_class_scope = (puppet_scope_t *)puppet_hash_get(
+                env->class_scopes, parent_lookup_name, strlen(parent_lookup_name));
+            if (!parent_class_scope) {
+                puppet_loader_include_class(loader, parent_lookup_name, env);
+                parent_class_scope = (puppet_scope_t *)puppet_hash_get(
+                    env->class_scopes, parent_lookup_name, strlen(parent_lookup_name));
+            }
+        }
+    }
+
+    /* Create a new scope for the class, parented by inherited class if any */
+    puppet_scope_t *scope_parent = parent_class_scope ? parent_class_scope : env->current_scope;
+    puppet_scope_t *class_scope = puppet_scope_create(scope_parent, class_name);
     puppet_scope_push(env, class_scope);
 
     /* Set class scope in environment for enhanced variable lookup */
     puppet_scope_t *old_class_scope = env->class_scope;
     env->class_scope = class_scope;
+
+    /* Store class scope BEFORE executing body for $class::var lookups */
+    puppet_hash_set(env->class_scopes, class_name, strlen(class_name), (puppet_value_t *)class_scope);
 
     /* Process class parameters and set default values */
     for (size_t i = 0; i < class_def->data.class_def.params.count; i++) {
@@ -256,9 +287,6 @@ bool puppet_loader_include_class(puppet_loader_t *loader,
 
     /* Execute the class body */
     puppet_exec_stmt_list(&class_def->data.class_def.body, env);
-
-    /* Store class scope for later $class::var lookups */
-    puppet_hash_set(env->class_scopes, class_name, strlen(class_name), (puppet_value_t *)class_scope);
 
     /* Restore old class scope */
     env->class_scope = old_class_scope;
