@@ -1039,6 +1039,67 @@ puppet_value_t *puppet_eval_variable(const char *name, puppet_env_t *env) {
     return puppet_value_copy(value);
 }
 
+/**
+ * Compare two Puppet values for equality (deep comparison for hashes/arrays)
+ */
+static bool puppet_values_equal(puppet_value_t *left, puppet_value_t *right) {
+    if (!left && !right) return true;
+    if (!left || !right) return false;
+    if (left->type != right->type) return false;
+
+    switch (left->type) {
+        case PUPPET_VALUE_UNDEF:
+            return true;
+        case PUPPET_VALUE_BOOL:
+            return left->data.boolean == right->data.boolean;
+        case PUPPET_VALUE_NUMBER:
+            return left->data.number == right->data.number;
+        case PUPPET_VALUE_STRING:
+            return left->data.string.len == right->data.string.len &&
+                   strcmp(left->data.string.data, right->data.string.data) == 0;
+        case PUPPET_VALUE_ARRAY:
+            if (!left->data.array || !right->data.array) {
+                return left->data.array == right->data.array;
+            }
+            if (left->data.array->count != right->data.array->count) return false;
+            for (size_t i = 0; i < left->data.array->count; i++) {
+                if (!puppet_values_equal(left->data.array->items[i], right->data.array->items[i])) {
+                    return false;
+                }
+            }
+            return true;
+        case PUPPET_VALUE_HASH:
+            /* Compare hash sizes first */
+            if (!left->data.hash || !right->data.hash) {
+                return left->data.hash == right->data.hash;
+            }
+            /* Count entries in left hash and verify all exist in right with same values */
+            {
+                size_t left_count = 0;
+                for (size_t i = 0; i < left->data.hash->bucket_count; i++) {
+                    for (puppet_hash_entry_t *e = left->data.hash->buckets[i]; e; e = e->next) {
+                        left_count++;
+                        puppet_value_t *right_val = puppet_hash_get(right->data.hash,
+                            e->key.data, e->key.len);
+                        if (!right_val || !puppet_values_equal(e->value, right_val)) {
+                            return false;
+                        }
+                    }
+                }
+                /* Count entries in right hash to ensure same size */
+                size_t right_count = 0;
+                for (size_t i = 0; i < right->data.hash->bucket_count; i++) {
+                    for (puppet_hash_entry_t *e = right->data.hash->buckets[i]; e; e = e->next) {
+                        right_count++;
+                    }
+                }
+                return left_count == right_count;
+            }
+        default:
+            return false;
+    }
+}
+
 puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppet_value_t *right) {
     switch (op) {
         case PUPPET_OP_ADD:
@@ -1068,40 +1129,10 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
             break;
             
         case PUPPET_OP_EQ:
-            if (left->type == right->type) {
-                switch (left->type) {
-                    case PUPPET_VALUE_BOOL:
-                        return puppet_value_create_bool(left->data.boolean == right->data.boolean);
-                    case PUPPET_VALUE_NUMBER:
-                        return puppet_value_create_bool(left->data.number == right->data.number);
-                    case PUPPET_VALUE_STRING:
-                        return puppet_value_create_bool(
-                            left->data.string.len == right->data.string.len &&
-                            strcmp(left->data.string.data, right->data.string.data) == 0
-                        );
-                    default:
-                        break;
-                }
-            }
-            return puppet_value_create_bool(false);
-            
+            return puppet_value_create_bool(puppet_values_equal(left, right));
+
         case PUPPET_OP_NE:
-            if (left->type == right->type) {
-                switch (left->type) {
-                    case PUPPET_VALUE_BOOL:
-                        return puppet_value_create_bool(left->data.boolean != right->data.boolean);
-                    case PUPPET_VALUE_NUMBER:
-                        return puppet_value_create_bool(left->data.number != right->data.number);
-                    case PUPPET_VALUE_STRING:
-                        return puppet_value_create_bool(
-                            left->data.string.len != right->data.string.len ||
-                            strcmp(left->data.string.data, right->data.string.data) != 0
-                        );
-                    default:
-                        break;
-                }
-            }
-            return puppet_value_create_bool(true);
+            return puppet_value_create_bool(!puppet_values_equal(left, right));
             
         case PUPPET_OP_LT:
             /* Comparisons with undef return false */
