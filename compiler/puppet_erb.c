@@ -90,14 +90,25 @@ puppet_ruby_context_t *puppet_ruby_init(void) {
         "    # Try with underscores replaced for nested names (classname::varname)\n"
         "    safe_name = name.gsub('::', '__')\n"
         "    return @vars[safe_name] if @vars.key?(safe_name)\n"
-        "    # Return empty string for undefined (prevents nil errors)\n"
-        "    ''\n"
+        "    # Return :undef symbol for undefined (like real Puppet)\n"
+        "    :undef\n"
         "  end\n"
         "  def [](name)\n"
         "    lookupvar(name)\n"
         "  end\n"
+        "  def has_variable?(name)\n"
+        "    # Remove leading :: if present\n"
+        "    name = name.sub(/^::/, '') if name.start_with?('::')\n"
+        "    return true if @vars.key?(name)\n"
+        "    safe_name = name.gsub('::', '__')\n"
+        "    @vars.key?(safe_name)\n"
+        "  end\n"
         "end\n"
-        "$puppet_vars = {}\n",
+        "$puppet_vars = {}\n"
+        "# Define has_variable? in main scope for templates that call it directly\n"
+        "def has_variable?(name)\n"
+        "  $scope.has_variable?(name) if $scope\n"
+        "end\n",
         &state);
     if (state != 0) {
         printf("Warning: Failed to define PuppetScope class (state=%d)\n", state);
@@ -285,8 +296,8 @@ static void puppet_set_ruby_variable(const char *name, puppet_value_t *value, pu
 
 static void puppet_export_env_to_ruby(puppet_env_t *env, puppet_ruby_context_t *ruby_ctx) {
     if (!env || !ruby_ctx) return;
-    
-    // Export all variables from current scope
+
+    // Export all variables from current scope chain
     puppet_scope_t *scope = env->current_scope;
     while (scope) {
         for (size_t i = 0; i < scope->variables->bucket_count; i++) {
@@ -298,7 +309,33 @@ static void puppet_export_env_to_ruby(puppet_env_t *env, puppet_ruby_context_t *
         }
         scope = scope->parent;
     }
-    
+
+    // Export variables from all class scopes (for scope.lookupvar('class::var'))
+    if (env->class_scopes) {
+        for (size_t i = 0; i < env->class_scopes->bucket_count; i++) {
+            puppet_hash_entry_t *class_entry = env->class_scopes->buckets[i];
+            while (class_entry) {
+                const char *class_name = class_entry->key.data;
+                puppet_scope_t *class_scope = (puppet_scope_t *)class_entry->value;
+
+                if (class_scope && class_scope->variables) {
+                    for (size_t j = 0; j < class_scope->variables->bucket_count; j++) {
+                        puppet_hash_entry_t *var_entry = class_scope->variables->buckets[j];
+                        while (var_entry) {
+                            // Export as class::varname format for scope.lookupvar()
+                            char qualified_name[512];
+                            snprintf(qualified_name, sizeof(qualified_name), "%s::%s",
+                                     class_name, var_entry->key.data);
+                            puppet_set_ruby_variable(qualified_name, var_entry->value, ruby_ctx);
+                            var_entry = var_entry->next;
+                        }
+                    }
+                }
+                class_entry = class_entry->next;
+            }
+        }
+    }
+
     // Export facts as variables too (facts become @factname in ERB)
     if (env->facts_db && env->facts_db->current_node) {
         
