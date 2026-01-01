@@ -257,13 +257,15 @@ bool puppet_loader_include_class(puppet_loader_t *loader,
     /* Execute the class body */
     puppet_exec_stmt_list(&class_def->data.class_def.body, env);
 
+    /* Store class scope for later $class::var lookups */
+    puppet_hash_set(env->class_scopes, class_name, strlen(class_name), (puppet_value_t *)class_scope);
+
     /* Restore old class scope */
     env->class_scope = old_class_scope;
 
-    /* Pop the class scope */
-    puppet_scope_t *old_scope = puppet_scope_pop(env);
-    puppet_scope_destroy(old_scope);
-    
+    /* Pop the class scope but don't destroy (it's stored in class_scopes) */
+    (void)puppet_scope_pop(env);
+
     return true;
 }
 
