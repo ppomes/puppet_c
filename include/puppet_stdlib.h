@@ -128,6 +128,11 @@ puppet_value_t *puppet_func_assert_type(puppet_expr_list_t *args, puppet_env_t *
 puppet_value_t *puppet_func_dig(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_pick(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_pick_default(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_getvar(puppet_expr_list_t *args, puppet_env_t *env);
+
+// File functions
+puppet_value_t *puppet_func_file(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_inline_template(puppet_expr_list_t *args, puppet_env_t *env);
 
 // Utility function to convert values to strings for logging
 char *puppet_value_to_display_string(puppet_value_t *value);

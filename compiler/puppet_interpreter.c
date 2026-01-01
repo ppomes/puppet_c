@@ -724,6 +724,17 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
                 return puppet_func_lookup(&expr->data.funcall.args, env);
             }
 
+            // Variable/file access functions
+            else if (strcmp(func_name, "getvar") == 0) {
+                return puppet_func_getvar(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "file") == 0) {
+                return puppet_func_file(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "inline_template") == 0) {
+                return puppet_func_inline_template(&expr->data.funcall.args, env);
+            }
+
             else {
                 puppet_error("Unknown function: %s", func_name);
                 return puppet_value_create_undef();

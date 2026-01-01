@@ -9,6 +9,7 @@
 #include "puppet_memory.h"
 #include "puppet_loader.h"
 #include "puppet_interpreter.h"
+#include "puppet_erb.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -4551,6 +4552,205 @@ puppet_value_t *puppet_func_hiera(puppet_expr_list_t *args, puppet_env_t *env) {
     }
 
     puppet_log(PUPPET_LOG_WARNING, "hiera(): key not found and no default provided");
+    return puppet_value_create_undef();
+}
+
+/**
+ * @brief Puppet getvar() function - get variable by name string
+ *
+ * Usage: getvar('class::variable_name')
+ * Returns the value of the variable, or undef if not found.
+ */
+puppet_value_t *puppet_func_getvar(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "getvar() requires at least 1 argument (variable name)");
+        return puppet_value_create_undef();
+    }
+
+    /* Get the variable name */
+    puppet_value_t *name_val = puppet_eval_expr(args->exprs[0], env);
+    if (!name_val || name_val->type != PUPPET_VALUE_STRING) {
+        puppet_log(PUPPET_LOG_ERROR, "getvar() argument must be a string");
+        if (name_val) puppet_value_destroy(name_val);
+        return puppet_value_create_undef();
+    }
+
+    const char *var_name = name_val->data.string.data;
+
+    /* Strip leading :: if present */
+    if (var_name[0] == ':' && var_name[1] == ':') {
+        var_name += 2;
+    }
+
+    /* Look up the variable using the existing lookup chain */
+    puppet_value_t *result = NULL;
+
+    /* Check if it's a qualified name (contains ::) */
+    const char *sep = strstr(var_name, "::");
+    if (sep) {
+        /* Extract class name and variable name */
+        size_t class_len = sep - var_name;
+        char *class_name = puppet_malloc(class_len + 1);
+        memcpy(class_name, var_name, class_len);
+        class_name[class_len] = '\0';
+        const char *local_var = sep + 2;
+
+        /* Look up in class scope */
+        if (env->class_scopes) {
+            puppet_scope_t *class_scope = (puppet_scope_t *)puppet_hash_get(
+                env->class_scopes, class_name, class_len);
+            if (class_scope) {
+                result = puppet_scope_get_var(class_scope, local_var, false);
+                if (result) {
+                    result = puppet_value_copy(result);
+                }
+            }
+        }
+        puppet_free(class_name);
+    } else {
+        /* Simple variable - look in current scope */
+        result = puppet_scope_get_var(env->current_scope, var_name, true);
+        if (result) {
+            result = puppet_value_copy(result);
+        }
+    }
+
+    puppet_value_destroy(name_val);
+
+    return result ? result : puppet_value_create_undef();
+}
+
+/**
+ * @brief Puppet file() function - read file content at compile time
+ *
+ * Usage: file('module/path') or file('/absolute/path')
+ * Returns the content of the file as a string.
+ */
+puppet_value_t *puppet_func_file(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "file() requires at least 1 argument (file path)");
+        return puppet_value_create_undef();
+    }
+
+    /* Try each argument until one succeeds */
+    for (size_t i = 0; i < args->count; i++) {
+        puppet_value_t *path_val = puppet_eval_expr(args->exprs[i], env);
+        if (!path_val || path_val->type != PUPPET_VALUE_STRING) {
+            if (path_val) puppet_value_destroy(path_val);
+            continue;
+        }
+
+        const char *path = path_val->data.string.data;
+        char fullpath[4096];
+        FILE *fp = NULL;
+
+        /* Check if it's an absolute path */
+        if (path[0] == '/') {
+            fp = fopen(path, "r");
+        } else {
+            /* Module-relative path: module_name/file_path */
+            /* Try to find in module's files directory */
+            const char *slash = strchr(path, '/');
+            if (slash && env->loader && env->loader->modules_path) {
+                size_t module_len = slash - path;
+                char module_name[256];
+                if (module_len < sizeof(module_name)) {
+                    memcpy(module_name, path, module_len);
+                    module_name[module_len] = '\0';
+
+                    /* Look in the modules path */
+                    snprintf(fullpath, sizeof(fullpath), "%s/%s/files/%s",
+                             env->loader->modules_path, module_name, slash + 1);
+                    fp = fopen(fullpath, "r");
+                }
+            }
+        }
+
+        puppet_value_destroy(path_val);
+
+        if (fp) {
+            /* Read file content */
+            fseek(fp, 0, SEEK_END);
+            long size = ftell(fp);
+            fseek(fp, 0, SEEK_SET);
+
+            char *content = puppet_malloc(size + 1);
+            size_t read_size = fread(content, 1, size, fp);
+            content[read_size] = '\0';
+            fclose(fp);
+
+            puppet_value_t *result = puppet_value_create_string(content, read_size);
+            puppet_free(content);
+            return result;
+        }
+    }
+
+    puppet_log(PUPPET_LOG_ERROR, "file(): could not read any of the specified files");
+    return puppet_value_create_undef();
+}
+
+/**
+ * @brief Puppet inline_template() function - evaluate ERB template inline
+ *
+ * Usage: inline_template('ERB template string')
+ * Returns the result of evaluating the template.
+ */
+puppet_value_t *puppet_func_inline_template(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log(PUPPET_LOG_ERROR, "inline_template() requires at least 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    /* Initialize Ruby if needed (shared context) */
+    static puppet_ruby_context_t *ruby_ctx = NULL;
+    if (!ruby_ctx) {
+        ruby_ctx = puppet_ruby_init();
+        if (!ruby_ctx) {
+            puppet_log(PUPPET_LOG_ERROR, "inline_template(): failed to initialize Ruby");
+            return puppet_value_create_undef();
+        }
+    }
+
+    /* Concatenate all template outputs */
+    char *full_output = NULL;
+    size_t full_len = 0;
+
+    for (size_t i = 0; i < args->count; i++) {
+        /* Evaluate the template string argument */
+        puppet_value_t *template_val = puppet_eval_expr(args->exprs[i], env);
+        if (!template_val || template_val->type != PUPPET_VALUE_STRING) {
+            puppet_log(PUPPET_LOG_ERROR, "inline_template() argument must be a string");
+            if (template_val) puppet_value_destroy(template_val);
+            if (full_output) puppet_free(full_output);
+            return puppet_value_create_undef();
+        }
+
+        const char *template_str = template_val->data.string.data;
+
+        /* Use the ERB processing function */
+        char *result = puppet_erb_render(template_str, env, ruby_ctx);
+        puppet_value_destroy(template_val);
+
+        if (result) {
+            size_t result_len = strlen(result);
+            char *new_output = puppet_malloc(full_len + result_len + 1);
+            if (full_output) {
+                memcpy(new_output, full_output, full_len);
+                puppet_free(full_output);
+            }
+            memcpy(new_output + full_len, result, result_len + 1);
+            full_output = new_output;
+            full_len += result_len;
+            puppet_free(result);
+        }
+    }
+
+    if (full_output) {
+        puppet_value_t *ret = puppet_value_create_string(full_output, full_len);
+        puppet_free(full_output);
+        return ret;
+    }
+
     return puppet_value_create_undef();
 }
 
