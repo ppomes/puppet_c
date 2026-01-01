@@ -132,6 +132,9 @@ typedef struct puppet_env {
     puppet_stmt_t **class_definitions;        /**< Array of class definition statements */
     size_t class_def_count;                   /**< Number of registered class definitions */
     size_t class_def_capacity;                /**< Class definition array capacity */
+
+    /* Class scope registry - stores scopes for included classes for $class::var lookups */
+    puppet_hash_t *class_scopes;              /**< class_name → scope mapping */
     
     /* Facts database */
     puppet_facts_db_t *facts_db;              /**< Facts database for node-specific facts */

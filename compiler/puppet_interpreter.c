@@ -58,7 +58,12 @@ puppet_env_t *puppet_env_create(void) {
     env->class_def_capacity = 4;
     env->class_definitions = puppet_calloc(env->class_def_capacity, sizeof(puppet_stmt_t*));
     env->class_def_count = 0;
-    
+
+    /* Initialize class scope registry for $class::var lookups */
+    env->class_scopes = puppet_calloc(1, sizeof(puppet_hash_t));
+    env->class_scopes->bucket_count = 32;
+    env->class_scopes->buckets = puppet_calloc(env->class_scopes->bucket_count, sizeof(puppet_hash_entry_t*));
+
     /* Initialize facts database */
     env->facts_db = NULL;
     
@@ -130,7 +135,24 @@ void puppet_env_destroy(puppet_env_t *env) {
     
     // Clean up class definition registry (don't destroy statements, they're owned by AST)
     puppet_free(env->class_definitions);
-    
+
+    // Clean up class scopes registry
+    if (env->class_scopes) {
+        for (size_t i = 0; i < env->class_scopes->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->class_scopes->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                // Destroy the stored scope
+                puppet_scope_destroy((puppet_scope_t *)entry->value);
+                puppet_free(entry);
+                entry = next;
+            }
+        }
+        puppet_free(env->class_scopes->buckets);
+        puppet_free(env->class_scopes);
+    }
+
     // Clean up facts database
     if (env->facts_db) {
         puppet_facts_db_destroy(env->facts_db);
@@ -1184,10 +1206,13 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                             puppet_catalog_add_class(env->catalog, class_name);
                         }
 
-                        // Cleanup
+                        // Store class scope for later $class::var lookups
+                        // Don't destroy - it's needed for class-qualified variable access
+                        puppet_hash_set(env->class_scopes, class_name, strlen(class_name), (puppet_value_t *)class_scope);
+
+                        // Cleanup - pop scope but don't destroy (it's stored in class_scopes)
                         env->class_scope = old_class_scope;
-                        puppet_scope_t *old_scope = puppet_scope_pop(env);
-                        puppet_scope_destroy(old_scope);
+                        (void)puppet_scope_pop(env);  // Pop but don't destroy
                         puppet_value_destroy(title_val);
                     }
                 }
@@ -1559,12 +1584,14 @@ static bool puppet_include_class_from_def(puppet_stmt_t *class_def, puppet_env_t
         puppet_catalog_add_class(env->catalog, class_name);
     }
 
+    /* Store class scope for later $class::var lookups */
+    puppet_hash_set(env->class_scopes, class_name, strlen(class_name), (puppet_value_t *)class_scope);
+
     /* Restore old class scope */
     env->class_scope = old_class_scope;
 
-    /* Pop the class scope */
-    puppet_scope_t *old_scope = puppet_scope_pop(env);
-    puppet_scope_destroy(old_scope);
+    /* Pop the class scope but don't destroy (it's stored in class_scopes) */
+    (void)puppet_scope_pop(env);
 
     return true;
 }
@@ -2015,6 +2042,53 @@ puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name
     if (strncmp(name, "::", 2) == 0) {
         lookup_name = name + 2;  // Skip the :: prefix
         top_level_only = true;
+    }
+
+    // Handle class-qualified variable names like $secrets::root, $apt::params::provider
+    // Look for :: in the name (after handling leading ::)
+    const char *last_sep = strrchr(lookup_name, ':');
+    if (last_sep && last_sep > lookup_name && *(last_sep - 1) == ':') {
+        // This is a class-qualified variable like "secrets::root" or "apt::params::provider"
+        // Split into class_name and var_name at the last ::
+        size_t class_len = (last_sep - 1) - lookup_name;
+        char *class_name = puppet_malloc(class_len + 1);
+        strncpy(class_name, lookup_name, class_len);
+        class_name[class_len] = '\0';
+        const char *var_name = last_sep + 1;
+
+        // First check the class_scopes registry (for previously included classes)
+        if (env->class_scopes) {
+            puppet_scope_t *stored_scope = (puppet_scope_t *)puppet_hash_get(
+                env->class_scopes, class_name, strlen(class_name));
+            if (stored_scope) {
+                value = puppet_scope_get_var(stored_scope, var_name, false);
+                puppet_free(class_name);
+                return value;
+            }
+        }
+
+        // Look up the class scope - search through the scope stack
+        puppet_scope_t *scope = env->current_scope;
+        while (scope) {
+            if (scope->name.data && strcmp(scope->name.data, class_name) == 0) {
+                value = puppet_scope_get_var(scope, var_name, false);
+                puppet_free(class_name);
+                return value;  // Return even if NULL - variable should be in this scope
+            }
+            scope = scope->parent;
+        }
+
+        // Also check if class_scope matches (current class being executed)
+        if (env->class_scope && env->class_scope->name.data &&
+            strcmp(env->class_scope->name.data, class_name) == 0) {
+            value = puppet_scope_get_var(env->class_scope, var_name, false);
+            puppet_free(class_name);
+            return value;
+        }
+
+        puppet_free(class_name);
+        // Class scope not found - fall through to return NULL
+        return NULL;
     }
 
     // If top-level only, skip local and class scopes
