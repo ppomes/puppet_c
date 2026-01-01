@@ -55,6 +55,7 @@ module.exports = grammar({
 
   extras: $ => [
     $.comment,
+    $.block_comment,
     $.heredoc_body,
     /\n/,
     /\r/,
@@ -753,5 +754,12 @@ module.exports = grammar({
     false:    _ => 'false',
 
     comment: _ => seq('#', /.*/),
+
+    // Block comments /* ... */ - can span multiple lines
+    block_comment: _ => token(seq(
+      '/*',
+      /[^*]*\*+([^/*][^*]*\*+)*/,
+      '/'
+    )),
   },
 })

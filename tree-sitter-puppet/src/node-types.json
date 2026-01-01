@@ -3222,7 +3222,6 @@
   {
     "type": "comment",
     "named": true,
-    "extra": true,
     "fields": {}
   },
   {
@@ -4349,7 +4348,6 @@
   {
     "type": "heredoc_body",
     "named": true,
-    "extra": true,
     "fields": {},
     "children": {
       "multiple": true,
@@ -4833,7 +4831,6 @@
   {
     "type": "manifest",
     "named": true,
-    "root": true,
     "fields": {},
     "children": {
       "multiple": true,
@@ -8883,6 +8880,10 @@
     "named": false
   },
   {
+    "type": "block_comment",
+    "named": true
+  },
+  {
     "type": "case",
     "named": false
   },
@@ -9008,11 +9009,11 @@
   },
   {
     "type": "type",
-    "named": true
+    "named": false
   },
   {
     "type": "type",
-    "named": false
+    "named": true
   },
   {
     "type": "undef",
