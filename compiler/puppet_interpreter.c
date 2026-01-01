@@ -19,11 +19,14 @@ static puppet_stmt_t *puppet_find_matching_node(puppet_env_t *env, const char *c
 static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *certname, puppet_env_t *env);
 
 // Helper function to convert value to string
+/* Forward declaration for recursive use */
+static void puppet_value_to_string_buffer(puppet_value_t *value, char *buf, size_t *pos, size_t max_len);
+
 static const char *puppet_value_to_string(puppet_value_t *value) {
     if (!value) return "";
-    
-    static char buffer[1024];  // Static buffer for conversions
-    
+
+    static char buffer[4096];  // Increased buffer size for complex values
+
     switch (value->type) {
         case PUPPET_VALUE_STRING:
             return value->data.string.data;
@@ -34,8 +37,86 @@ static const char *puppet_value_to_string(puppet_value_t *value) {
             return value->data.boolean ? "true" : "false";
         case PUPPET_VALUE_UNDEF:
             return "";
+        case PUPPET_VALUE_ARRAY:
+        case PUPPET_VALUE_HASH: {
+            size_t pos = 0;
+            puppet_value_to_string_buffer(value, buffer, &pos, sizeof(buffer) - 1);
+            buffer[pos] = '\0';
+            return buffer;
+        }
         default:
             return "";
+    }
+}
+
+/* Helper function to build string representation of complex values */
+static void puppet_value_to_string_buffer(puppet_value_t *value, char *buf, size_t *pos, size_t max_len) {
+    if (!value || *pos >= max_len) return;
+
+    switch (value->type) {
+        case PUPPET_VALUE_STRING: {
+            size_t len = value->data.string.len;
+            if (*pos + len > max_len) len = max_len - *pos;
+            memcpy(buf + *pos, value->data.string.data, len);
+            *pos += len;
+            break;
+        }
+        case PUPPET_VALUE_NUMBER: {
+            int written = snprintf(buf + *pos, max_len - *pos, "%g", value->data.number);
+            if (written > 0) *pos += (size_t)written;
+            break;
+        }
+        case PUPPET_VALUE_BOOL:
+            if (value->data.boolean) {
+                if (*pos + 4 <= max_len) { memcpy(buf + *pos, "true", 4); *pos += 4; }
+            } else {
+                if (*pos + 5 <= max_len) { memcpy(buf + *pos, "false", 5); *pos += 5; }
+            }
+            break;
+        case PUPPET_VALUE_UNDEF:
+            break;
+        case PUPPET_VALUE_ARRAY: {
+            if (*pos < max_len) buf[(*pos)++] = '[';
+            if (value->data.array) {
+                for (size_t i = 0; i < value->data.array->count && *pos < max_len; i++) {
+                    if (i > 0) {
+                        if (*pos + 2 <= max_len) { memcpy(buf + *pos, ", ", 2); *pos += 2; }
+                    }
+                    puppet_value_to_string_buffer(value->data.array->items[i], buf, pos, max_len);
+                }
+            }
+            if (*pos < max_len) buf[(*pos)++] = ']';
+            break;
+        }
+        case PUPPET_VALUE_HASH: {
+            if (*pos < max_len) buf[(*pos)++] = '{';
+            if (value->data.hash) {
+                bool first = true;
+                for (size_t i = 0; i < value->data.hash->bucket_count && *pos < max_len; i++) {
+                    puppet_hash_entry_t *entry = value->data.hash->buckets[i];
+                    while (entry && *pos < max_len) {
+                        if (!first) {
+                            if (*pos + 2 <= max_len) { memcpy(buf + *pos, ", ", 2); *pos += 2; }
+                        }
+                        first = false;
+                        /* Key */
+                        size_t key_len = strlen(entry->key.data);
+                        if (*pos + key_len > max_len) key_len = max_len - *pos;
+                        memcpy(buf + *pos, entry->key.data, key_len);
+                        *pos += key_len;
+                        /* Arrow */
+                        if (*pos + 4 <= max_len) { memcpy(buf + *pos, " => ", 4); *pos += 4; }
+                        /* Value */
+                        puppet_value_to_string_buffer(entry->value, buf, pos, max_len);
+                        entry = entry->next;
+                    }
+                }
+            }
+            if (*pos < max_len) buf[(*pos)++] = '}';
+            break;
+        }
+        default:
+            break;
     }
 }
 
@@ -1370,7 +1451,36 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                             }
                         }
 
-                        // Create scope for class, parented by inherited class scope if any
+                        // Pre-evaluate all attribute values in CALLER's scope (before pushing new class scope)
+                        // This is critical - variables like $backups in "directories => $backups" must
+                        // be looked up in the calling class's scope, not the new class being declared
+                        size_t param_count = class_def->data.class_def.params.count;
+                        puppet_value_t **pre_eval_values = NULL;
+                        bool *attr_found = NULL;
+
+                        if (param_count > 0) {
+                            pre_eval_values = puppet_malloc(param_count * sizeof(puppet_value_t *));
+                            attr_found = puppet_malloc(param_count * sizeof(bool));
+
+                            for (size_t pi = 0; pi < param_count; pi++) {
+                                puppet_param_t *param = &class_def->data.class_def.params.params[pi];
+                                const char *param_name = param->name.data;
+                                pre_eval_values[pi] = NULL;
+                                attr_found[pi] = false;
+
+                                // Look for matching attribute and evaluate in caller's scope
+                                for (size_t ai = 0; ai < instance->attr_count; ai++) {
+                                    if (instance->attributes[ai].name.data &&
+                                        strcmp(instance->attributes[ai].name.data, param_name) == 0) {
+                                        pre_eval_values[pi] = puppet_eval_expr(instance->attributes[ai].value, env);
+                                        attr_found[pi] = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Now create scope for class, parented by inherited class scope if any
                         puppet_scope_t *scope_parent = parent_class_scope ? parent_class_scope : env->current_scope;
                         puppet_scope_t *class_scope = puppet_scope_create(scope_parent, class_name);
                         puppet_scope_push(env, class_scope);
@@ -1380,31 +1490,28 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         // Store class scope BEFORE executing body for $class::var lookups
                         puppet_hash_set(env->class_scopes, class_name, strlen(class_name), (puppet_value_t *)class_scope);
 
-                        // Process class parameters from resource attributes
-                        for (size_t pi = 0; pi < class_def->data.class_def.params.count; pi++) {
+                        // Set class parameters using pre-evaluated values or defaults
+                        for (size_t pi = 0; pi < param_count; pi++) {
                             puppet_param_t *param = &class_def->data.class_def.params.params[pi];
                             const char *param_name = param->name.data;
-                            puppet_value_t *param_value = NULL;
-                            bool found = false;
+                            puppet_value_t *param_value;
 
-                            // Look for matching attribute
-                            for (size_t ai = 0; ai < instance->attr_count; ai++) {
-                                if (instance->attributes[ai].name.data &&
-                                    strcmp(instance->attributes[ai].name.data, param_name) == 0) {
-                                    param_value = puppet_eval_expr(instance->attributes[ai].value, env);
-                                    found = true;
-                                    break;
-                                }
-                            }
-
-                            if (!found && param->default_value) {
+                            if (attr_found[pi]) {
+                                // Use pre-evaluated value from caller's scope
+                                param_value = pre_eval_values[pi];
+                            } else if (param->default_value) {
+                                // Evaluate default in new class scope
                                 param_value = puppet_eval_expr(param->default_value, env);
-                            } else if (!found) {
+                            } else {
                                 param_value = puppet_value_create_undef();
                             }
 
                             puppet_scope_set_var(class_scope, param_name, param_value);
                         }
+
+                        // Clean up temporary arrays
+                        if (pre_eval_values) puppet_free(pre_eval_values);
+                        if (attr_found) puppet_free(attr_found);
 
                         // Execute class body
                         printf("Including class: %s\n", class_name);
