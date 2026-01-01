@@ -884,22 +884,181 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
             return puppet_value_create_bool(true);
             
         case PUPPET_OP_LT:
+            /* Comparisons with undef return false */
+            if (left->type == PUPPET_VALUE_UNDEF || right->type == PUPPET_VALUE_UNDEF) {
+                return puppet_value_create_bool(false);
+            }
             if (left->type == PUPPET_VALUE_NUMBER && right->type == PUPPET_VALUE_NUMBER) {
                 return puppet_value_create_bool(left->data.number < right->data.number);
             }
+            /* String comparison for version strings */
+            if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_STRING) {
+                return puppet_value_create_bool(
+                    strcmp(left->data.string.data, right->data.string.data) < 0);
+            }
+            /* Mixed string/number - convert string to number */
+            if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_NUMBER) {
+                double left_num = atof(left->data.string.data);
+                return puppet_value_create_bool(left_num < right->data.number);
+            }
+            if (left->type == PUPPET_VALUE_NUMBER && right->type == PUPPET_VALUE_STRING) {
+                double right_num = atof(right->data.string.data);
+                return puppet_value_create_bool(left->data.number < right_num);
+            }
             break;
-            
+
         case PUPPET_OP_GT:
+            if (left->type == PUPPET_VALUE_UNDEF || right->type == PUPPET_VALUE_UNDEF) {
+                return puppet_value_create_bool(false);
+            }
             if (left->type == PUPPET_VALUE_NUMBER && right->type == PUPPET_VALUE_NUMBER) {
                 return puppet_value_create_bool(left->data.number > right->data.number);
             }
+            /* String comparison for version strings */
+            if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_STRING) {
+                return puppet_value_create_bool(
+                    strcmp(left->data.string.data, right->data.string.data) > 0);
+            }
+            /* Mixed string/number */
+            if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_NUMBER) {
+                double left_num = atof(left->data.string.data);
+                return puppet_value_create_bool(left_num > right->data.number);
+            }
+            if (left->type == PUPPET_VALUE_NUMBER && right->type == PUPPET_VALUE_STRING) {
+                double right_num = atof(right->data.string.data);
+                return puppet_value_create_bool(left->data.number > right_num);
+            }
             break;
-            
+
+        case PUPPET_OP_LE:
+            if (left->type == PUPPET_VALUE_UNDEF || right->type == PUPPET_VALUE_UNDEF) {
+                return puppet_value_create_bool(false);
+            }
+            if (left->type == PUPPET_VALUE_NUMBER && right->type == PUPPET_VALUE_NUMBER) {
+                return puppet_value_create_bool(left->data.number <= right->data.number);
+            }
+            if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_STRING) {
+                return puppet_value_create_bool(
+                    strcmp(left->data.string.data, right->data.string.data) <= 0);
+            }
+            /* Mixed string/number */
+            if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_NUMBER) {
+                double left_num = atof(left->data.string.data);
+                return puppet_value_create_bool(left_num <= right->data.number);
+            }
+            if (left->type == PUPPET_VALUE_NUMBER && right->type == PUPPET_VALUE_STRING) {
+                double right_num = atof(right->data.string.data);
+                return puppet_value_create_bool(left->data.number <= right_num);
+            }
+            break;
+
+        case PUPPET_OP_GE:
+            if (left->type == PUPPET_VALUE_UNDEF || right->type == PUPPET_VALUE_UNDEF) {
+                return puppet_value_create_bool(false);
+            }
+            if (left->type == PUPPET_VALUE_NUMBER && right->type == PUPPET_VALUE_NUMBER) {
+                return puppet_value_create_bool(left->data.number >= right->data.number);
+            }
+            if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_STRING) {
+                return puppet_value_create_bool(
+                    strcmp(left->data.string.data, right->data.string.data) >= 0);
+            }
+            /* Mixed string/number */
+            if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_NUMBER) {
+                double left_num = atof(left->data.string.data);
+                return puppet_value_create_bool(left_num >= right->data.number);
+            }
+            if (left->type == PUPPET_VALUE_NUMBER && right->type == PUPPET_VALUE_STRING) {
+                double right_num = atof(right->data.string.data);
+                return puppet_value_create_bool(left->data.number >= right_num);
+            }
+            break;
+
+        case PUPPET_OP_AND:
+            /* Logical AND - returns true if both are truthy */
+            {
+                bool left_bool = (left->type == PUPPET_VALUE_BOOL) ? left->data.boolean :
+                                 (left->type != PUPPET_VALUE_UNDEF);
+                bool right_bool = (right->type == PUPPET_VALUE_BOOL) ? right->data.boolean :
+                                  (right->type != PUPPET_VALUE_UNDEF);
+                return puppet_value_create_bool(left_bool && right_bool);
+            }
+
+        case PUPPET_OP_OR:
+            /* Logical OR - returns true if either is truthy */
+            {
+                bool left_bool = (left->type == PUPPET_VALUE_BOOL) ? left->data.boolean :
+                                 (left->type != PUPPET_VALUE_UNDEF);
+                bool right_bool = (right->type == PUPPET_VALUE_BOOL) ? right->data.boolean :
+                                  (right->type != PUPPET_VALUE_UNDEF);
+                return puppet_value_create_bool(left_bool || right_bool);
+            }
+
+        case PUPPET_OP_MOD:
+            if (left->type == PUPPET_VALUE_NUMBER && right->type == PUPPET_VALUE_NUMBER) {
+                if (right->data.number != 0) {
+                    return puppet_value_create_number(
+                        (int)left->data.number % (int)right->data.number);
+                }
+            }
+            break;
+
+        case PUPPET_OP_IN:
+            /* Check if left is in right (array or string) */
+            if (right->type == PUPPET_VALUE_ARRAY) {
+                for (size_t i = 0; i < right->data.array->count; i++) {
+                    puppet_value_t *elem = right->data.array->items[i];
+                    if (left->type == elem->type) {
+                        if (left->type == PUPPET_VALUE_STRING &&
+                            strcmp(left->data.string.data, elem->data.string.data) == 0) {
+                            return puppet_value_create_bool(true);
+                        }
+                        if (left->type == PUPPET_VALUE_NUMBER &&
+                            left->data.number == elem->data.number) {
+                            return puppet_value_create_bool(true);
+                        }
+                    }
+                }
+                return puppet_value_create_bool(false);
+            }
+            if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_STRING) {
+                return puppet_value_create_bool(
+                    strstr(right->data.string.data, left->data.string.data) != NULL);
+            }
+            break;
+
+        case PUPPET_OP_MATCH:
+            /* Regex match =~ */
+            if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_STRING) {
+                regex_t regex;
+                int ret = regcomp(&regex, right->data.string.data, REG_EXTENDED | REG_NOSUB);
+                if (ret == 0) {
+                    ret = regexec(&regex, left->data.string.data, 0, NULL, 0);
+                    regfree(&regex);
+                    return puppet_value_create_bool(ret == 0);
+                }
+            }
+            return puppet_value_create_bool(false);
+
+        case PUPPET_OP_NOT_MATCH:
+            /* Regex non-match !~ */
+            if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_STRING) {
+                regex_t regex;
+                int ret = regcomp(&regex, right->data.string.data, REG_EXTENDED | REG_NOSUB);
+                if (ret == 0) {
+                    ret = regexec(&regex, left->data.string.data, 0, NULL, 0);
+                    regfree(&regex);
+                    return puppet_value_create_bool(ret != 0);
+                }
+            }
+            return puppet_value_create_bool(true);
+
         default:
             break;
     }
-    
-    puppet_warn("Unsupported binary operation");
+
+    puppet_warn("Unsupported binary operation: op=%d left_type=%d right_type=%d",
+                op, left->type, right->type);
     return puppet_value_create_undef();
 }
 
@@ -2403,9 +2562,55 @@ static int puppet_facts_db_add_node(puppet_facts_db_t *facts_db, const char *cer
 
 static void puppet_facts_add_fact(puppet_node_facts_t *node, const char *fact_name, json_value_t *json_val) {
     if (!node || !fact_name || !json_val) return;
-    
+
     puppet_value_t *puppet_val = json_value_to_puppet_value(json_val);
     puppet_hash_set(node->facts, fact_name, strlen(fact_name), puppet_val);
+}
+
+/* YAML facts support - add fact directly from puppet_value_t */
+static void puppet_facts_add_from_value(puppet_node_facts_t *node, const char *fact_name, puppet_value_t *value) {
+    if (!node || !fact_name || !value) return;
+    puppet_hash_set(node->facts, fact_name, strlen(fact_name), puppet_value_copy(value));
+}
+
+/* Process YAML-loaded puppet_value_t hash recursively */
+static void puppet_facts_process_value(puppet_node_facts_t *node, const char *prefix, puppet_value_t *obj) {
+    if (!node || !obj || obj->type != PUPPET_VALUE_HASH) return;
+
+    puppet_hash_t *hash = obj->data.hash;
+    for (size_t b = 0; b < hash->bucket_count; b++) {
+        puppet_hash_entry_t *entry = hash->buckets[b];
+        while (entry) {
+            const char *key = entry->key.data;
+            puppet_value_t *value = entry->value;
+
+            /* Create fully qualified fact name */
+            char *fact_name;
+            if (prefix && strlen(prefix) > 0) {
+                size_t len = strlen(prefix) + strlen(key) + 2;
+                fact_name = puppet_malloc(len);
+                snprintf(fact_name, len, "%s.%s", prefix, key);
+            } else {
+                fact_name = puppet_strdup(key);
+            }
+
+            if (value->type == PUPPET_VALUE_HASH) {
+                /* Recursively process nested hashes */
+                puppet_facts_process_value(node, fact_name, value);
+            } else {
+                /* Add leaf fact */
+                puppet_facts_add_from_value(node, fact_name, value);
+            }
+
+            /* Also add top-level key for direct access */
+            if (!prefix || strlen(prefix) == 0) {
+                puppet_facts_add_from_value(node, key, value);
+            }
+
+            puppet_free(fact_name);
+            entry = entry->next;
+        }
+    }
 }
 
 static void puppet_facts_process_object(puppet_node_facts_t *node, const char *prefix, json_value_t *obj) {
@@ -2476,45 +2681,105 @@ static int puppet_facts_load_facter_format(puppet_facts_db_t *facts_db, json_val
 
 static int puppet_facts_load_puppetdb_format(puppet_facts_db_t *facts_db, json_value_t *root) {
     if (!facts_db || !root || root->type != JSON_VALUE_ARRAY) return -1;
-    
+
     // PuppetDB format: array of node objects
     for (size_t i = 0; i < root->data.array.count; i++) {
         json_value_t *node_obj = root->data.array.elements[i];
         if (node_obj->type != JSON_VALUE_OBJECT) continue;
-        
+
         json_value_t *certname = json_object_get(node_obj, "certname");
         json_value_t *environment = json_object_get(node_obj, "environment");
         json_value_t *facts = json_object_get(node_obj, "facts");
-        
+
         if (!certname || certname->type != JSON_VALUE_STRING || !facts) continue;
-        
+
         const char *node_name = certname->data.string_value;
-        const char *env_name = (environment && environment->type == JSON_VALUE_STRING) ? 
+        const char *env_name = (environment && environment->type == JSON_VALUE_STRING) ?
                                environment->data.string_value : NULL;
-        
+
         // Add node
         if (puppet_facts_db_add_node(facts_db, node_name, env_name) < 0) {
             continue;
         }
-        
+
         puppet_node_facts_t *node = &facts_db->nodes[facts_db->node_count - 1];
-        
+
         // Process facts object
         puppet_facts_process_object(node, NULL, facts);
     }
-    
+
     return 0;
+}
+
+/* Load facts from YAML file */
+static int puppet_facts_load_yaml(puppet_facts_db_t *facts_db, const char *filepath) {
+    if (!facts_db || !filepath) return -1;
+
+    puppet_value_t *root = puppet_hiera_load_yaml(filepath);
+    if (!root) {
+        puppet_error("Failed to parse YAML facts file: %s", filepath);
+        return -1;
+    }
+
+    if (root->type != PUPPET_VALUE_HASH) {
+        puppet_error("YAML facts file must be a hash: %s", filepath);
+        puppet_value_destroy(root);
+        return -1;
+    }
+
+    /* Determine node name from fqdn or hostname */
+    const char *node_name = "localhost";
+    puppet_value_t *fqdn_val = puppet_hash_get(root->data.hash, "fqdn", 4);
+    puppet_value_t *hostname_val = puppet_hash_get(root->data.hash, "hostname", 8);
+
+    if (fqdn_val && fqdn_val->type == PUPPET_VALUE_STRING) {
+        node_name = fqdn_val->data.string.data;
+    } else if (hostname_val && hostname_val->type == PUPPET_VALUE_STRING) {
+        node_name = hostname_val->data.string.data;
+    }
+
+    /* Add node */
+    if (puppet_facts_db_add_node(facts_db, node_name, NULL) < 0) {
+        puppet_value_destroy(root);
+        return -1;
+    }
+
+    puppet_node_facts_t *node = &facts_db->nodes[facts_db->node_count - 1];
+
+    /* Process all facts */
+    puppet_facts_process_value(node, NULL, root);
+
+    /* Set as current node */
+    puppet_facts_db_set_current_node(facts_db, node_name);
+
+    puppet_value_destroy(root);
+    return 0;
+}
+
+/* Check if filepath has YAML extension */
+static bool is_yaml_file(const char *filepath) {
+    if (!filepath) return false;
+    size_t len = strlen(filepath);
+    if (len >= 5 && strcmp(filepath + len - 5, ".yaml") == 0) return true;
+    if (len >= 4 && strcmp(filepath + len - 4, ".yml") == 0) return true;
+    return false;
 }
 
 int puppet_facts_db_load_file(puppet_facts_db_t *facts_db, const char *filepath) {
     if (!facts_db || !filepath) return -1;
-    
+
+    /* Check for YAML file first */
+    if (is_yaml_file(filepath)) {
+        return puppet_facts_load_yaml(facts_db, filepath);
+    }
+
+    /* Try JSON parsing */
     json_value_t *root = json_parse_file(filepath);
     if (!root) {
         puppet_error("Failed to parse facts file: %s", filepath);
         return -1;
     }
-    
+
     int result;
     if (root->type == JSON_VALUE_ARRAY) {
         // PuppetDB format

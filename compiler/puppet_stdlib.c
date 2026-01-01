@@ -4059,7 +4059,10 @@ puppet_value_t *puppet_func_create_resources(puppet_expr_list_t *args, puppet_en
     for (size_t i = 0; i < hash->bucket_count; i++) {
         puppet_hash_entry_t *entry = hash->buckets[i];
         while (entry) {
-            puppet_log(PUPPET_LOG_NOTICE, "create_resources: Would create %s[%s]");
+            char msg[256];
+            snprintf(msg, sizeof(msg), "create_resources: Would create %s[%s]",
+                     res_type, entry->key.data);
+            puppet_log(PUPPET_LOG_NOTICE, msg);
             /* In a full implementation, we would create the resource here */
             entry = entry->next;
         }
