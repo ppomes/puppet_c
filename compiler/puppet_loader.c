@@ -249,19 +249,25 @@ bool puppet_loader_include_class(puppet_loader_t *loader,
                                  puppet_env_t *env) {
     if (!loader || !class_name || !env) return false;
 
+    /* Normalize class name by stripping leading :: (top-level scope indicator) */
+    const char *normalized_name = class_name;
+    if (strncmp(normalized_name, "::", 2) == 0) {
+        normalized_name = class_name + 2;
+    }
+
     /* Check if class is already included - classes are idempotent */
-    if (puppet_hash_get(env->class_scopes, class_name, strlen(class_name))) {
-        puppet_debug("Class %s already included, skipping", class_name);
+    if (puppet_hash_get(env->class_scopes, normalized_name, strlen(normalized_name))) {
+        puppet_debug("Class %s already included, skipping", normalized_name);
         return true;
     }
 
     /* First, check if class is already registered in the environment
      * (defined in the same file or previously parsed) */
-    puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
+    puppet_stmt_t *class_def = puppet_find_class_def(env, normalized_name);
 
     /* If not found in registered definitions, try to load from module files */
     if (!class_def) {
-        class_def = puppet_loader_load_class(loader, class_name);
+        class_def = puppet_loader_load_class(loader, normalized_name);
     }
 
     if (!class_def) {
@@ -270,7 +276,7 @@ bool puppet_loader_include_class(puppet_loader_t *loader,
     }
 
     /* Execute the class definition */
-    printf("Including class: %s\n", class_name);
+    printf("Including class: %s\n", normalized_name);
 
     /* Handle class inheritance - include parent class first */
     puppet_scope_t *parent_class_scope = NULL;
@@ -301,7 +307,7 @@ bool puppet_loader_include_class(puppet_loader_t *loader,
 
     /* Create a new scope for the class, parented by inherited class if any */
     puppet_scope_t *scope_parent = parent_class_scope ? parent_class_scope : env->current_scope;
-    puppet_scope_t *class_scope = puppet_scope_create(scope_parent, class_name);
+    puppet_scope_t *class_scope = puppet_scope_create(scope_parent, normalized_name);
     puppet_scope_push(env, class_scope);
 
     /* Set class scope in environment for enhanced variable lookup */
@@ -309,7 +315,7 @@ bool puppet_loader_include_class(puppet_loader_t *loader,
     env->class_scope = class_scope;
 
     /* Store class scope BEFORE executing body for $class::var lookups */
-    puppet_hash_set(env->class_scopes, class_name, strlen(class_name), (puppet_value_t *)class_scope);
+    puppet_hash_set(env->class_scopes, normalized_name, strlen(normalized_name), (puppet_value_t *)class_scope);
 
     /* Process class parameters and set default values */
     for (size_t i = 0; i < class_def->data.class_def.params.count; i++) {

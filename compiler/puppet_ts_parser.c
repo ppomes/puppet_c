@@ -21,6 +21,7 @@ static puppet_stmt_t *convert_statement(TSNode node, const char *source);
 static puppet_expr_t *convert_expression(TSNode node, const char *source);
 static puppet_stmt_list_t convert_block(TSNode node, const char *source);
 static puppet_lambda_t *convert_lambda(TSNode node, const char *source);
+static puppet_expr_t *build_index_expr(puppet_expr_t *object, TSNode access_node, const char *source);
 
 /*
  * ===========================================================================
@@ -369,35 +370,76 @@ static puppet_expr_t *convert_array(TSNode node, const char *source) {
 /* Convert hash literal */
 static puppet_expr_t *convert_hash(TSNode node, const char *source) {
     puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
-    expr->type = PUPPET_EXPR_VALUE;
     expr->loc = node_location(node);
-    expr->data.value = puppet_value_create_hash();
 
+    /* Count hash entries first */
     uint32_t count = ts_node_named_child_count(node);
+    size_t entry_count = 0;
     for (uint32_t i = 0; i < count; i++) {
         TSNode child = ts_node_named_child(node, i);
         if (node_is(child, "hash_entry") || node_is(child, "hashpair")) {
-            uint32_t entry_count = ts_node_named_child_count(child);
-            if (entry_count >= 2) {
+            entry_count++;
+        }
+    }
+
+    /* Check if all values are literals - if so, use PUPPET_EXPR_VALUE for efficiency */
+    bool all_literals = true;
+    puppet_expr_t **temp_keys = puppet_calloc(entry_count, sizeof(puppet_expr_t*));
+    puppet_expr_t **temp_vals = puppet_calloc(entry_count, sizeof(puppet_expr_t*));
+    size_t idx = 0;
+
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(node, i);
+        if (node_is(child, "hash_entry") || node_is(child, "hashpair")) {
+            uint32_t child_count = ts_node_named_child_count(child);
+            if (child_count >= 2) {
                 TSNode key_node = ts_node_named_child(child, 0);
                 /* hashpair has: key, arrow, value - skip the arrow */
-                TSNode val_node = ts_node_named_child(child, entry_count - 1);
+                TSNode val_node = ts_node_named_child(child, child_count - 1);
 
-                puppet_expr_t *key = convert_expression(key_node, source);
-                puppet_expr_t *val = convert_expression(val_node, source);
+                temp_keys[idx] = convert_expression(key_node, source);
+                temp_vals[idx] = convert_expression(val_node, source);
 
-                if (key && key->type == PUPPET_EXPR_VALUE &&
-                    key->data.value->type == PUPPET_VALUE_STRING &&
-                    val && val->type == PUPPET_EXPR_VALUE) {
-                    puppet_hash_set(expr->data.value->data.hash,
-                                   key->data.value->data.string.data,
-                                   key->data.value->data.string.len,
-                                   puppet_value_copy(val->data.value));
+                /* Check if value is a literal */
+                if (temp_vals[idx] && temp_vals[idx]->type != PUPPET_EXPR_VALUE) {
+                    all_literals = false;
                 }
-                if (key) puppet_expr_destroy(key);
-                if (val) puppet_expr_destroy(val);
+                idx++;
             }
         }
+    }
+
+    if (all_literals && entry_count > 0) {
+        /* All literals - build hash value directly */
+        expr->type = PUPPET_EXPR_VALUE;
+        expr->data.value = puppet_value_create_hash();
+
+        for (size_t i = 0; i < entry_count; i++) {
+            if (temp_keys[i] && temp_keys[i]->type == PUPPET_EXPR_VALUE &&
+                temp_keys[i]->data.value->type == PUPPET_VALUE_STRING &&
+                temp_vals[i] && temp_vals[i]->type == PUPPET_EXPR_VALUE) {
+                puppet_hash_set(expr->data.value->data.hash,
+                               temp_keys[i]->data.value->data.string.data,
+                               temp_keys[i]->data.value->data.string.len,
+                               puppet_value_copy(temp_vals[i]->data.value));
+            }
+            if (temp_keys[i]) puppet_expr_destroy(temp_keys[i]);
+            if (temp_vals[i]) puppet_expr_destroy(temp_vals[i]);
+        }
+        puppet_free(temp_keys);
+        puppet_free(temp_vals);
+    } else if (entry_count > 0) {
+        /* Has dynamic values - use PUPPET_EXPR_HASH */
+        expr->type = PUPPET_EXPR_HASH;
+        expr->data.hash_entries.keys = temp_keys;
+        expr->data.hash_entries.values = temp_vals;
+        expr->data.hash_entries.count = entry_count;
+    } else {
+        /* Empty hash */
+        expr->type = PUPPET_EXPR_VALUE;
+        expr->data.value = puppet_value_create_hash();
+        puppet_free(temp_keys);
+        puppet_free(temp_vals);
     }
 
     return expr;
@@ -632,6 +674,14 @@ static puppet_expr_t *convert_expression(TSNode node, const char *source) {
             }
 
             return expr;
+        }
+
+        /* Handle variable with bracket access: $var[key] */
+        TSNode var_child = find_child(node, "variable");
+        if (!ts_node_is_null(var_child) && !ts_node_is_null(access_child)) {
+            /* This is a variable with bracket access $var[key] */
+            puppet_expr_t *var_expr = convert_variable(var_child, source);
+            return build_index_expr(var_expr, access_child, source);
         }
     }
 
@@ -951,15 +1001,12 @@ static puppet_stmt_t *convert_class_def(TSNode node, const char *source) {
                 p->name = puppet_string_create(name_str);
                 puppet_free(name_str);
 
-                /* Check for default value (second child of regular_parameter after variable) */
+                /* Check for default value - it's the second child (first is the param variable) */
                 uint32_t reg_param_children = ts_node_named_child_count(reg_param);
-                for (uint32_t k = 0; k < reg_param_children; k++) {
-                    TSNode child_node = ts_node_named_child(reg_param, k);
-                    if (!node_is(child_node, "variable")) {
-                        /* This is the default value expression */
-                        p->default_value = convert_expression(child_node, source);
-                        break;
-                    }
+                if (reg_param_children > 1) {
+                    /* The second named child is the default value expression */
+                    TSNode default_node = ts_node_named_child(reg_param, 1);
+                    p->default_value = convert_expression(default_node, source);
                 }
 
                 stmt->data.class_def.params.count++;
@@ -1016,15 +1063,12 @@ static puppet_stmt_t *convert_define_def(TSNode node, const char *source) {
                 p->name = puppet_string_create(name_str);
                 puppet_free(name_str);
 
-                /* Check for default value */
+                /* Check for default value - it's the second child (first is the param variable) */
                 uint32_t reg_param_children = ts_node_named_child_count(reg_param);
-                for (uint32_t k = 0; k < reg_param_children; k++) {
-                    TSNode child_node = ts_node_named_child(reg_param, k);
-                    if (!node_is(child_node, "variable")) {
-                        /* This is the default value expression */
-                        p->default_value = convert_expression(child_node, source);
-                        break;
-                    }
+                if (reg_param_children > 1) {
+                    /* The second named child is the default value expression */
+                    TSNode default_node = ts_node_named_child(reg_param, 1);
+                    p->default_value = convert_expression(default_node, source);
                 }
 
                 stmt->data.define.params.count++;

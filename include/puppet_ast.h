@@ -177,7 +177,9 @@ typedef enum {
     PUPPET_EXPR_SELECTOR,           /**< Selector expression ($x ? { ... }) */
     PUPPET_EXPR_LAMBDA,             /**< Lambda/closure definition */
     PUPPET_EXPR_RESOURCE_REF,       /**< Resource reference (File['name']) */
-    PUPPET_EXPR_INTERPOLATED_STRING /**< String with embedded expressions */
+    PUPPET_EXPR_INTERPOLATED_STRING, /**< String with embedded expressions */
+    PUPPET_EXPR_HASH,               /**< Hash literal with dynamic values */
+    PUPPET_EXPR_ARRAY               /**< Array literal with dynamic values */
 } puppet_expr_type_t;
 
 /**
@@ -306,6 +308,15 @@ struct puppet_expr {
             puppet_expr_t **exprs;
             size_t count;
         } interpolated;
+        struct {
+            puppet_expr_t **keys;
+            puppet_expr_t **values;
+            size_t count;
+        } hash_entries;
+        struct {
+            puppet_expr_t **items;
+            size_t count;
+        } array_items;
     } data;
 };
 

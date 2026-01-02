@@ -4067,9 +4067,6 @@ puppet_value_t *puppet_func_is_ip_address(puppet_expr_list_t *args, puppet_env_t
  *     'bob'   => { uid => 1002, gid => 1002 },
  *   }
  *   create_resources('user', $users)
- *
- * Note: This is a stub implementation that logs what would be created.
- * Full implementation requires integration with resource creation.
  */
 puppet_value_t *puppet_func_create_resources(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 2) {
@@ -4101,19 +4098,213 @@ puppet_value_t *puppet_func_create_resources(puppet_expr_list_t *args, puppet_en
         return puppet_value_create_undef();
     }
 
-    /* TODO: Implement actual resource creation by synthesizing resource statements
-     * For now, just log what would be created */
     const char *res_type = type_val->data.string.data;
     puppet_hash_t *hash = hash_val->data.hash;
+    puppet_hash_t *defaults_hash = (defaults_val && defaults_val->type == PUPPET_VALUE_HASH)
+                                   ? defaults_val->data.hash : NULL;
 
+    /* Look up the defined type */
+    puppet_value_t *define_ptr = puppet_hash_get(env->define_types, res_type, strlen(res_type));
+
+    /* Try to autoload the define if not already registered */
+    if (!define_ptr && env->loader && strchr(res_type, ':')) {
+        puppet_stmt_t *loaded_def = puppet_loader_load_define(env->loader, res_type);
+        if (loaded_def) {
+            puppet_debug("create_resources: Autoloaded defined type: %s", res_type);
+            puppet_value_t *stmt_ptr = puppet_calloc(1, sizeof(puppet_value_t));
+            stmt_ptr->type = PUPPET_VALUE_UNDEF;
+            stmt_ptr->data.string.data = (char*)loaded_def;
+            puppet_hash_set(env->define_types, res_type, strlen(res_type), stmt_ptr);
+            define_ptr = stmt_ptr;
+        }
+    }
+
+    puppet_stmt_t *define_stmt = define_ptr ? (puppet_stmt_t *)define_ptr->data.string.data : NULL;
+
+    /* Iterate over hash entries to create resources */
     for (size_t i = 0; i < hash->bucket_count; i++) {
         puppet_hash_entry_t *entry = hash->buckets[i];
         while (entry) {
-            char msg[256];
-            snprintf(msg, sizeof(msg), "create_resources: Would create %s[%s]",
-                     res_type, entry->key.data);
-            puppet_log(PUPPET_LOG_NOTICE, msg);
-            /* In a full implementation, we would create the resource here */
+            const char *title_str = entry->key.data;
+            puppet_value_t *params_val = entry->value;
+            puppet_hash_t *params_hash = (params_val && params_val->type == PUPPET_VALUE_HASH)
+                                        ? params_val->data.hash : NULL;
+
+            /* Check for duplicate resource */
+            size_t res_id_len = strlen(res_type) + strlen(title_str) + 3;
+            char *resource_id = puppet_malloc(res_id_len);
+            snprintf(resource_id, res_id_len, "%s[%s]", res_type, title_str);
+
+            puppet_value_t *existing = puppet_hash_get(env->resource_catalog, resource_id, strlen(resource_id));
+            if (existing) {
+                fprintf(stderr, "Error: Duplicate declaration - %s is already declared\n", resource_id);
+                puppet_free(resource_id);
+                entry = entry->next;
+                continue;
+            }
+
+            /* Mark as declared */
+            puppet_value_t *marker = puppet_value_create_bool(true);
+            puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);
+
+            if (define_stmt) {
+                /* This is a defined type - execute its body */
+                puppet_debug("create_resources: Executing defined type %s[%s]", res_type, title_str);
+
+                /* Create new scope for the define execution */
+                puppet_scope_t *define_scope = puppet_scope_create(env->current_scope, res_type);
+                puppet_scope_push(env, define_scope);
+
+                /* Bind $name and $title to the title */
+                puppet_value_t *name_val = puppet_value_create_string(title_str, strlen(title_str));
+                puppet_scope_set_var(define_scope, "name", name_val);
+                puppet_scope_set_var(define_scope, "title", puppet_value_copy(name_val));
+
+                /* Bind define parameters with values from hash or defaults */
+                for (size_t p = 0; p < define_stmt->data.define.params.count; p++) {
+                    const char *param_name = define_stmt->data.define.params.params[p].name.data;
+                    puppet_value_t *param_value = NULL;
+
+                    /* First, check if parameter is in the entry's params hash */
+                    if (params_hash) {
+                        param_value = puppet_hash_get(params_hash, param_name, strlen(param_name));
+                        if (param_value) {
+                            param_value = puppet_value_copy(param_value);
+                        }
+                    }
+
+                    /* If not found, check defaults hash */
+                    if (!param_value && defaults_hash) {
+                        param_value = puppet_hash_get(defaults_hash, param_name, strlen(param_name));
+                        if (param_value) {
+                            param_value = puppet_value_copy(param_value);
+                        }
+                    }
+
+                    /* If still not found, use define's default value */
+                    if (!param_value && define_stmt->data.define.params.params[p].default_value) {
+                        param_value = puppet_eval_expr(
+                            define_stmt->data.define.params.params[p].default_value, env);
+                    }
+
+                    if (param_value) {
+                        puppet_scope_set_var(define_scope, param_name, param_value);
+                    }
+                }
+
+                /* Execute the define body */
+                puppet_exec_stmt_list(&define_stmt->data.define.body, env);
+
+                /* Add the define instance to catalog */
+                if (env->build_catalog && env->catalog) {
+                    /* Collect parameters for catalog */
+                    size_t param_count = 0;
+                    puppet_catalog_param_t *cat_params = NULL;
+
+                    /* Count params from entry hash */
+                    if (params_hash) {
+                        for (size_t bi = 0; bi < params_hash->bucket_count; bi++) {
+                            puppet_hash_entry_t *pe = params_hash->buckets[bi];
+                            while (pe) {
+                                param_count++;
+                                pe = pe->next;
+                            }
+                        }
+                    }
+
+                    if (param_count > 0) {
+                        cat_params = puppet_calloc(param_count, sizeof(puppet_catalog_param_t));
+                        size_t param_idx = 0;
+                        for (size_t bi = 0; bi < params_hash->bucket_count; bi++) {
+                            puppet_hash_entry_t *pe = params_hash->buckets[bi];
+                            while (pe) {
+                                cat_params[param_idx].name = puppet_strdup(pe->key.data);
+                                cat_params[param_idx].value = puppet_value_copy(pe->value);
+                                param_idx++;
+                                pe = pe->next;
+                            }
+                        }
+                    }
+
+                    puppet_catalog_add_resource(env->catalog, res_type, title_str, cat_params, param_count);
+                }
+
+                /* Pop the define scope */
+                puppet_scope_t *popped = puppet_scope_pop(env);
+                puppet_scope_destroy(popped);
+            } else {
+                /* Built-in resource type - add directly to catalog */
+                puppet_debug("create_resources: Creating resource %s[%s]", res_type, title_str);
+
+                if (env->build_catalog && env->catalog) {
+                    /* Merge defaults with params */
+                    size_t param_count = 0;
+                    puppet_catalog_param_t *cat_params = NULL;
+
+                    /* Count parameters */
+                    if (defaults_hash) {
+                        for (size_t bi = 0; bi < defaults_hash->bucket_count; bi++) {
+                            puppet_hash_entry_t *pe = defaults_hash->buckets[bi];
+                            while (pe) { param_count++; pe = pe->next; }
+                        }
+                    }
+                    if (params_hash) {
+                        for (size_t bi = 0; bi < params_hash->bucket_count; bi++) {
+                            puppet_hash_entry_t *pe = params_hash->buckets[bi];
+                            while (pe) { param_count++; pe = pe->next; }
+                        }
+                    }
+
+                    if (param_count > 0) {
+                        cat_params = puppet_calloc(param_count, sizeof(puppet_catalog_param_t));
+                        size_t param_idx = 0;
+
+                        /* Add defaults first */
+                        if (defaults_hash) {
+                            for (size_t bi = 0; bi < defaults_hash->bucket_count; bi++) {
+                                puppet_hash_entry_t *pe = defaults_hash->buckets[bi];
+                                while (pe) {
+                                    cat_params[param_idx].name = puppet_strdup(pe->key.data);
+                                    cat_params[param_idx].value = puppet_value_copy(pe->value);
+                                    param_idx++;
+                                    pe = pe->next;
+                                }
+                            }
+                        }
+
+                        /* Override with entry params */
+                        if (params_hash) {
+                            for (size_t bi = 0; bi < params_hash->bucket_count; bi++) {
+                                puppet_hash_entry_t *pe = params_hash->buckets[bi];
+                                while (pe) {
+                                    /* Check if already in cat_params from defaults - override it */
+                                    bool found = false;
+                                    for (size_t k = 0; k < param_idx; k++) {
+                                        if (strcmp(cat_params[k].name, pe->key.data) == 0) {
+                                            puppet_value_destroy(cat_params[k].value);
+                                            cat_params[k].value = puppet_value_copy(pe->value);
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!found) {
+                                        cat_params[param_idx].name = puppet_strdup(pe->key.data);
+                                        cat_params[param_idx].value = puppet_value_copy(pe->value);
+                                        param_idx++;
+                                    }
+                                    pe = pe->next;
+                                }
+                            }
+                        }
+
+                        puppet_catalog_add_resource(env->catalog, res_type, title_str, cat_params, param_idx);
+                    } else {
+                        puppet_catalog_add_resource(env->catalog, res_type, title_str, NULL, 0);
+                    }
+                }
+            }
+
+            puppet_free(resource_id);
             entry = entry->next;
         }
     }

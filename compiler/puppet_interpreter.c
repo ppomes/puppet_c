@@ -1043,6 +1043,49 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             return result;
         }
 
+        case PUPPET_EXPR_HASH: {
+            /* Hash with dynamic values - evaluate each key/value pair */
+            puppet_value_t *result = puppet_value_create_hash();
+
+            for (size_t i = 0; i < expr->data.hash_entries.count; i++) {
+                puppet_value_t *key = puppet_eval_expr(expr->data.hash_entries.keys[i], env);
+                puppet_value_t *val = puppet_eval_expr(expr->data.hash_entries.values[i], env);
+
+                if (key && key->type == PUPPET_VALUE_STRING && val) {
+                    puppet_hash_set(result->data.hash,
+                                   key->data.string.data,
+                                   key->data.string.len,
+                                   puppet_value_copy(val));
+                }
+
+                if (key) puppet_value_destroy(key);
+                if (val) puppet_value_destroy(val);
+            }
+
+            return result;
+        }
+
+        case PUPPET_EXPR_ARRAY: {
+            /* Array with dynamic values - evaluate each item */
+            puppet_array_t *arr = puppet_calloc(1, sizeof(puppet_array_t));
+            arr->capacity = expr->data.array_items.count > 0 ? expr->data.array_items.count : 4;
+            arr->items = puppet_calloc(arr->capacity, sizeof(puppet_value_t*));
+            arr->count = 0;
+
+            for (size_t i = 0; i < expr->data.array_items.count; i++) {
+                puppet_value_t *item = puppet_eval_expr(expr->data.array_items.items[i], env);
+                if (item) {
+                    arr->items[arr->count++] = puppet_value_copy(item);
+                    puppet_value_destroy(item);
+                }
+            }
+
+            puppet_value_t *result = puppet_calloc(1, sizeof(puppet_value_t));
+            result->type = PUPPET_VALUE_ARRAY;
+            result->data.array = arr;
+            return result;
+        }
+
         default:
             puppet_warn("Unimplemented expression type: %d", expr->type);
             return puppet_value_create_undef();
@@ -1638,7 +1681,13 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                     puppet_resource_instance_t *instance = &stmt->data.resource.instances[i];
                     if (instance->title) {
                         puppet_value_t *title_val = puppet_eval_expr(instance->title, env);
-                        const char *class_name = puppet_value_to_string(title_val);
+                        const char *class_name_raw = puppet_value_to_string(title_val);
+
+                        // Normalize class name by stripping leading ::
+                        const char *class_name = class_name_raw;
+                        if (strncmp(class_name, "::", 2) == 0) {
+                            class_name = class_name_raw + 2;
+                        }
                         puppet_debug("  Class resource: %s", class_name);
 
                         // Check if this class is already declared - resource-style declarations are NOT idempotent
@@ -2291,7 +2340,13 @@ void puppet_exec_program(puppet_program_t *program, puppet_env_t *env) {
 static bool puppet_include_class_from_def(puppet_stmt_t *class_def, puppet_env_t *env) {
     if (!class_def || class_def->type != PUPPET_STMT_CLASS_DEF || !env) return false;
 
-    const char *class_name = class_def->data.class_def.name.data;
+    const char *class_name_raw = class_def->data.class_def.name.data;
+
+    /* Normalize class name by stripping leading :: */
+    const char *class_name = class_name_raw;
+    if (strncmp(class_name, "::", 2) == 0) {
+        class_name = class_name_raw + 2;
+    }
 
     /* Check if this class is already included - classes are idempotent */
     if (puppet_hash_get(env->class_scopes, class_name, strlen(class_name))) {
@@ -2396,7 +2451,13 @@ void puppet_exec_include(puppet_stmt_t *include_stmt, puppet_env_t *env) {
         if (name_expr && name_expr->type == PUPPET_EXPR_VALUE &&
             name_expr->data.value->type == PUPPET_VALUE_STRING) {
 
-            const char *class_name = name_expr->data.value->data.string.data;
+            const char *class_name_raw = name_expr->data.value->data.string.data;
+
+            /* Normalize class name by stripping leading :: */
+            const char *class_name = class_name_raw;
+            if (strncmp(class_name, "::", 2) == 0) {
+                class_name = class_name_raw + 2;
+            }
 
             /* First, try to find the class in registered definitions */
             puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
@@ -2848,11 +2909,22 @@ int puppet_register_class_def(puppet_env_t *env, puppet_stmt_t *class_def) {
 puppet_stmt_t *puppet_find_class_def(puppet_env_t *env, const char *class_name) {
     if (!env || !class_name) return NULL;
 
+    /* Normalize class name by stripping leading :: */
+    const char *normalized_name = class_name;
+    if (strncmp(normalized_name, "::", 2) == 0) {
+        normalized_name = class_name + 2;
+    }
+
     for (size_t i = 0; i < env->class_def_count; i++) {
         puppet_stmt_t *class_def = env->class_definitions[i];
         if (class_def && class_def->type == PUPPET_STMT_CLASS_DEF) {
             const char *def_name = class_def->data.class_def.name.data;
-            if (strcmp(def_name, class_name) == 0) {
+            /* Also normalize the definition name for comparison */
+            const char *normalized_def = def_name;
+            if (strncmp(normalized_def, "::", 2) == 0) {
+                normalized_def = def_name + 2;
+            }
+            if (strcmp(normalized_def, normalized_name) == 0) {
                 return class_def;
             }
         }

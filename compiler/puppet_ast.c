@@ -370,8 +370,24 @@ void puppet_expr_destroy(puppet_expr_t *expr) {
             puppet_free(expr->data.interpolated.parts);
             puppet_free(expr->data.interpolated.exprs);
             break;
+
+        case PUPPET_EXPR_HASH:
+            for (size_t i = 0; i < expr->data.hash_entries.count; i++) {
+                puppet_expr_destroy(expr->data.hash_entries.keys[i]);
+                puppet_expr_destroy(expr->data.hash_entries.values[i]);
+            }
+            puppet_free(expr->data.hash_entries.keys);
+            puppet_free(expr->data.hash_entries.values);
+            break;
+
+        case PUPPET_EXPR_ARRAY:
+            for (size_t i = 0; i < expr->data.array_items.count; i++) {
+                puppet_expr_destroy(expr->data.array_items.items[i]);
+            }
+            puppet_free(expr->data.array_items.items);
+            break;
     }
-    
+
     puppet_free(expr);
 }
 
