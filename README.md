@@ -103,11 +103,44 @@ Edit `puppetcode/manifests/site.pp` on your host - changes are reflected immedia
 # Compile to catalog JSON
 ./compiler/puppetc-compile -c manifest.pp
 
+# Pretty output (human-readable, similar to language-puppet)
+./compiler/puppetc-compile -p -n mynode.example.com manifest.pp
+
 # JSON AST output
 ./compiler/puppetc-compile -j manifest.pp
 ```
 
 Run `./compiler/puppetc-compile --help` for all options.
+
+### Pretty Output
+
+The `-p` / `--pretty` option outputs the catalog in a human-readable format with ANSI colors (when output goes to a terminal), similar to [language-puppet](https://github.com/bartavelle/language-puppet):
+
+```bash
+./compiler/puppetc-compile -p -n node.example.com -m modules/ -f facts.yaml manifests/site.pp
+```
+
+Example output:
+```
+package/nfs-common:  node.example.com
+  ensure => installed,
+
+file//etc/myconfig:  node.example.com
+  ensure => present,
+  owner => root,
+  group => root,
+  mode => 0644,
+  content => # Configuration file
+server=localhost
+port=8080
+,
+
+service/myservice:  node.example.com
+  ensure => running,
+  enable => true,
+
+Total: 42 resources
+```
 
 ### Catalog Server
 
