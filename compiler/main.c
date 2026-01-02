@@ -153,7 +153,14 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Error: Cannot specify both --node and --all-nodes\n");
         return 1;
     }
-    
+
+    /* Catalog/pretty output requires single node */
+    if (all_nodes && (catalog_mode || pretty_mode)) {
+        fprintf(stderr, "Error: --all-nodes cannot be used with --catalog or --pretty\n");
+        fprintf(stderr, "       Use --node to compile a catalog for a specific node\n");
+        return 1;
+    }
+
     /* Validate template output option */
     if (template_output && !node_name) {
         fprintf(stderr, "Error: --template requires --node to be specified\n");
