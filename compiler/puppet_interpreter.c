@@ -2612,7 +2612,7 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
     puppet_debug("Executing node block for certname: %s", certname);
     env->node_matched = true;
 
-    /* Clear resource catalog for this node (each node has its own catalog) */
+    /* Clear state for this node (each node has its own catalog and class scope) */
     if (env->resource_catalog) {
         for (size_t i = 0; i < env->resource_catalog->bucket_count; i++) {
             puppet_hash_entry_t *entry = env->resource_catalog->buckets[i];
@@ -2624,6 +2624,51 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
                 entry = next;
             }
             env->resource_catalog->buckets[i] = NULL;
+        }
+    }
+
+    /* Clear class scopes (classes need to be re-included for each node) */
+    if (env->class_scopes) {
+        for (size_t i = 0; i < env->class_scopes->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->class_scopes->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                /* Note: scope values are managed elsewhere, don't destroy */
+                puppet_free(entry);
+                entry = next;
+            }
+            env->class_scopes->buckets[i] = NULL;
+        }
+    }
+
+    /* Clear virtual resources */
+    if (env->virtual_resources) {
+        for (size_t i = 0; i < env->virtual_resources->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->virtual_resources->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                puppet_value_destroy(entry->value);
+                puppet_free(entry);
+                entry = next;
+            }
+            env->virtual_resources->buckets[i] = NULL;
+        }
+    }
+
+    /* Clear defined resources tracking */
+    if (env->defined_resources) {
+        for (size_t i = 0; i < env->defined_resources->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->defined_resources->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                puppet_value_destroy(entry->value);
+                puppet_free(entry);
+                entry = next;
+            }
+            env->defined_resources->buckets[i] = NULL;
         }
     }
 
@@ -2709,21 +2754,67 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
         puppet_debug("Executing node: %s", node_name);
         env->node_matched = true;
 
-        /* Clear resource catalog for this node (each node has its own catalog) */
-        if (env->resource_catalog) {
-            /* Clear existing entries but keep the hash table structure */
-            for (size_t i = 0; i < env->resource_catalog->bucket_count; i++) {
-                puppet_hash_entry_t *entry = env->resource_catalog->buckets[i];
-                while (entry) {
-                    puppet_hash_entry_t *next = entry->next;
-                    puppet_free(entry->key.data);
-                    puppet_value_destroy(entry->value);
-                    puppet_free(entry);
-                    entry = next;
+        /* Clear state for this node when executing multiple nodes */
+        if (env->execute_all_nodes) {
+            /* Clear resource catalog (each node has its own catalog) */
+            if (env->resource_catalog) {
+                for (size_t i = 0; i < env->resource_catalog->bucket_count; i++) {
+                    puppet_hash_entry_t *entry = env->resource_catalog->buckets[i];
+                    while (entry) {
+                        puppet_hash_entry_t *next = entry->next;
+                        puppet_free(entry->key.data);
+                        puppet_value_destroy(entry->value);
+                        puppet_free(entry);
+                        entry = next;
+                    }
+                    env->resource_catalog->buckets[i] = NULL;
                 }
-                env->resource_catalog->buckets[i] = NULL;
             }
-            /* Size tracking is handled internally */
+
+            /* Clear class scopes (classes need to be re-included for each node) */
+            if (env->class_scopes) {
+                for (size_t i = 0; i < env->class_scopes->bucket_count; i++) {
+                    puppet_hash_entry_t *entry = env->class_scopes->buckets[i];
+                    while (entry) {
+                        puppet_hash_entry_t *next = entry->next;
+                        puppet_free(entry->key.data);
+                        /* Note: scope values are managed elsewhere, don't destroy */
+                        puppet_free(entry);
+                        entry = next;
+                    }
+                    env->class_scopes->buckets[i] = NULL;
+                }
+            }
+
+            /* Clear virtual resources */
+            if (env->virtual_resources) {
+                for (size_t i = 0; i < env->virtual_resources->bucket_count; i++) {
+                    puppet_hash_entry_t *entry = env->virtual_resources->buckets[i];
+                    while (entry) {
+                        puppet_hash_entry_t *next = entry->next;
+                        puppet_free(entry->key.data);
+                        puppet_value_destroy(entry->value);
+                        puppet_free(entry);
+                        entry = next;
+                    }
+                    env->virtual_resources->buckets[i] = NULL;
+                }
+            }
+
+            /* Clear defined resources tracking */
+            if (env->defined_resources) {
+                for (size_t i = 0; i < env->defined_resources->bucket_count; i++) {
+                    puppet_hash_entry_t *entry = env->defined_resources->buckets[i];
+                    while (entry) {
+                        puppet_hash_entry_t *next = entry->next;
+                        puppet_free(entry->key.data);
+                        puppet_value_destroy(entry->value);
+                        puppet_free(entry);
+                        entry = next;
+                    }
+                    env->defined_resources->buckets[i] = NULL;
+                }
+            }
         }
 
         /* Switch to node-specific facts if available */
