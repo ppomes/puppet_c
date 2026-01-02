@@ -127,13 +127,17 @@ void puppet_catalog_destroy(puppet_catalog_t *catalog);
  * @param title Resource title
  * @param params Array of parameters (ownership transferred)
  * @param param_count Number of parameters
+ * @param file Source file (may be NULL)
+ * @param line Source line number
  * @return 0 on success, -1 on duplicate, -2 on error
  */
 int puppet_catalog_add_resource(puppet_catalog_t *catalog,
                                 const char *type,
                                 const char *title,
                                 puppet_catalog_param_t *params,
-                                size_t param_count);
+                                size_t param_count,
+                                const char *file,
+                                int line);
 
 /**
  * @brief Add an edge (relationship) to the catalog

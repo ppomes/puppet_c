@@ -1621,7 +1621,7 @@ static void puppet_exec_collector(puppet_stmt_t *stmt, puppet_env_t *env) {
                             }
                         }
                         puppet_catalog_add_resource(env->catalog, vres->type, vres->title,
-                                                   params, vres->attr_count);
+                                                   params, vres->attr_count, NULL, 0);
                     }
 
                     vres->realized = true;
@@ -2036,7 +2036,9 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                                                         stmt->data.resource.type.data,
                                                         title_str,
                                                         params,
-                                                        param_idx);
+                                                        param_idx,
+                                                        stmt->loc.filename,
+                                                        stmt->loc.line);
                         }
 
                         /* Pop the define scope */
@@ -2145,7 +2147,9 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                                                         stmt->data.resource.type.data,
                                                         title_str,
                                                         params,
-                                                        param_idx);  // Use actual count, not attr_count
+                                                        param_idx,
+                                                        stmt->loc.filename,
+                                                        stmt->loc.line);  // Use actual count, not attr_count
                         }
 
                         puppet_free(resource_id);

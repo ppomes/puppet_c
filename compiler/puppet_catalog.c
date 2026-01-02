@@ -98,7 +98,9 @@ int puppet_catalog_add_resource(puppet_catalog_t *catalog,
                                 const char *type,
                                 const char *title,
                                 puppet_catalog_param_t *params,
-                                size_t param_count) {
+                                size_t param_count,
+                                const char *file,
+                                int line) {
     if (!catalog || !type || !title) return -2;
 
     /* Check for duplicate */
@@ -126,7 +128,8 @@ int puppet_catalog_add_resource(puppet_catalog_t *catalog,
     res->parameters = params;
     res->param_count = param_count;
     res->exported = false;
-    res->line = 0;
+    res->file = file ? puppet_strdup(file) : NULL;
+    res->line = line;
 
     catalog->resource_count++;
     return 0;

@@ -23,6 +23,9 @@ static puppet_stmt_list_t convert_block(TSNode node, const char *source);
 static puppet_lambda_t *convert_lambda(TSNode node, const char *source);
 static puppet_expr_t *build_index_expr(puppet_expr_t *object, TSNode access_node, const char *source);
 
+/* Current filename being parsed (for source location tracking) */
+static const char *current_parse_filename = NULL;
+
 /*
  * ===========================================================================
  * HELPER FUNCTIONS
@@ -61,7 +64,7 @@ static TSNode find_child(TSNode node, const char *type) {
 static puppet_location_t node_location(TSNode node) {
     TSPoint start = ts_node_start_point(node);
     puppet_location_t loc = {
-        .filename = NULL,
+        .filename = current_parse_filename ? puppet_strdup(current_parse_filename) : NULL,
         .line = start.row + 1,
         .column = start.column + 1
     };
@@ -1540,7 +1543,15 @@ puppet_stmt_list_t *puppet_ts_parse_file(const char *filename) {
     source[read] = '\0';
     fclose(f);
 
+    /* Set current filename for source location tracking */
+    const char *old_filename = current_parse_filename;
+    current_parse_filename = filename;
+
     puppet_stmt_list_t *result = puppet_ts_parse_string(source, read);
+
+    /* Restore previous filename (for nested includes) */
+    current_parse_filename = old_filename;
+
     puppet_free(source);
 
     return result;

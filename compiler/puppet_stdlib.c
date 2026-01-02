@@ -399,7 +399,9 @@ void realize_single_resource(puppet_stmt_t *stmt, size_t instance_idx, puppet_en
                                     stmt->data.resource.type.data,
                                     title_str,
                                     params,
-                                    param_count);
+                                    param_count,
+                                    stmt->loc.filename,
+                                    stmt->loc.line);
     }
 
     puppet_free(resource_id);
@@ -501,7 +503,8 @@ puppet_value_t *puppet_func_realize(puppet_expr_list_t *args, puppet_env_t *env)
                                                     vres->type,
                                                     vres->title,
                                                     params,
-                                                    vres->attr_count);
+                                                    vres->attr_count,
+                                                    NULL, 0);  /* TODO: add file/line to virtual_resource */
                     }
 
                     vres->realized = true;
@@ -4244,7 +4247,8 @@ puppet_value_t *puppet_func_create_resources(puppet_expr_list_t *args, puppet_en
                         }
                     }
 
-                    puppet_catalog_add_resource(env->catalog, res_type, title_str, cat_params, param_count);
+                    puppet_catalog_add_resource(env->catalog, res_type, title_str, cat_params, param_count,
+                                                NULL, 0);  /* create_resources: no source location */
                 }
 
                 /* Pop the define scope */
@@ -4315,9 +4319,11 @@ puppet_value_t *puppet_func_create_resources(puppet_expr_list_t *args, puppet_en
                             }
                         }
 
-                        puppet_catalog_add_resource(env->catalog, res_type, title_str, cat_params, param_idx);
+                        puppet_catalog_add_resource(env->catalog, res_type, title_str, cat_params, param_idx,
+                                                    NULL, 0);  /* create_resources: no source location */
                     } else {
-                        puppet_catalog_add_resource(env->catalog, res_type, title_str, NULL, 0);
+                        puppet_catalog_add_resource(env->catalog, res_type, title_str, NULL, 0,
+                                                    NULL, 0);  /* create_resources: no source location */
                     }
                 }
             }

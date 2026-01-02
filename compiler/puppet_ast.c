@@ -388,6 +388,8 @@ void puppet_expr_destroy(puppet_expr_t *expr) {
             break;
     }
 
+    /* Free location filename if allocated */
+    puppet_free((char*)expr->loc.filename);
     puppet_free(expr);
 }
 
@@ -591,11 +593,15 @@ void puppet_stmt_destroy(puppet_stmt_t *stmt) {
             break;
     }
 
+    /* Free location filename if allocated */
+    puppet_free((char*)stmt->loc.filename);
     puppet_free(stmt);
 }
 
 void puppet_program_destroy(puppet_program_t *program) {
     if (!program) return;
     puppet_stmt_list_destroy(&program->statements);
+    /* Free location filename if allocated */
+    puppet_free((char*)program->loc.filename);
     puppet_free(program);
 }
