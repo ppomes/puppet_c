@@ -350,7 +350,11 @@ char *puppet_hiera_interpolate(const char *template, puppet_hiera_context_t *con
                     if (strncmp(lookup_name, "::", 2) == 0) {
                         lookup_name += 2;
                     }
+                    /* Set flag to prevent recursive hiera lookups during path interpolation */
+                    bool was_in_interpolation = context->env->in_hiera_interpolation;
+                    context->env->in_hiera_interpolation = true;
                     puppet_value_t *looked_up = puppet_variable_lookup_chain(context->env, lookup_name);
+                    context->env->in_hiera_interpolation = was_in_interpolation;
                     if (looked_up && looked_up->type == PUPPET_VALUE_STRING) {
                         strncpy(value_buf, looked_up->data.string.data, sizeof(value_buf) - 1);
                         value = value_buf;

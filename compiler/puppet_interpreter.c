@@ -3206,7 +3206,8 @@ puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name
     }
     
     // 6. Data providers (Hiera, external data sources)
-    if (!top_level_only) {
+    // Skip if we're in hiera path interpolation to prevent infinite recursion
+    if (!top_level_only && !env->in_hiera_interpolation) {
         for (size_t i = 0; i < env->data_provider_count; i++) {
             puppet_data_provider_t *provider = env->data_providers[i];
             if (provider && provider->lookup) {

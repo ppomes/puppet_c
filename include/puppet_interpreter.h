@@ -189,6 +189,9 @@ typedef struct puppet_env {
     /* Output control */
     bool verbose;                             /**< Enable verbose/debug output */
 
+    /* Hiera recursion guard */
+    bool in_hiera_interpolation;              /**< Prevent recursive hiera lookups in path interpolation */
+
     /* Catalog building */
     puppet_catalog_t *catalog;                /**< Resource catalog (NULL if not building) */
     bool build_catalog;                       /**< Whether to build a catalog */

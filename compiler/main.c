@@ -269,17 +269,30 @@ int main(int argc, char *argv[]) {
                 puppet_hiera_register_provider(env, hiera_datadir);
                 if (verbose) fprintf(stderr, "Using Hiera data directory: %s\n", hiera_datadir);
             } else {
-                /* Look for hiera.yaml in the manifest directory */
+                /* Look for hiera.yaml in the manifest directory or parent */
                 char *manifest_dir = strdup(argv[optind]);
                 char *last_slash = strrchr(manifest_dir, '/');
                 if (last_slash) {
                     *last_slash = '\0';
                     char hiera_yaml[1024];
-                    snprintf(hiera_yaml, sizeof(hiera_yaml), "%s/hiera.yaml", manifest_dir);
                     struct stat st;
+
+                    /* Try manifest directory first */
+                    snprintf(hiera_yaml, sizeof(hiera_yaml), "%s/hiera.yaml", manifest_dir);
                     if (stat(hiera_yaml, &st) == 0 && S_ISREG(st.st_mode)) {
                         puppet_hiera_register_provider(env, hiera_yaml);
                         if (verbose) fprintf(stderr, "Using Hiera config: %s\n", hiera_yaml);
+                    } else {
+                        /* Try parent directory (e.g., preprod/ when manifest is preprod/manifests/site.pp) */
+                        char *parent_slash = strrchr(manifest_dir, '/');
+                        if (parent_slash) {
+                            *parent_slash = '\0';
+                            snprintf(hiera_yaml, sizeof(hiera_yaml), "%s/hiera.yaml", manifest_dir);
+                            if (stat(hiera_yaml, &st) == 0 && S_ISREG(st.st_mode)) {
+                                puppet_hiera_register_provider(env, hiera_yaml);
+                                if (verbose) fprintf(stderr, "Using Hiera config: %s\n", hiera_yaml);
+                            }
+                        }
                     }
                 }
                 free(manifest_dir);
