@@ -987,8 +987,14 @@ static puppet_stmt_t *convert_class_def(TSNode node, const char *source) {
                 TSNode param = ts_node_named_child(child, j);
                 if (!node_is(param, "parameter")) continue;
 
-                /* parameter -> regular_parameter -> variable -> name */
-                TSNode reg_param = find_child(param, "regular_parameter");
+                /* Handle both typed and untyped parameters:
+                 * - typed: parameter -> typed_parameter -> regular_parameter -> variable
+                 * - untyped: parameter -> regular_parameter -> variable
+                 */
+                TSNode typed_param = find_child(param, "typed_parameter");
+                TSNode reg_param = ts_node_is_null(typed_param) ?
+                    find_child(param, "regular_parameter") :
+                    find_child(typed_param, "regular_parameter");
                 if (ts_node_is_null(reg_param)) reg_param = param;
 
                 TSNode var_node = find_child(reg_param, "variable");
@@ -1049,8 +1055,14 @@ static puppet_stmt_t *convert_define_def(TSNode node, const char *source) {
                 TSNode param = ts_node_named_child(child, j);
                 if (!node_is(param, "parameter")) continue;
 
-                /* parameter -> regular_parameter -> variable -> name */
-                TSNode reg_param = find_child(param, "regular_parameter");
+                /* Handle both typed and untyped parameters:
+                 * - typed: parameter -> typed_parameter -> regular_parameter -> variable
+                 * - untyped: parameter -> regular_parameter -> variable
+                 */
+                TSNode typed_param = find_child(param, "typed_parameter");
+                TSNode reg_param = ts_node_is_null(typed_param) ?
+                    find_child(param, "regular_parameter") :
+                    find_child(typed_param, "regular_parameter");
                 if (ts_node_is_null(reg_param)) reg_param = param;
 
                 TSNode var_node = find_child(reg_param, "variable");
