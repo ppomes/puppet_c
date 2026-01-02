@@ -4834,42 +4834,10 @@ puppet_value_t *puppet_func_getvar(puppet_expr_list_t *args, puppet_env_t *env) 
 
     const char *var_name = name_val->data.string.data;
 
-    /* Strip leading :: if present */
-    if (var_name[0] == ':' && var_name[1] == ':') {
-        var_name += 2;
-    }
-
-    /* Look up the variable using the existing lookup chain */
-    puppet_value_t *result = NULL;
-
-    /* Check if it's a qualified name (contains ::) */
-    const char *sep = strstr(var_name, "::");
-    if (sep) {
-        /* Extract class name and variable name */
-        size_t class_len = sep - var_name;
-        char *class_name = puppet_malloc(class_len + 1);
-        memcpy(class_name, var_name, class_len);
-        class_name[class_len] = '\0';
-        const char *local_var = sep + 2;
-
-        /* Look up in class scope */
-        if (env->class_scopes) {
-            puppet_scope_t *class_scope = (puppet_scope_t *)puppet_hash_get(
-                env->class_scopes, class_name, class_len);
-            if (class_scope) {
-                result = puppet_scope_get_var(class_scope, local_var, false);
-                if (result) {
-                    result = puppet_value_copy(result);
-                }
-            }
-        }
-        puppet_free(class_name);
-    } else {
-        /* Simple variable - look in current scope */
-        result = puppet_scope_get_var(env->current_scope, var_name, true);
-        if (result) {
-            result = puppet_value_copy(result);
-        }
+    /* Use the existing lookup chain which handles class auto-inclusion */
+    puppet_value_t *result = puppet_variable_lookup_chain(env, var_name);
+    if (result) {
+        result = puppet_value_copy(result);
     }
 
     puppet_value_destroy(name_val);
