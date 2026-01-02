@@ -2183,8 +2183,17 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
             puppet_value_t *expr_val = puppet_eval_expr(stmt->data.case_stmt.expr, env);
             bool matched = false;
 
+            // First pass: check non-default cases
+            puppet_case_when_t *default_when = NULL;
             for (size_t i = 0; i < stmt->data.case_stmt.when_count && !matched; i++) {
                 puppet_case_when_t *when = &stmt->data.case_stmt.whens[i];
+
+                // Skip default case on first pass (test == NULL means default)
+                if (!when->test) {
+                    default_when = when;
+                    continue;
+                }
+
                 puppet_value_t *test_val = puppet_eval_expr(when->test, env);
 
                 // Check for match (using equality comparison or regex match)
@@ -2232,8 +2241,15 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
             }
 
             // Execute default branch if no when matched
-            if (!matched && stmt->data.case_stmt.default_body) {
-                puppet_exec_stmt_list(stmt->data.case_stmt.default_body, env);
+            // Check both the legacy default_body and when entries with NULL test
+            if (!matched) {
+                if (default_when) {
+                    puppet_exec_stmt_list(&default_when->body, env);
+                    matched = true;
+                } else if (stmt->data.case_stmt.default_body) {
+                    puppet_exec_stmt_list(stmt->data.case_stmt.default_body, env);
+                    matched = true;
+                }
             }
 
             if (expr_val) puppet_value_destroy(expr_val);
