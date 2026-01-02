@@ -3114,8 +3114,9 @@ puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name
 
     // If top-level only, skip local and class scopes
     if (!top_level_only) {
-        // 1. Local scope (current scope, non-recursive)
-        value = puppet_scope_get_var(env->current_scope, lookup_name, false);
+        // 1. Local scope (current scope, recursive to walk up parent chain)
+        // This is needed for nested defines to see outer define's variables
+        value = puppet_scope_get_var(env->current_scope, lookup_name, true);
         if (value) return value;
 
         // 2. Class scope (if we're inside a class)
