@@ -692,7 +692,9 @@ static puppet_expr_t *convert_expression(TSNode node, const char *source) {
     if (strcmp(type, "single_quoted_string") == 0 ||
         strcmp(type, "double_quoted_string") == 0)
         return convert_string_literal(node, source);
-    if (strcmp(type, "boolean") == 0)
+    if (strcmp(type, "boolean") == 0 ||
+        strcmp(type, "true") == 0 ||
+        strcmp(type, "false") == 0)
         return convert_boolean(node, source);
     if (strcmp(type, "undef") == 0)
         return convert_undef(node, source);
