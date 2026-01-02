@@ -501,12 +501,14 @@ void puppet_scope_set_var(puppet_scope_t *scope, const char *name, puppet_value_
 }
 
 puppet_value_t *puppet_scope_get_var(puppet_scope_t *scope, const char *name, bool recursive) {
+    if (!scope || !scope->variables) return NULL;
+
     puppet_value_t *value = puppet_hash_get(scope->variables, name, strlen(name));
-    
+
     if (!value && recursive && scope->parent) {
         return puppet_scope_get_var(scope->parent, name, true);
     }
-    
+
     return value;
 }
 
@@ -1373,35 +1375,29 @@ static bool puppet_include_class_from_def(puppet_stmt_t *class_def, puppet_env_t
  * ============================================================================ */
 
 /**
- * Get an attribute value from a virtual resource instance
+ * Get an attribute value from a pre-evaluated virtual resource
  */
-static puppet_value_t *collector_get_attribute(
-    puppet_stmt_t *stmt,
-    size_t instance_idx,
-    const char *attr_name,
-    puppet_env_t *env
+static puppet_value_t *collector_get_vres_attribute(
+    puppet_virtual_resource_t *vres,
+    const char *attr_name
 ) {
-    if (!stmt || stmt->type != PUPPET_STMT_RESOURCE) return NULL;
-    if (instance_idx >= stmt->data.resource.instance_count) return NULL;
+    if (!vres) return NULL;
 
-    puppet_resource_instance_t *instance = &stmt->data.resource.instances[instance_idx];
-
-    for (size_t i = 0; i < instance->attr_count; i++) {
-        if (strcmp(instance->attributes[i].name.data, attr_name) == 0) {
-            return puppet_eval_expr(instance->attributes[i].value, env);
+    for (size_t i = 0; i < vres->attr_count; i++) {
+        if (vres->attrs[i].name && strcmp(vres->attrs[i].name, attr_name) == 0) {
+            return vres->attrs[i].value;
         }
     }
     return NULL;
 }
 
 /**
- * Check if a resource matches a collector filter expression
+ * Check if a virtual resource matches a collector filter expression
  * Handles: ==, !=, and, or operators with attribute comparisons
  */
 static bool collector_matches_filter(
     puppet_expr_t *filter,
-    puppet_stmt_t *resource_stmt,
-    size_t instance_idx,
+    puppet_virtual_resource_t *vres,
     puppet_env_t *env
 ) {
     if (!filter) return true;  /* No filter = match all */
@@ -1412,14 +1408,14 @@ static bool collector_matches_filter(
 
             /* Handle logical operators */
             if (op == PUPPET_OP_AND) {
-                bool left = collector_matches_filter(filter->data.binop.left, resource_stmt, instance_idx, env);
+                bool left = collector_matches_filter(filter->data.binop.left, vres, env);
                 if (!left) return false;
-                return collector_matches_filter(filter->data.binop.right, resource_stmt, instance_idx, env);
+                return collector_matches_filter(filter->data.binop.right, vres, env);
             }
             if (op == PUPPET_OP_OR) {
-                bool left = collector_matches_filter(filter->data.binop.left, resource_stmt, instance_idx, env);
+                bool left = collector_matches_filter(filter->data.binop.left, vres, env);
                 if (left) return true;
-                return collector_matches_filter(filter->data.binop.right, resource_stmt, instance_idx, env);
+                return collector_matches_filter(filter->data.binop.right, vres, env);
             }
 
             /* Handle comparison operators: left should be attribute name (variable) */
@@ -1442,8 +1438,8 @@ static bool collector_matches_filter(
                 puppet_value_t *expected = puppet_eval_expr(filter->data.binop.right, env);
                 if (!expected) return false;
 
-                /* Get the actual attribute value from resource */
-                puppet_value_t *actual = collector_get_attribute(resource_stmt, instance_idx, attr_name, env);
+                /* Get the actual attribute value from resource (already evaluated) */
+                puppet_value_t *actual = collector_get_vres_attribute(vres, attr_name);
 
                 bool result = false;
                 if (actual) {
@@ -1452,7 +1448,7 @@ static bool collector_matches_filter(
                     if (cmp) puppet_value_destroy(cmp);
 
                     result = (op == PUPPET_OP_EQ) ? is_equal : !is_equal;
-                    puppet_value_destroy(actual);
+                    /* Don't destroy actual - it's owned by vres */
                 } else {
                     /* Attribute not found: == fails, != succeeds */
                     result = (op == PUPPET_OP_NE);
@@ -1503,15 +1499,60 @@ static void puppet_exec_collector(puppet_stmt_t *stmt, puppet_env_t *env) {
 
             /* Check if this resource matches the type */
             if (strncmp(entry->key.data, type_lower, prefix_len) == 0) {
-                /* Extract stored stmt pointer and instance index */
-                puppet_stmt_t *res_stmt = (puppet_stmt_t *)entry->value->data.string.data;
-                size_t instance_idx = (size_t)entry->value->data.string.len;
+                /* Get pre-evaluated virtual resource */
+                puppet_virtual_resource_t *vres = (puppet_virtual_resource_t *)entry->value->data.string.data;
+                if (!vres) {
+                    entry = next;
+                    continue;
+                }
+
+                /* Skip already realized resources */
+                if (vres->realized) {
+                    entry = next;
+                    continue;
+                }
 
                 /* Check filter if present */
-                if (collector_matches_filter(filter, res_stmt, instance_idx, env)) {
+                if (collector_matches_filter(filter, vres, env)) {
                     puppet_debug("Collector: realizing %s", entry->key.data);
-                    realize_single_resource(res_stmt, instance_idx, env);
+
+                    /* Build resource ID for duplicate check */
+                    size_t res_id_len = strlen(vres->type) + strlen(vres->title) + 3;
+                    char *resource_id = puppet_malloc(res_id_len);
+                    snprintf(resource_id, res_id_len, "%s[%s]", vres->type, vres->title);
+
+                    /* Check for duplicate */
+                    puppet_value_t *existing = puppet_hash_get(env->resource_catalog, resource_id, strlen(resource_id));
+                    if (existing) {
+                        puppet_warn("Collector: Resource %s already declared", resource_id);
+                        puppet_free(resource_id);
+                        entry = next;
+                        continue;
+                    }
+
+                    /* Mark as declared */
+                    puppet_value_t *marker = puppet_value_create_bool(true);
+                    puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);
+
+                    /* Add to catalog if building */
+                    if (env->build_catalog && env->catalog) {
+                        puppet_catalog_param_t *params = NULL;
+                        if (vres->attr_count > 0) {
+                            params = puppet_calloc(vres->attr_count, sizeof(puppet_catalog_param_t));
+                            for (size_t j = 0; j < vres->attr_count; j++) {
+                                if (vres->attrs[j].name) {
+                                    params[j].name = puppet_strdup(vres->attrs[j].name);
+                                    params[j].value = puppet_value_copy(vres->attrs[j].value);
+                                }
+                            }
+                        }
+                        puppet_catalog_add_resource(env->catalog, vres->type, vres->title,
+                                                   params, vres->attr_count);
+                    }
+
+                    vres->realized = true;
                     realized_count++;
+                    puppet_free(resource_id);
                 }
             }
             entry = next;
@@ -1735,7 +1776,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                 break;
             }
 
-            // Handle virtual resources - store but don't apply
+            // Handle virtual resources - evaluate and store attributes now
             if (stmt->data.resource.style == PUPPET_RES_VIRTUAL) {
                 for (size_t i = 0; i < stmt->data.resource.instance_count; i++) {
                     puppet_resource_instance_t *instance = &stmt->data.resource.instances[i];
@@ -1758,14 +1799,31 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                             continue;
                         }
 
-                        // Store in virtual resources (value is pointer to statement - don't free)
-                        puppet_value_t *stmt_ptr = puppet_calloc(1, sizeof(puppet_value_t));
-                        stmt_ptr->type = PUPPET_VALUE_UNDEF;  /* Use as opaque pointer */
-                        stmt_ptr->data.string.data = (char*)stmt;  /* Store stmt pointer */
-                        stmt_ptr->data.string.len = i;  /* Store instance index */
-                        puppet_hash_set(env->virtual_resources, resource_id, strlen(resource_id), stmt_ptr);
+                        // Create pre-evaluated virtual resource structure
+                        puppet_virtual_resource_t *vres = puppet_calloc(1, sizeof(puppet_virtual_resource_t));
+                        vres->type = puppet_strdup(stmt->data.resource.type.data);
+                        vres->title = puppet_strdup(title_str);
+                        vres->realized = false;
 
-                        puppet_debug("Stored virtual resource: %s", resource_id);
+                        // Evaluate and store all attributes NOW (while scope is correct)
+                        vres->attr_count = instance->attr_count;
+                        if (vres->attr_count > 0) {
+                            vres->attrs = puppet_calloc(vres->attr_count, sizeof(puppet_virtual_attr_t));
+                            for (size_t j = 0; j < instance->attr_count; j++) {
+                                if (instance->attributes[j].name.data) {
+                                    vres->attrs[j].name = puppet_strdup(instance->attributes[j].name.data);
+                                    vres->attrs[j].value = puppet_eval_expr(instance->attributes[j].value, env);
+                                }
+                            }
+                        }
+
+                        // Store pointer to virtual resource struct
+                        puppet_value_t *vres_ptr = puppet_calloc(1, sizeof(puppet_value_t));
+                        vres_ptr->type = PUPPET_VALUE_UNDEF;
+                        vres_ptr->data.string.data = (char*)vres;
+                        puppet_hash_set(env->virtual_resources, resource_id, strlen(resource_id), vres_ptr);
+
+                        puppet_debug("Stored virtual resource: %s (with %zu attrs)", resource_id, vres->attr_count);
                         puppet_free(resource_id);
                         puppet_value_destroy(title_val);
                     }

@@ -102,6 +102,28 @@ typedef struct puppet_scope {
 } puppet_scope_t;
 
 /**
+ * @brief Pre-evaluated attribute for virtual resources
+ */
+typedef struct puppet_virtual_attr {
+    char *name;                     /**< Attribute name */
+    puppet_value_t *value;          /**< Pre-evaluated value */
+} puppet_virtual_attr_t;
+
+/**
+ * @brief Pre-evaluated virtual resource
+ *
+ * Stores all evaluated attribute values at declaration time so they
+ * can be realized later even if the original scope is gone.
+ */
+typedef struct puppet_virtual_resource {
+    char *type;                     /**< Resource type (e.g., "file") */
+    char *title;                    /**< Resource title */
+    puppet_virtual_attr_t *attrs;   /**< Pre-evaluated attributes */
+    size_t attr_count;              /**< Number of attributes */
+    bool realized;                  /**< Whether already realized */
+} puppet_virtual_resource_t;
+
+/**
  * @brief Execution environment with scope management
  * 
  * The environment maintains the runtime state for Puppet evaluation,

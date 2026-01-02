@@ -249,6 +249,12 @@ bool puppet_loader_include_class(puppet_loader_t *loader,
                                  puppet_env_t *env) {
     if (!loader || !class_name || !env) return false;
 
+    /* Check if class is already included - classes are idempotent */
+    if (puppet_hash_get(env->class_scopes, class_name, strlen(class_name))) {
+        puppet_debug("Class %s already included, skipping", class_name);
+        return true;
+    }
+
     /* First, check if class is already registered in the environment
      * (defined in the same file or previously parsed) */
     puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);

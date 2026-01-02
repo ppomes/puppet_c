@@ -414,6 +414,7 @@ void realize_single_resource(puppet_stmt_t *stmt, size_t instance_idx, puppet_en
  *
  * Materializes virtual resources (@resource syntax) into the catalog.
  * Virtual resources must be declared before they can be realized.
+ * Uses pre-evaluated attribute values stored at declaration time.
  */
 puppet_value_t *puppet_func_realize(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count == 0) {
@@ -456,14 +457,61 @@ puppet_value_t *puppet_func_realize(puppet_expr_list_t *args, puppet_env_t *env)
         /* Look up virtual resource */
         puppet_value_t *stored = puppet_hash_get(env->virtual_resources, lookup_key, strlen(lookup_key));
         if (stored) {
-            /* Extract stored stmt pointer and instance index */
-            puppet_stmt_t *stmt = (puppet_stmt_t *)stored->data.string.data;
-            size_t instance_idx = (size_t)stored->data.string.len;
+            /* Extract pre-evaluated virtual resource */
+            puppet_virtual_resource_t *vres = (puppet_virtual_resource_t *)stored->data.string.data;
 
-            realize_single_resource(stmt, instance_idx, env);
-            char msg[512];
-            snprintf(msg, sizeof(msg), "Realized: %s", ref_str);
-            puppet_log(PUPPET_LOG_INFO, msg);
+            if (vres->realized) {
+                char msg[512];
+                snprintf(msg, sizeof(msg), "Virtual resource %s already realized", ref_str);
+                puppet_log(PUPPET_LOG_WARNING, msg);
+            } else {
+                /* Build resource identifier for duplicate check */
+                size_t res_id_len = strlen(vres->type) + strlen(vres->title) + 3;
+                char *resource_id = puppet_malloc(res_id_len);
+                snprintf(resource_id, res_id_len, "%s[%s]", vres->type, vres->title);
+
+                /* Check for duplicate in resource catalog */
+                puppet_value_t *existing = puppet_hash_get(env->resource_catalog, resource_id, strlen(resource_id));
+                if (existing) {
+                    char msg[512];
+                    snprintf(msg, sizeof(msg), "Duplicate declaration - %s is already declared", resource_id);
+                    puppet_log(PUPPET_LOG_ERROR, msg);
+                    puppet_free(resource_id);
+                } else {
+                    /* Add to resource catalog */
+                    puppet_value_t *marker = puppet_value_create_bool(true);
+                    puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);
+
+                    puppet_debug("Realizing virtual resource: %s", resource_id);
+
+                    /* Build catalog resource from pre-evaluated values */
+                    if (env->build_catalog && env->catalog) {
+                        puppet_catalog_param_t *params = NULL;
+                        if (vres->attr_count > 0) {
+                            params = puppet_calloc(vres->attr_count, sizeof(puppet_catalog_param_t));
+                            for (size_t j = 0; j < vres->attr_count; j++) {
+                                if (vres->attrs[j].name) {
+                                    params[j].name = puppet_strdup(vres->attrs[j].name);
+                                    params[j].value = puppet_value_copy(vres->attrs[j].value);
+                                }
+                            }
+                        }
+
+                        puppet_catalog_add_resource(env->catalog,
+                                                    vres->type,
+                                                    vres->title,
+                                                    params,
+                                                    vres->attr_count);
+                    }
+
+                    vres->realized = true;
+                    puppet_free(resource_id);
+
+                    char msg[512];
+                    snprintf(msg, sizeof(msg), "Realized: %s", ref_str);
+                    puppet_log(PUPPET_LOG_INFO, msg);
+                }
+            }
         } else {
             char msg[512];
             snprintf(msg, sizeof(msg), "realize: %s is not a virtual resource", ref_str);
