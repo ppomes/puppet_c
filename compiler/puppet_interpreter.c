@@ -3127,6 +3127,25 @@ puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name
             return value;
         }
 
+        // Class not found in scopes - try to auto-include it
+        // This is Puppet's behavior when referencing $class::var before include
+        puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
+        if (!class_def && env->loader) {
+            // Try to autoload the class from its manifest file
+            class_def = puppet_loader_load_class(env->loader, class_name);
+        }
+        if (class_def) {
+            puppet_include_class_from_def(class_def, env);
+            // Now try to get the variable again from the newly included class
+            puppet_scope_t *stored_scope = (puppet_scope_t *)puppet_hash_get(
+                env->class_scopes, class_name, strlen(class_name));
+            if (stored_scope) {
+                value = puppet_scope_get_var(stored_scope, var_name, true);
+                puppet_free(class_name);
+                return value;
+            }
+        }
+
         puppet_free(class_name);
         // Class scope not found - fall through to return NULL
         return NULL;
