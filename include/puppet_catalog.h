@@ -11,6 +11,7 @@
 
 #include "puppet_ast.h"
 #include <stdbool.h>
+#include <stdio.h>
 #include <time.h>
 
 /*
@@ -197,5 +198,13 @@ int puppet_catalog_write_json(puppet_catalog_t *catalog, const char *filepath);
  * @return String representation
  */
 const char *puppet_relationship_to_string(puppet_relationship_t rel);
+
+/**
+ * @brief Pretty-print catalog to output stream (language-puppet style)
+ * @param catalog Catalog to print
+ * @param out Output stream (e.g., stdout)
+ * @param use_color Whether to use ANSI color codes
+ */
+void puppet_catalog_pretty_print(puppet_catalog_t *catalog, FILE *out, bool use_color);
 
 #endif /* PUPPET_CATALOG_H */

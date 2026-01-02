@@ -276,7 +276,7 @@ bool puppet_loader_include_class(puppet_loader_t *loader,
     }
 
     /* Execute the class definition */
-    printf("Including class: %s\n", normalized_name);
+    if (puppet_verbose) fprintf(stderr, "Including class: %s\n", normalized_name);
 
     /* Handle class inheritance - include parent class first */
     puppet_scope_t *parent_class_scope = NULL;

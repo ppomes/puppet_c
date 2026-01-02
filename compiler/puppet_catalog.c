@@ -436,3 +436,171 @@ int puppet_catalog_write_json(puppet_catalog_t *catalog, const char *filepath) {
     free(json);
     return 0;
 }
+
+/*
+ * ===========================================================================
+ * PRETTY PRINT OUTPUT (language-puppet style)
+ * ===========================================================================
+ */
+
+/* ANSI color codes */
+#define COLOR_RESET   "\033[0m"
+#define COLOR_BOLD    "\033[1m"
+#define COLOR_DIM     "\033[2m"
+#define COLOR_RED     "\033[31m"
+#define COLOR_GREEN   "\033[32m"
+#define COLOR_YELLOW  "\033[33m"
+#define COLOR_BLUE    "\033[34m"
+#define COLOR_MAGENTA "\033[35m"
+#define COLOR_CYAN    "\033[36m"
+#define COLOR_WHITE   "\033[37m"
+#define COLOR_BRIGHT_RED     "\033[91m"
+#define COLOR_BRIGHT_GREEN   "\033[92m"
+#define COLOR_BRIGHT_YELLOW  "\033[93m"
+#define COLOR_BRIGHT_BLUE    "\033[94m"
+#define COLOR_BRIGHT_MAGENTA "\033[95m"
+#define COLOR_BRIGHT_CYAN    "\033[96m"
+
+/* Helper to print a value in pretty format */
+static void pretty_print_value(FILE *out, puppet_value_t *value, bool use_color) {
+    if (!value) {
+        if (use_color) fputs(COLOR_DIM, out);
+        fputs("undef", out);
+        if (use_color) fputs(COLOR_RESET, out);
+        return;
+    }
+
+    switch (value->type) {
+        case PUPPET_VALUE_STRING:
+            if (use_color) fputs(COLOR_CYAN, out);
+            /* Check if it looks like a resource reference */
+            if (value->data.string.data &&
+                (strstr(value->data.string.data, "[") != NULL ||
+                 (value->data.string.data[0] >= 'A' && value->data.string.data[0] <= 'Z'))) {
+                /* Could be a reference like Class[foo] or Package[bar] */
+                if (use_color) fputs(COLOR_BRIGHT_GREEN, out);
+            }
+            fprintf(out, "%s", value->data.string.data ? value->data.string.data : "");
+            if (use_color) fputs(COLOR_RESET, out);
+            break;
+
+        case PUPPET_VALUE_NUMBER:
+            if (use_color) fputs(COLOR_BRIGHT_YELLOW, out);
+            fprintf(out, "%g", value->data.number);
+            if (use_color) fputs(COLOR_RESET, out);
+            break;
+
+        case PUPPET_VALUE_BOOL:
+            if (use_color) fputs(COLOR_BRIGHT_MAGENTA, out);
+            fputs(value->data.boolean ? "true" : "false", out);
+            if (use_color) fputs(COLOR_RESET, out);
+            break;
+
+        case PUPPET_VALUE_UNDEF:
+            if (use_color) fputs(COLOR_DIM, out);
+            fputs("undef", out);
+            if (use_color) fputs(COLOR_RESET, out);
+            break;
+
+        case PUPPET_VALUE_ARRAY:
+            fputc('[', out);
+            for (size_t i = 0; i < value->data.array->count; i++) {
+                if (i > 0) fputs(", ", out);
+                pretty_print_value(out, value->data.array->items[i], use_color);
+            }
+            fputc(']', out);
+            break;
+
+        case PUPPET_VALUE_HASH:
+            fputc('{', out);
+            {
+                bool first = true;
+                puppet_hash_t *hash = value->data.hash;
+                for (size_t i = 0; i < hash->bucket_count; i++) {
+                    puppet_hash_entry_t *entry = hash->buckets[i];
+                    while (entry) {
+                        if (!first) fputs(", ", out);
+                        first = false;
+                        if (use_color) fputs(COLOR_YELLOW, out);
+                        fprintf(out, "%s", entry->key.data);
+                        if (use_color) fputs(COLOR_RESET, out);
+                        fputs(" => ", out);
+                        pretty_print_value(out, entry->value, use_color);
+                        entry = entry->next;
+                    }
+                }
+            }
+            fputc('}', out);
+            break;
+
+        default:
+            if (use_color) fputs(COLOR_DIM, out);
+            fputs("???", out);
+            if (use_color) fputs(COLOR_RESET, out);
+    }
+}
+
+void puppet_catalog_pretty_print(puppet_catalog_t *catalog, FILE *out, bool use_color) {
+    if (!catalog || !out) return;
+
+    for (size_t i = 0; i < catalog->resource_count; i++) {
+        puppet_catalog_resource_t *res = &catalog->resources[i];
+
+        /* Resource header: type/title: file:line node [Scope [...]] */
+        if (use_color) fputs(COLOR_BRIGHT_MAGENTA, out);
+        fprintf(out, "%s", res->type);
+        if (use_color) fputs(COLOR_RESET, out);
+        fputc('/', out);
+        if (use_color) fputs(COLOR_BRIGHT_CYAN, out);
+        fprintf(out, "%s", res->title);
+        if (use_color) fputs(COLOR_RESET, out);
+        fputs(": ", out);
+
+        /* Source location */
+        if (res->file) {
+            if (use_color) fputs(COLOR_DIM, out);
+            fprintf(out, "%s:%d", res->file, res->line);
+            if (use_color) fputs(COLOR_RESET, out);
+        }
+
+        /* Node name */
+        fprintf(out, " %s", catalog->certname);
+
+        /* Scope info from tags if available */
+        if (res->tag_count > 0) {
+            fputs(" [Scope [", out);
+            if (use_color) fputs(COLOR_GREEN, out);
+            bool first_tag = true;
+            for (size_t j = 0; j < res->tag_count; j++) {
+                /* Only show class-like tags */
+                if (strstr(res->tags[j], "::") ||
+                    (res->tags[j][0] >= 'a' && res->tags[j][0] <= 'z')) {
+                    if (!first_tag) fputs(", ", out);
+                    fprintf(out, "class %s", res->tags[j]);
+                    first_tag = false;
+                }
+            }
+            if (use_color) fputs(COLOR_RESET, out);
+            fputs("]]", out);
+        }
+        fputc('\n', out);
+
+        /* Parameters */
+        for (size_t j = 0; j < res->param_count; j++) {
+            fputs("  ", out);
+            if (use_color) fputs(COLOR_YELLOW, out);
+            fprintf(out, "%s", res->parameters[j].name);
+            if (use_color) fputs(COLOR_RESET, out);
+            fputs(" => ", out);
+            pretty_print_value(out, res->parameters[j].value, use_color);
+            fputs(",\n", out);
+        }
+
+        fputc('\n', out);
+    }
+
+    /* Summary */
+    if (use_color) fputs(COLOR_BRIGHT_GREEN, out);
+    fprintf(out, "Total: %zu resources\n", catalog->resource_count);
+    if (use_color) fputs(COLOR_RESET, out);
+}

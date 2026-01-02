@@ -1818,7 +1818,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         if (attr_found) puppet_free(attr_found);
 
                         // Execute class body
-                        printf("Including class: %s\n", class_name);
+                        if (puppet_verbose) fprintf(stderr, "Including class: %s\n", class_name);
                         puppet_exec_stmt_list(&class_def->data.class_def.body, env);
 
                         // Add to catalog
@@ -2392,7 +2392,7 @@ static bool puppet_include_class_from_def(puppet_stmt_t *class_def, puppet_env_t
         return true;
     }
 
-    printf("Including class: %s\n", class_name);
+    if (puppet_verbose) fprintf(stderr, "Including class: %s\n", class_name);
 
     /* Handle class inheritance - include parent class first */
     puppet_scope_t *parent_class_scope = NULL;
