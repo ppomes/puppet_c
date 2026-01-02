@@ -202,6 +202,7 @@ typedef struct puppet_env {
     /* CI validation tracking */
     size_t nodes_processed;                   /**< Number of nodes processed */
     size_t nodes_failed;                      /**< Number of nodes with errors */
+    size_t nodes_skipped_regex;               /**< Number of regex nodes skipped */
     size_t errors_count;                      /**< Total errors encountered */
     size_t warnings_count;                    /**< Total warnings encountered */
     char *current_node_certname;              /**< Current node being processed (for error tracking) */
@@ -309,7 +310,7 @@ puppet_catalog_t *puppet_env_get_catalog(puppet_env_t *env);
 
 /* CI validation tracking */
 void puppet_env_get_stats(puppet_env_t *env, size_t *nodes_processed, size_t *nodes_failed,
-                          size_t *errors, size_t *warnings);
+                          size_t *nodes_skipped_regex, size_t *errors, size_t *warnings);
 void puppet_env_increment_error(puppet_env_t *env);
 void puppet_env_increment_warning(puppet_env_t *env);
 

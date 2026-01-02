@@ -439,12 +439,15 @@ int main(int argc, char *argv[]) {
 
             /* Print validation summary if requested */
             if (summary_mode) {
-                size_t nodes_processed, nodes_failed, errors, warnings;
-                puppet_env_get_stats(env, &nodes_processed, &nodes_failed, &errors, &warnings);
+                size_t nodes_processed, nodes_failed, nodes_skipped, errors, warnings;
+                puppet_env_get_stats(env, &nodes_processed, &nodes_failed, &nodes_skipped, &errors, &warnings);
 
                 fprintf(stderr, "\n=== Validation Summary ===\n");
                 fprintf(stderr, "Nodes processed: %zu\n", nodes_processed);
                 fprintf(stderr, "Nodes failed:    %zu\n", nodes_failed);
+                if (nodes_skipped > 0) {
+                    fprintf(stderr, "Regex skipped:   %zu\n", nodes_skipped);
+                }
                 fprintf(stderr, "Total errors:    %zu\n", errors);
                 fprintf(stderr, "Total warnings:  %zu\n", warnings);
 

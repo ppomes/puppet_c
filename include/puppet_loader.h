@@ -154,4 +154,18 @@ void puppet_loader_set_modules_path(puppet_loader_t *loader,
 void puppet_loader_set_manifests_path(puppet_loader_t *loader,
                                       const char *manifests_path);
 
+/**
+ * @brief Check if a custom function exists in any module
+ *
+ * Searches for function_name.rb in module lib directories:
+ * - modules/MODULE/lib/puppet/parser/functions/ (Puppet 3 style)
+ * - modules/MODULE/lib/puppet/functions/ (Puppet 4+ style)
+ *
+ * @param loader Module loader context
+ * @param func_name Name of the function to find
+ * @return true if the function exists as a custom Ruby function
+ */
+bool puppet_loader_has_custom_function(puppet_loader_t *loader,
+                                       const char *func_name);
+
 #endif /* PUPPET_LOADER_H */

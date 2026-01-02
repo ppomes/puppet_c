@@ -298,6 +298,7 @@ puppet_env_t *puppet_env_create(void) {
     /* Initialize CI validation tracking */
     env->nodes_processed = 0;
     env->nodes_failed = 0;
+    env->nodes_skipped_regex = 0;
     env->errors_count = 0;
     env->warnings_count = 0;
     env->current_node_certname = NULL;
@@ -886,6 +887,17 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             }
 
             else {
+                /* Check if it's a custom Ruby function in a module */
+                if (env->loader && puppet_loader_has_custom_function(env->loader, func_name)) {
+                    /* Custom function found - return placeholder for catalog */
+                    puppet_debug("Custom function %s() - returning placeholder", func_name);
+
+                    /* Build a placeholder string showing the function call */
+                    char placeholder[256];
+                    snprintf(placeholder, sizeof(placeholder), "<%s(...)>", func_name);
+                    return puppet_value_create_string(placeholder, strlen(placeholder));
+                }
+
                 puppet_error_at(expr->loc, "Unknown function: %s", func_name);
                 puppet_env_increment_error(env);
                 return puppet_value_create_undef();
@@ -2819,6 +2831,7 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
         /* Skip regex nodes - they require a specific node name to match against */
         if (is_regex) {
             puppet_debug("Skipping regex node: %s (use --node to match)", node_name);
+            env->nodes_skipped_regex++;
             should_execute = false;
         } else {
             should_execute = true;
@@ -4170,16 +4183,18 @@ int puppet_env_set_facts_db(puppet_env_t *env, puppet_facts_db_t *facts_db) {
  */
 
 void puppet_env_get_stats(puppet_env_t *env, size_t *nodes_processed, size_t *nodes_failed,
-                          size_t *errors, size_t *warnings) {
+                          size_t *nodes_skipped_regex, size_t *errors, size_t *warnings) {
     if (!env) {
         if (nodes_processed) *nodes_processed = 0;
         if (nodes_failed) *nodes_failed = 0;
+        if (nodes_skipped_regex) *nodes_skipped_regex = 0;
         if (errors) *errors = 0;
         if (warnings) *warnings = 0;
         return;
     }
     if (nodes_processed) *nodes_processed = env->nodes_processed;
     if (nodes_failed) *nodes_failed = env->nodes_failed;
+    if (nodes_skipped_regex) *nodes_skipped_regex = env->nodes_skipped_regex;
     if (errors) *errors = env->errors_count;
     if (warnings) *warnings = env->warnings_count;
 }

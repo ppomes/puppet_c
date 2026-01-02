@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <dirent.h>
 
 puppet_loader_t *puppet_loader_create(const char *base_path) {
     puppet_loader_t *loader = puppet_calloc(1, sizeof(puppet_loader_t));
@@ -369,7 +370,59 @@ void puppet_loader_set_modules_path(puppet_loader_t *loader,
 void puppet_loader_set_manifests_path(puppet_loader_t *loader,
                                       const char *manifests_path) {
     if (!loader || !manifests_path) return;
-    
+
     puppet_free(loader->manifests_path);
     loader->manifests_path = puppet_strdup(manifests_path);
+}
+
+bool puppet_loader_has_custom_function(puppet_loader_t *loader,
+                                       const char *func_name) {
+    if (!loader || !func_name || !loader->modules_path) return false;
+
+    /* Open modules directory */
+    DIR *modules_dir = opendir(loader->modules_path);
+    if (!modules_dir) return false;
+
+    struct dirent *module_entry;
+    bool found = false;
+
+    /* Iterate over all modules */
+    while ((module_entry = readdir(modules_dir)) != NULL && !found) {
+        /* Skip . and .. */
+        if (module_entry->d_name[0] == '.') continue;
+
+        /* Check both Puppet 3 and Puppet 4+ function paths */
+        char path[1024];
+        struct stat st;
+
+        /* Puppet 3 style: lib/puppet/parser/functions/<name>.rb */
+        snprintf(path, sizeof(path), "%s/%s/lib/puppet/parser/functions/%s.rb",
+                 loader->modules_path, module_entry->d_name, func_name);
+        if (stat(path, &st) == 0 && S_ISREG(st.st_mode)) {
+            found = true;
+            puppet_debug("Found custom function: %s in %s", func_name, path);
+            break;
+        }
+
+        /* Puppet 4+ style: lib/puppet/functions/<name>.rb */
+        snprintf(path, sizeof(path), "%s/%s/lib/puppet/functions/%s.rb",
+                 loader->modules_path, module_entry->d_name, func_name);
+        if (stat(path, &st) == 0 && S_ISREG(st.st_mode)) {
+            found = true;
+            puppet_debug("Found custom function: %s in %s", func_name, path);
+            break;
+        }
+
+        /* Puppet 4+ namespaced style: lib/puppet/functions/<module>/<name>.rb */
+        snprintf(path, sizeof(path), "%s/%s/lib/puppet/functions/%s/%s.rb",
+                 loader->modules_path, module_entry->d_name, module_entry->d_name, func_name);
+        if (stat(path, &st) == 0 && S_ISREG(st.st_mode)) {
+            found = true;
+            puppet_debug("Found custom function: %s in %s", func_name, path);
+            break;
+        }
+    }
+
+    closedir(modules_dir);
+    return found;
 }
