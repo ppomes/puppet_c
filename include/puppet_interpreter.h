@@ -166,6 +166,9 @@ typedef struct puppet_env {
 
     /* Class scope registry - stores scopes for included classes for $class::var lookups */
     puppet_hash_t *class_scopes;              /**< class_name → scope mapping */
+
+    /* Resource-style class declarations - tracks class { } syntax (non-idempotent) */
+    puppet_hash_t *class_resource_decls;      /**< class_name → true for class {} declarations */
     
     /* Facts database */
     puppet_facts_db_t *facts_db;              /**< Facts database for node-specific facts */

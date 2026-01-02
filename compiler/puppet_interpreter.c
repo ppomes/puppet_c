@@ -253,6 +253,11 @@ puppet_env_t *puppet_env_create(void) {
     env->class_scopes->bucket_count = 32;
     env->class_scopes->buckets = puppet_calloc(env->class_scopes->bucket_count, sizeof(puppet_hash_entry_t*));
 
+    /* Initialize resource-style class declarations tracking */
+    env->class_resource_decls = puppet_calloc(1, sizeof(puppet_hash_t));
+    env->class_resource_decls->bucket_count = 32;
+    env->class_resource_decls->buckets = puppet_calloc(env->class_resource_decls->bucket_count, sizeof(puppet_hash_entry_t*));
+
     /* Initialize facts database */
     env->facts_db = NULL;
     
@@ -348,6 +353,22 @@ void puppet_env_destroy(puppet_env_t *env) {
         }
         puppet_free(env->class_scopes->buckets);
         puppet_free(env->class_scopes);
+    }
+
+    // Clean up resource-style class declarations
+    if (env->class_resource_decls) {
+        for (size_t i = 0; i < env->class_resource_decls->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->class_resource_decls->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                puppet_value_destroy(entry->value);
+                puppet_free(entry);
+                entry = next;
+            }
+        }
+        puppet_free(env->class_resource_decls->buckets);
+        puppet_free(env->class_resource_decls);
     }
 
     // Clean up facts database
@@ -1700,13 +1721,18 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         }
                         puppet_debug("  Class resource: %s", class_name);
 
-                        // Check if this class is already declared - resource-style declarations are NOT idempotent
-                        if (puppet_hash_get(env->class_scopes, class_name, strlen(class_name))) {
+                        // Check if this class was already declared with class { } syntax
+                        // (resource-style declarations are NOT idempotent, but include is)
+                        if (puppet_hash_get(env->class_resource_decls, class_name, strlen(class_name))) {
                             fprintf(stderr, "Error: Duplicate declaration - class[%s] is already declared\n", class_name);
                             fprintf(stderr, "       Use 'include' for idempotent class inclusion\n");
                             puppet_value_destroy(title_val);
                             continue;
                         }
+
+                        // Mark this class as declared via class { } syntax
+                        puppet_hash_set(env->class_resource_decls, class_name, strlen(class_name),
+                                        puppet_value_create_bool(true));
 
                         // Find the class definition
                         puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
@@ -2642,6 +2668,21 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
         }
     }
 
+    /* Clear resource-style class declarations */
+    if (env->class_resource_decls) {
+        for (size_t i = 0; i < env->class_resource_decls->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->class_resource_decls->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                puppet_value_destroy(entry->value);
+                puppet_free(entry);
+                entry = next;
+            }
+            env->class_resource_decls->buckets[i] = NULL;
+        }
+    }
+
     /* Clear virtual resources */
     if (env->virtual_resources) {
         for (size_t i = 0; i < env->virtual_resources->bucket_count; i++) {
@@ -2783,6 +2824,21 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
                         entry = next;
                     }
                     env->class_scopes->buckets[i] = NULL;
+                }
+            }
+
+            /* Clear resource-style class declarations */
+            if (env->class_resource_decls) {
+                for (size_t i = 0; i < env->class_resource_decls->bucket_count; i++) {
+                    puppet_hash_entry_t *entry = env->class_resource_decls->buckets[i];
+                    while (entry) {
+                        puppet_hash_entry_t *next = entry->next;
+                        puppet_free(entry->key.data);
+                        puppet_value_destroy(entry->value);
+                        puppet_free(entry);
+                        entry = next;
+                    }
+                    env->class_resource_decls->buckets[i] = NULL;
                 }
             }
 
