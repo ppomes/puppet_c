@@ -175,12 +175,78 @@ puppet_hiera_config_t *puppet_hiera_config_create_default(const char *datadir) {
 }
 
 /**
- * @brief Create Hiera configuration from file
+ * @brief Create Hiera configuration from file (hiera.yaml)
  */
 puppet_hiera_config_t *puppet_hiera_config_create(const char *config_path) {
-    // For now, just return default config
-    (void)config_path;
-    return puppet_hiera_config_create_default("data");
+    puppet_value_t *yaml_config = puppet_hiera_load_yaml(config_path);
+    if (!yaml_config || yaml_config->type != PUPPET_VALUE_HASH) {
+        if (yaml_config) puppet_value_destroy(yaml_config);
+        return puppet_hiera_config_create_default("data");
+    }
+
+    /* Extract base directory from config_path */
+    char basedir[1024] = {0};
+    const char *last_slash = strrchr(config_path, '/');
+    if (last_slash) {
+        size_t len = last_slash - config_path;
+        if (len < sizeof(basedir)) {
+            memcpy(basedir, config_path, len);
+            basedir[len] = '\0';
+        }
+    } else {
+        strcpy(basedir, ".");
+    }
+
+    puppet_hiera_config_t *config = puppet_calloc(1, sizeof(puppet_hiera_config_t));
+    config->version = 5;
+    config->default_merge = HIERA_MERGE_FIRST;
+
+    /* Get datadir from :yaml: or :json: section, or use default */
+    const char *rel_datadir = "hieradata";
+    puppet_value_t *yaml_section = puppet_hash_get(yaml_config->data.hash, ":yaml:", 6);
+    if (yaml_section && yaml_section->type == PUPPET_VALUE_HASH) {
+        puppet_value_t *datadir_val = puppet_hash_get(yaml_section->data.hash, ":datadir", 8);
+        if (datadir_val && datadir_val->type == PUPPET_VALUE_STRING) {
+            rel_datadir = datadir_val->data.string.data;
+        }
+    }
+    /* Make datadir absolute relative to basedir */
+    char abs_datadir[1024];
+    snprintf(abs_datadir, sizeof(abs_datadir), "%s/%s", basedir, rel_datadir);
+    config->datadir = puppet_strdup(abs_datadir);
+
+    /* Parse hierarchy */
+    puppet_value_t *hierarchy = puppet_hash_get(yaml_config->data.hash, ":hierarchy", 10);
+    if (hierarchy && hierarchy->type == PUPPET_VALUE_ARRAY) {
+        puppet_hiera_level_t *last_level = NULL;
+        for (size_t i = 0; i < hierarchy->data.array->count; i++) {
+            puppet_value_t *item = hierarchy->data.array->items[i];
+            if (item && item->type == PUPPET_VALUE_STRING) {
+                puppet_hiera_level_t *level = puppet_calloc(1, sizeof(puppet_hiera_level_t));
+                /* Build path template with .yaml extension */
+                size_t path_len = item->data.string.len + 6; /* ".yaml\0" */
+                level->path_template = puppet_malloc(path_len);
+                snprintf(level->path_template, path_len, "%s.yaml", item->data.string.data);
+                level->name = puppet_strdup(item->data.string.data);
+                level->datadir = puppet_strdup(config->datadir);
+                level->backend = HIERA_BACKEND_YAML;
+
+                if (last_level) {
+                    last_level->next = level;
+                } else {
+                    config->hierarchy = level;
+                }
+                last_level = level;
+            }
+        }
+    }
+
+    /* Initialize cache and defaults */
+    config->cache = puppet_value_create_hash();
+    config->defaults = puppet_value_create_hash();
+
+    puppet_value_destroy(yaml_config);
+    return config;
 }
 
 /**
@@ -240,11 +306,84 @@ void puppet_hiera_context_destroy(puppet_hiera_context_t *context) {
 }
 
 /**
- * @brief Simple interpolation - just returns a copy for now
+ * @brief Interpolate variables in template string
+ * Supports %{variable} and %{::variable} syntax
  */
 char *puppet_hiera_interpolate(const char *template, puppet_hiera_context_t *context) {
-    (void)context;
-    return puppet_strdup(template);
+    if (!template) return NULL;
+    if (!context) return puppet_strdup(template);
+
+    /* Estimate result size - may need expansion */
+    size_t result_size = strlen(template) * 2 + 256;
+    char *result = puppet_malloc(result_size);
+    size_t result_pos = 0;
+
+    const char *p = template;
+    while (*p) {
+        if (p[0] == '%' && p[1] == '{') {
+            /* Find end of variable */
+            const char *end = strchr(p + 2, '}');
+            if (end) {
+                /* Extract variable name */
+                size_t var_len = end - (p + 2);
+                char *var_name = puppet_malloc(var_len + 1);
+                memcpy(var_name, p + 2, var_len);
+                var_name[var_len] = '\0';
+
+                /* Look up variable value */
+                const char *value = NULL;
+                char value_buf[256] = {0};
+
+                /* Check context variables first */
+                if (context->variables) {
+                    puppet_value_t *var_val = puppet_hash_get(context->variables->data.hash,
+                        var_name, strlen(var_name));
+                    if (var_val && var_val->type == PUPPET_VALUE_STRING) {
+                        value = var_val->data.string.data;
+                    }
+                }
+
+                /* Check environment for scope lookups */
+                if (!value && context->env) {
+                    /* Strip leading :: for lookup */
+                    const char *lookup_name = var_name;
+                    if (strncmp(lookup_name, "::", 2) == 0) {
+                        lookup_name += 2;
+                    }
+                    puppet_value_t *looked_up = puppet_variable_lookup_chain(context->env, lookup_name);
+                    if (looked_up && looked_up->type == PUPPET_VALUE_STRING) {
+                        strncpy(value_buf, looked_up->data.string.data, sizeof(value_buf) - 1);
+                        value = value_buf;
+                    }
+                }
+
+                /* Append value or empty string */
+                if (value) {
+                    size_t value_len = strlen(value);
+                    if (result_pos + value_len >= result_size - 1) {
+                        result_size = result_size * 2 + value_len;
+                        result = puppet_realloc(result, result_size);
+                    }
+                    strcpy(result + result_pos, value);
+                    result_pos += value_len;
+                }
+
+                puppet_free(var_name);
+                p = end + 1;
+                continue;
+            }
+        }
+
+        /* Copy regular character */
+        if (result_pos >= result_size - 1) {
+            result_size *= 2;
+            result = puppet_realloc(result, result_size);
+        }
+        result[result_pos++] = *p++;
+    }
+
+    result[result_pos] = '\0';
+    return result;
 }
 
 /**
@@ -392,12 +531,34 @@ puppet_value_t *puppet_hiera_lookup(
         return cached;
     }
 
+    /* Extract module_name from key (e.g., "tomee::wslist" -> "tomee") */
+    char module_name[256] = {0};
+    const char *sep = strstr(key, "::");
+    if (sep) {
+        size_t len = sep - key;
+        if (len < sizeof(module_name)) {
+            memcpy(module_name, key, len);
+            module_name[len] = '\0';
+        }
+    }
+
+    /* Add module_name to context variables for interpolation */
+    if (module_name[0] && context->variables) {
+        puppet_hash_set(context->variables->data.hash, "module_name", 11,
+            puppet_value_create_string(module_name, strlen(module_name)));
+    }
+
     puppet_value_t *result = NULL;
 
     // Iterate through hierarchy levels
     for (puppet_hiera_level_t *level = context->config->hierarchy; level; level = level->next) {
+        /* Interpolate the path template to expand variables */
+        char *interpolated_path = puppet_hiera_interpolate(level->path_template, context);
+        if (!interpolated_path) continue;
+
         char fullpath[1024];
-        snprintf(fullpath, sizeof(fullpath), "%s/%s", level->datadir, level->path_template);
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", level->datadir, interpolated_path);
+        puppet_free(interpolated_path);
 
         struct stat st;
         if (stat(fullpath, &st) != 0 || !S_ISREG(st.st_mode)) {
