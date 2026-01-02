@@ -3918,14 +3918,32 @@ puppet_value_t *puppet_func_versioncmp(puppet_expr_list_t *args, puppet_env_t *e
         return puppet_value_create_number(0);
     }
 
-    if (a_val->type != PUPPET_VALUE_STRING || b_val->type != PUPPET_VALUE_STRING) {
+    /* Convert numbers to strings for version comparison */
+    char a_buf[64] = {0}, b_buf[64] = {0};
+    const char *a_str = NULL, *b_str = NULL;
+
+    if (a_val->type == PUPPET_VALUE_STRING) {
+        a_str = a_val->data.string.data;
+    } else if (a_val->type == PUPPET_VALUE_NUMBER) {
+        snprintf(a_buf, sizeof(a_buf), "%g", a_val->data.number);
+        a_str = a_buf;
+    }
+
+    if (b_val->type == PUPPET_VALUE_STRING) {
+        b_str = b_val->data.string.data;
+    } else if (b_val->type == PUPPET_VALUE_NUMBER) {
+        snprintf(b_buf, sizeof(b_buf), "%g", b_val->data.number);
+        b_str = b_buf;
+    }
+
+    if (!a_str || !b_str) {
         if (a_val) puppet_value_destroy(a_val);
         if (b_val) puppet_value_destroy(b_val);
         puppet_log(PUPPET_LOG_ERROR, "versioncmp() arguments must be strings");
         return puppet_value_create_undef();
     }
 
-    int result = version_segment_cmp(a_val->data.string.data, b_val->data.string.data);
+    int result = version_segment_cmp(a_str, b_str);
 
     puppet_value_destroy(a_val);
     puppet_value_destroy(b_val);
