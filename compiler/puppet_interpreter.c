@@ -1734,6 +1734,14 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         puppet_hash_set(env->class_resource_decls, class_name, strlen(class_name),
                                         puppet_value_create_bool(true));
 
+                        // Check if class was already executed via include
+                        // In Puppet, class {} after include is allowed but doesn't re-execute
+                        if (puppet_hash_get(env->class_scopes, class_name, strlen(class_name))) {
+                            puppet_debug("Class %s already included, skipping re-execution", class_name);
+                            puppet_value_destroy(title_val);
+                            continue;
+                        }
+
                         // Find the class definition
                         puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
                         if (!class_def && env->loader) {
