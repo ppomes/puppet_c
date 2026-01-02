@@ -4,6 +4,10 @@ A C implementation of a Puppet language parser and interpreter using tree-sitter
 
 **Note**: This is an experimental project. It implements a subset of the Puppet language and is not a replacement for the real Puppet.
 
+## Related Projects
+
+This project is inspired by [language-puppet](https://github.com/bartavelle/language-puppet), a Haskell implementation of the Puppet language. Both projects aim to provide fast, alternative implementations for validating and compiling Puppet manifests outside of the Ruby-based Puppet toolchain.
+
 ## Building
 
 Prerequisites:
