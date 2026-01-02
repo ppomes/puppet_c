@@ -970,6 +970,71 @@ static puppet_stmt_t *convert_class_def(TSNode node, const char *source) {
     return stmt;
 }
 
+/* Convert define definition */
+static puppet_stmt_t *convert_define_def(TSNode node, const char *source) {
+    puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
+    stmt->type = PUPPET_STMT_DEFINE;
+    stmt->loc = node_location(node);
+
+    uint32_t count = ts_node_named_child_count(node);
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(node, i);
+        const char *type = ts_node_type(child);
+
+        if (strcmp(type, "classname") == 0) {
+            TSNode name = find_child(child, "name");
+            if (!ts_node_is_null(name)) {
+                char *name_str = node_text(name, source);
+                stmt->data.define.name = puppet_string_create(name_str);
+                puppet_free(name_str);
+            }
+        } else if (strcmp(type, "block") == 0) {
+            stmt->data.define.body = convert_block(child, source);
+        } else if (strcmp(type, "parameter_list") == 0) {
+            /* Parse define parameters */
+            uint32_t param_count = ts_node_named_child_count(child);
+            stmt->data.define.params.params = puppet_calloc(param_count, sizeof(puppet_param_t));
+            stmt->data.define.params.count = 0;
+
+            for (uint32_t j = 0; j < param_count; j++) {
+                TSNode param = ts_node_named_child(child, j);
+                if (!node_is(param, "parameter")) continue;
+
+                /* parameter -> regular_parameter -> variable -> name */
+                TSNode reg_param = find_child(param, "regular_parameter");
+                if (ts_node_is_null(reg_param)) reg_param = param;
+
+                TSNode var_node = find_child(reg_param, "variable");
+                if (ts_node_is_null(var_node)) continue;
+
+                TSNode name_node = find_child(var_node, "name");
+                if (ts_node_is_null(name_node)) continue;
+
+                /* Get parameter name */
+                char *name_str = node_text(name_node, source);
+                puppet_param_t *p = &stmt->data.define.params.params[stmt->data.define.params.count];
+                p->name = puppet_string_create(name_str);
+                puppet_free(name_str);
+
+                /* Check for default value */
+                uint32_t reg_param_children = ts_node_named_child_count(reg_param);
+                for (uint32_t k = 0; k < reg_param_children; k++) {
+                    TSNode child_node = ts_node_named_child(reg_param, k);
+                    if (!node_is(child_node, "variable")) {
+                        /* This is the default value expression */
+                        p->default_value = convert_expression(child_node, source);
+                        break;
+                    }
+                }
+
+                stmt->data.define.params.count++;
+            }
+        }
+    }
+
+    return stmt;
+}
+
 /* Convert include/require/contain statement */
 static puppet_stmt_t *convert_include(TSNode node, const char *source, puppet_stmt_type_t stmt_type) {
     puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
@@ -1122,6 +1187,8 @@ static puppet_stmt_t *convert_statement(TSNode node, const char *source) {
     /* Specific statement types first (before generic assignment check) */
     if (strcmp(type, "class_definition") == 0)
         return convert_class_def(node, source);
+    if (strcmp(type, "define_definition") == 0)
+        return convert_define_def(node, source);
     if (strcmp(type, "resource_type") == 0)
         return convert_resource(node, source);
     if (strcmp(type, "if") == 0)

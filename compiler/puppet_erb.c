@@ -300,11 +300,13 @@ static void puppet_export_env_to_ruby(puppet_env_t *env, puppet_ruby_context_t *
     // Export all variables from current scope chain
     puppet_scope_t *scope = env->current_scope;
     while (scope) {
-        for (size_t i = 0; i < scope->variables->bucket_count; i++) {
-            puppet_hash_entry_t *entry = scope->variables->buckets[i];
-            while (entry) {
-                puppet_set_ruby_variable(entry->key.data, entry->value, ruby_ctx);
-                entry = entry->next;
+        if (scope->variables) {
+            for (size_t i = 0; i < scope->variables->bucket_count; i++) {
+                puppet_hash_entry_t *entry = scope->variables->buckets[i];
+                while (entry) {
+                    puppet_set_ruby_variable(entry->key.data, entry->value, ruby_ctx);
+                    entry = entry->next;
+                }
             }
         }
         scope = scope->parent;

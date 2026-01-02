@@ -168,8 +168,44 @@ puppet_stmt_t *puppet_loader_load_class(puppet_loader_t *loader,
     loader->loaded_classes.class_names[loader->loaded_classes.count] = puppet_strdup(class_name);
     loader->loaded_classes.class_defs[loader->loaded_classes.count] = class_def;
     loader->loaded_classes.count++;
-    
+
     return class_def;
+}
+
+puppet_stmt_t *puppet_loader_load_define(puppet_loader_t *loader,
+                                         const char *define_name) {
+    if (!loader || !define_name) return NULL;
+
+    /* Resolve the define path (same as class path) */
+    char path_buffer[1024];
+    if (!puppet_loader_resolve_class_path(loader, define_name, path_buffer, sizeof(path_buffer))) {
+        /* Not found - this is normal for built-in types, don't log error */
+        return NULL;
+    }
+
+    /* Load and parse the manifest */
+    puppet_program_t *program = puppet_loader_load_manifest(loader, path_buffer);
+    if (!program) {
+        return NULL;
+    }
+
+    /* Find the define statement in the parsed program */
+    puppet_stmt_t *define_stmt = NULL;
+    for (size_t i = 0; i < program->statements.count; i++) {
+        puppet_stmt_t *stmt = program->statements.stmts[i];
+        if (stmt && stmt->type == PUPPET_STMT_DEFINE) {
+            define_stmt = stmt;
+            break;
+        }
+    }
+
+    if (!define_stmt) {
+        /* No define found - maybe it's a class file, not an error */
+        puppet_program_destroy(program);
+        return NULL;
+    }
+
+    return define_stmt;
 }
 
 puppet_program_t *puppet_loader_load_manifest(puppet_loader_t *loader,

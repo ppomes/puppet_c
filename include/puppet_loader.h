@@ -84,6 +84,19 @@ puppet_stmt_t *puppet_loader_load_class(puppet_loader_t *loader,
                                         const char *class_name);
 
 /**
+ * @brief Load a defined type by name
+ *
+ * Loads and parses a defined type from the module system.
+ * Uses the same path resolution as classes (module::name → module/manifests/name.pp)
+ *
+ * @param loader Module loader context
+ * @param define_name Name of the defined type to load
+ * @return Parsed define statement or NULL on error
+ */
+puppet_stmt_t *puppet_loader_load_define(puppet_loader_t *loader,
+                                         const char *define_name);
+
+/**
  * @brief Load and parse a manifest file
  * @param loader Module loader context
  * @param file_path Path to the manifest file

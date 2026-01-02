@@ -133,6 +133,9 @@ typedef struct puppet_env {
     size_t class_def_count;                   /**< Number of registered class definitions */
     size_t class_def_capacity;                /**< Class definition array capacity */
 
+    /* Defined type registry */
+    puppet_hash_t *define_types;              /**< define_name → stmt mapping */
+
     /* Node definition registry (for facts_db iteration mode) */
     puppet_stmt_t **node_definitions;         /**< Array of node definition statements */
     size_t node_def_count;                    /**< Number of registered node definitions */

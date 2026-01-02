@@ -266,6 +266,11 @@ puppet_env_t *puppet_env_create(void) {
     env->virtual_resources->bucket_count = 64;
     env->virtual_resources->buckets = puppet_calloc(env->virtual_resources->bucket_count, sizeof(puppet_hash_entry_t*));
 
+    /* Initialize defined types registry */
+    env->define_types = puppet_calloc(1, sizeof(puppet_hash_t));
+    env->define_types->bucket_count = 64;
+    env->define_types->buckets = puppet_calloc(env->define_types->bucket_count, sizeof(puppet_hash_entry_t*));
+
     /* Initialize template output */
     env->template_output_target = NULL;
     env->template_output_found = false;
@@ -381,6 +386,22 @@ void puppet_env_destroy(puppet_env_t *env) {
         }
         puppet_free(env->virtual_resources->buckets);
         puppet_free(env->virtual_resources);
+    }
+
+    /* Clean up defined types hash */
+    if (env->define_types) {
+        for (size_t i = 0; i < env->define_types->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->define_types->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                /* Note: value points to AST stmt, don't free it here */
+                puppet_free(entry);
+                entry = next;
+            }
+        }
+        puppet_free(env->define_types->buckets);
+        puppet_free(env->define_types);
     }
 
     puppet_free(env->scope_stack);
@@ -1517,7 +1538,20 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
         case PUPPET_STMT_CLASS_DEF:
             puppet_exec_class_def(stmt, env);
             break;
-            
+
+        case PUPPET_STMT_DEFINE:
+            /* Register the defined type for later instantiation */
+            if (stmt->data.define.name.data) {
+                puppet_debug("Registering defined type: %s", stmt->data.define.name.data);
+                /* Store pointer to statement (don't copy - AST owns it) */
+                puppet_value_t *stmt_ptr = puppet_calloc(1, sizeof(puppet_value_t));
+                stmt_ptr->type = PUPPET_VALUE_UNDEF;
+                stmt_ptr->data.string.data = (char*)stmt;
+                puppet_hash_set(env->define_types, stmt->data.define.name.data,
+                               strlen(stmt->data.define.name.data), stmt_ptr);
+            }
+            break;
+
         case PUPPET_STMT_CLASS_INSTANCE:
             puppet_exec_class_instance(stmt, env);
             break;
@@ -1737,6 +1771,132 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                     }
                 }
                 break;  /* Virtual resources are not applied now */
+            }
+
+            /* Check if this is a defined type - execute its body if so */
+            {
+                puppet_value_t *define_ptr = puppet_hash_get(env->define_types,
+                    stmt->data.resource.type.data, strlen(stmt->data.resource.type.data));
+
+                /* Try to autoload the define if not already registered */
+                if (!define_ptr && env->loader && strchr(stmt->data.resource.type.data, ':')) {
+                    puppet_stmt_t *loaded_def = puppet_loader_load_define(env->loader,
+                        stmt->data.resource.type.data);
+                    if (loaded_def) {
+                        /* Register the loaded define */
+                        puppet_debug("Autoloaded defined type: %s", stmt->data.resource.type.data);
+                        puppet_value_t *stmt_ptr = puppet_calloc(1, sizeof(puppet_value_t));
+                        stmt_ptr->type = PUPPET_VALUE_UNDEF;
+                        stmt_ptr->data.string.data = (char*)loaded_def;
+                        puppet_hash_set(env->define_types, stmt->data.resource.type.data,
+                                       strlen(stmt->data.resource.type.data), stmt_ptr);
+                        define_ptr = stmt_ptr;
+                    }
+                }
+
+                if (define_ptr) {
+                    puppet_stmt_t *define_stmt = (puppet_stmt_t *)define_ptr->data.string.data;
+
+                    /* Execute each instance of this defined type */
+                    for (size_t i = 0; i < stmt->data.resource.instance_count; i++) {
+                        puppet_resource_instance_t *instance = &stmt->data.resource.instances[i];
+                        if (!instance->title) continue;
+
+                        puppet_value_t *title_val = puppet_eval_expr(instance->title, env);
+                        const char *title_str = puppet_value_to_string(title_val);
+
+                        /* Check for duplicate */
+                        size_t res_id_len = strlen(stmt->data.resource.type.data) + strlen(title_str) + 3;
+                        char *resource_id = puppet_malloc(res_id_len);
+                        snprintf(resource_id, res_id_len, "%s[%s]", stmt->data.resource.type.data, title_str);
+
+                        puppet_value_t *existing = puppet_hash_get(env->resource_catalog,
+                                                                   resource_id, strlen(resource_id));
+                        if (existing) {
+                            fprintf(stderr, "Error: Duplicate declaration - %s is already declared\n", resource_id);
+                            puppet_free(resource_id);
+                            puppet_value_destroy(title_val);
+                            continue;
+                        }
+
+                        puppet_value_t *marker = puppet_value_create_bool(true);
+                        puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);
+
+                        puppet_debug("Executing defined type %s with title: %s",
+                                    stmt->data.resource.type.data, title_str);
+
+                        /* Create new scope for the define execution */
+                        puppet_scope_t *define_scope = puppet_scope_create(env->current_scope,
+                                                                          stmt->data.resource.type.data);
+                        puppet_scope_push(env, define_scope);
+
+                        /* Bind $name and $title to the title */
+                        puppet_value_t *name_val = puppet_value_create_string(title_str, strlen(title_str));
+                        puppet_scope_set_var(define_scope, "name", name_val);
+                        puppet_scope_set_var(define_scope, "title", puppet_value_copy(name_val));
+
+                        /* Bind define parameters with defaults */
+                        for (size_t p = 0; p < define_stmt->data.define.params.count; p++) {
+                            const char *param_name = define_stmt->data.define.params.params[p].name.data;
+                            puppet_value_t *param_value = NULL;
+
+                            /* Look for matching attribute in resource instance */
+                            for (size_t a = 0; a < instance->attr_count; a++) {
+                                if (instance->attributes[a].name.data &&
+                                    strcmp(instance->attributes[a].name.data, param_name) == 0) {
+                                    param_value = puppet_eval_expr(instance->attributes[a].value, env);
+                                    break;
+                                }
+                            }
+
+                            /* Use default value if not provided */
+                            if (!param_value && define_stmt->data.define.params.params[p].default_value) {
+                                param_value = puppet_eval_expr(
+                                    define_stmt->data.define.params.params[p].default_value, env);
+                            }
+
+                            if (param_value) {
+                                puppet_scope_set_var(define_scope, param_name, param_value);
+                            }
+                        }
+
+                        /* Execute the define body */
+                        puppet_exec_stmt_list(&define_stmt->data.define.body, env);
+
+                        /* Add the define instance to catalog */
+                        if (env->build_catalog && env->catalog) {
+                            /* Collect parameters for catalog */
+                            puppet_catalog_param_t *params = NULL;
+                            size_t param_count = instance->attr_count;
+                            if (param_count > 0) {
+                                params = puppet_calloc(param_count, sizeof(puppet_catalog_param_t));
+                            }
+                            size_t param_idx = 0;
+                            for (size_t j = 0; j < instance->attr_count; j++) {
+                                if (instance->attributes[j].name.data) {
+                                    puppet_value_t *attr_val = puppet_eval_expr(instance->attributes[j].value, env);
+                                    params[param_idx].name = puppet_strdup(instance->attributes[j].name.data);
+                                    params[param_idx].value = puppet_value_copy(attr_val);
+                                    param_idx++;
+                                    puppet_value_destroy(attr_val);
+                                }
+                            }
+                            puppet_catalog_add_resource(env->catalog,
+                                                        stmt->data.resource.type.data,
+                                                        title_str,
+                                                        params,
+                                                        param_idx);
+                        }
+
+                        /* Pop the define scope */
+                        puppet_scope_t *popped = puppet_scope_pop(env);
+                        puppet_scope_destroy(popped);
+
+                        puppet_free(resource_id);
+                        puppet_value_destroy(title_val);
+                    }
+                    break;  /* Defined type handled */
+                }
             }
 
             // Normal resource execution
