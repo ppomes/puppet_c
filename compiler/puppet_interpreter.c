@@ -1321,7 +1321,11 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
             break;
 
         case PUPPET_OP_IN:
-            /* Check if left is in right (array or string) */
+            /* Check if left is in right (array, hash, or string) */
+            if (!right || right->type == PUPPET_VALUE_UNDEF) {
+                /* If right side is undef, 'in' always returns false */
+                return puppet_value_create_bool(false);
+            }
             if (right->type == PUPPET_VALUE_ARRAY) {
                 for (size_t i = 0; i < right->data.array->count; i++) {
                     puppet_value_t *elem = right->data.array->items[i];
@@ -1337,6 +1341,12 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
                     }
                 }
                 return puppet_value_create_bool(false);
+            }
+            if (right->type == PUPPET_VALUE_HASH && left->type == PUPPET_VALUE_STRING) {
+                /* Hash key membership: check if left is a key in the hash */
+                puppet_value_t *val = puppet_hash_get(right->data.hash,
+                    left->data.string.data, left->data.string.len);
+                return puppet_value_create_bool(val != NULL);
             }
             if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_STRING) {
                 return puppet_value_create_bool(

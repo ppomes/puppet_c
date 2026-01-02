@@ -1141,7 +1141,24 @@ static puppet_stmt_t *convert_if(TSNode node, const char *source) {
         } else if (strcmp(type, "block") == 0 && branch->body.stmts == NULL) {
             branch->body = convert_block(child, source);
         } else if (strcmp(type, "elsif") == 0) {
-            /* TODO: handle elsif branches */
+            /* Handle elsif branches - create new branch and chain to previous */
+            puppet_if_branch_t *elsif_branch = puppet_calloc(1, sizeof(puppet_if_branch_t));
+            branch->next = elsif_branch;
+            branch = elsif_branch;
+
+            /* Extract condition and block from elsif */
+            TSNode elsif_cond = find_child(child, "condition");
+            TSNode elsif_block = find_child(child, "block");
+
+            if (!ts_node_is_null(elsif_cond)) {
+                uint32_t cond_count = ts_node_named_child_count(elsif_cond);
+                if (cond_count > 0) {
+                    branch->condition = convert_expression(ts_node_named_child(elsif_cond, 0), source);
+                }
+            }
+            if (!ts_node_is_null(elsif_block)) {
+                branch->body = convert_block(elsif_block, source);
+            }
         } else if (strcmp(type, "else") == 0) {
             TSNode else_block = find_child(child, "block");
             if (!ts_node_is_null(else_block)) {
