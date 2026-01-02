@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <time.h>
 #include <ctype.h>
 #include <math.h>
@@ -23,36 +24,93 @@
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
 
-// Logging levels
-typedef enum {
-    PUPPET_LOG_DEBUG,
-    PUPPET_LOG_INFO,
-    PUPPET_LOG_NOTICE,
-    PUPPET_LOG_WARNING,
-    PUPPET_LOG_ERROR,
-    PUPPET_LOG_CRITICAL
-} puppet_log_level_t;
+// Note: puppet_log_level_t is now defined in puppet_stdlib.h
 
-// Format log message with timestamp and level
-static void puppet_log(puppet_log_level_t level, const char *message) {
-    const char *level_str;
+// Get log level string
+static const char *puppet_log_level_str(puppet_log_level_t level) {
     switch (level) {
-        case PUPPET_LOG_DEBUG:    level_str = "Debug"; break;
-        case PUPPET_LOG_INFO:     level_str = "Info"; break;
-        case PUPPET_LOG_NOTICE:   level_str = "Notice"; break;
-        case PUPPET_LOG_WARNING:  level_str = "Warning"; break;
-        case PUPPET_LOG_ERROR:    level_str = "Error"; break;
-        case PUPPET_LOG_CRITICAL: level_str = "Critical"; break;
-        default:                  level_str = "Unknown"; break;
+        case PUPPET_LOG_DEBUG:    return "Debug";
+        case PUPPET_LOG_INFO:     return "Info";
+        case PUPPET_LOG_NOTICE:   return "Notice";
+        case PUPPET_LOG_WARNING:  return "Warning";
+        case PUPPET_LOG_ERROR:    return "Error";
+        case PUPPET_LOG_CRITICAL: return "Critical";
+        default:                  return "Unknown";
     }
-    
+}
+
+// Format log message with timestamp and level (internal, no location)
+static void puppet_log(puppet_log_level_t level, const char *message) {
     time_t now;
     time(&now);
     struct tm *tm_info = localtime(&now);
     char time_buffer[26];
     strftime(time_buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
-    
-    fprintf(stderr, "[%s] %s: %s\n", time_buffer, level_str, message);
+
+    fprintf(stderr, "[%s] %s: %s\n", time_buffer, puppet_log_level_str(level), message);
+}
+
+// Log with source location (public API)
+void puppet_log_loc(puppet_log_level_t level, puppet_location_t loc, const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+
+    char message[2048];
+    vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+
+    time_t now;
+    time(&now);
+    struct tm *tm_info = localtime(&now);
+    char time_buffer[26];
+    strftime(time_buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
+
+    if (loc.filename && loc.line > 0) {
+        fprintf(stderr, "[%s] %s: %s at %s:%d\n",
+                time_buffer, puppet_log_level_str(level), message, loc.filename, loc.line);
+    } else if (loc.line > 0) {
+        fprintf(stderr, "[%s] %s: %s at line %d\n",
+                time_buffer, puppet_log_level_str(level), message, loc.line);
+    } else {
+        fprintf(stderr, "[%s] %s: %s\n",
+                time_buffer, puppet_log_level_str(level), message);
+    }
+}
+
+// Convenience: log error with location
+void puppet_error_at(puppet_location_t loc, const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+
+    char message[2048];
+    vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+
+    if (loc.filename && loc.line > 0) {
+        fprintf(stderr, "[ERROR] %s:%d: %s\n", loc.filename, loc.line, message);
+    } else if (loc.line > 0) {
+        fprintf(stderr, "[ERROR] line %d: %s\n", loc.line, message);
+    } else {
+        fprintf(stderr, "[ERROR] %s\n", message);
+    }
+}
+
+// Convenience: log warning with location
+void puppet_warning_at(puppet_location_t loc, const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+
+    char message[2048];
+    vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+
+    if (loc.filename && loc.line > 0) {
+        fprintf(stderr, "[WARNING] %s:%d: %s\n", loc.filename, loc.line, message);
+    } else if (loc.line > 0) {
+        fprintf(stderr, "[WARNING] line %d: %s\n", loc.line, message);
+    } else {
+        fprintf(stderr, "[WARNING] %s\n", message);
+    }
 }
 
 // Check if a value is truthy (false and undef are falsy, everything else is truthy)

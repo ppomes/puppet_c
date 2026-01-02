@@ -559,7 +559,7 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             }
             
         case PUPPET_EXPR_VARIABLE:
-            return puppet_eval_variable(expr->data.variable.data, env);
+            return puppet_eval_variable(expr->data.variable.data, expr->loc, env);
             
         case PUPPET_EXPR_BINOP: {
             puppet_value_t *left = puppet_eval_expr(expr->data.binop.left, env);
@@ -877,7 +877,7 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             }
 
             else {
-                puppet_error("Unknown function: %s", func_name);
+                puppet_error_at(expr->loc, "Unknown function: %s", func_name);
                 return puppet_value_create_undef();
             }
         }
@@ -1113,12 +1113,12 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
     }
 }
 
-puppet_value_t *puppet_eval_variable(const char *name, puppet_env_t *env) {
+puppet_value_t *puppet_eval_variable(const char *name, puppet_location_t loc, puppet_env_t *env) {
     // Use enhanced lookup chain instead of simple scope lookup
     puppet_value_t *value = puppet_variable_lookup_chain(env, name);
 
     if (!value) {
-        puppet_warn("Undefined variable: %s", name);
+        puppet_warning_at(loc, "Undefined variable: %s", name);
         return puppet_value_create_undef();
     }
 
@@ -1724,7 +1724,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         // Check if this class was already declared with class { } syntax
                         // (resource-style declarations are NOT idempotent, but include is)
                         if (puppet_hash_get(env->class_resource_decls, class_name, strlen(class_name))) {
-                            fprintf(stderr, "Error: Duplicate declaration - class[%s] is already declared\n", class_name);
+                            puppet_error_at(stmt->loc, "Duplicate declaration - class[%s] is already declared", class_name);
                             fprintf(stderr, "       Use 'include' for idempotent class inclusion\n");
                             puppet_value_destroy(title_val);
                             continue;
@@ -1749,7 +1749,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         }
 
                         if (!class_def) {
-                            puppet_error("Class '%s' not found", class_name);
+                            puppet_error_at(stmt->loc, "Class '%s' not found", class_name);
                             puppet_value_destroy(title_val);
                             continue;
                         }
@@ -1964,7 +1964,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         puppet_value_t *existing = puppet_hash_get(env->resource_catalog,
                                                                    resource_id, strlen(resource_id));
                         if (existing) {
-                            fprintf(stderr, "Error: Duplicate declaration - %s is already declared\n", resource_id);
+                            puppet_error_at(stmt->loc, "Duplicate declaration - %s is already declared", resource_id);
                             puppet_free(resource_id);
                             puppet_value_destroy(title_val);
                             continue;
@@ -2085,7 +2085,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         puppet_value_t *existing = puppet_hash_get(env->resource_catalog,
                                                                    resource_id, strlen(resource_id));
                         if (existing) {
-                            fprintf(stderr, "Error: Duplicate declaration - %s is already declared\n", resource_id);
+                            puppet_error_at(stmt->loc, "Duplicate declaration - %s is already declared", resource_id);
                             fprintf(stderr, "       Resource titles must be unique within their type\n");
                             puppet_free(resource_id);
                             continue;  // Skip this duplicate resource
@@ -2545,10 +2545,10 @@ void puppet_exec_include(puppet_stmt_t *include_stmt, puppet_env_t *env) {
             /* If not found, try to load from module files using the loader */
             if (env->loader) {
                 if (!puppet_loader_include_class(env->loader, class_name, env)) {
-                    puppet_warn("Failed to include class '%s'", class_name);
+                    puppet_warning_at(name_expr->loc, "Failed to include class '%s'", class_name);
                 }
             } else {
-                puppet_error("Class '%s' not found", class_name);
+                puppet_error_at(name_expr->loc, "Class '%s' not found", class_name);
             }
         }
     }
@@ -2582,10 +2582,10 @@ void puppet_exec_require(puppet_stmt_t *require_stmt, puppet_env_t *env) {
             /* If not found, try to load from module files using the loader */
             if (env->loader) {
                 if (!puppet_loader_include_class(env->loader, class_name, env)) {
-                    puppet_warn("Failed to require class '%s'", class_name);
+                    puppet_warning_at(name_expr->loc, "Failed to require class '%s'", class_name);
                 }
             } else {
-                puppet_error("Class '%s' not found", class_name);
+                puppet_error_at(name_expr->loc, "Class '%s' not found", class_name);
             }
         }
     }
@@ -2620,10 +2620,10 @@ void puppet_exec_contain(puppet_stmt_t *contain_stmt, puppet_env_t *env) {
             /* If not found, try to load from module files using the loader */
             if (env->loader) {
                 if (!puppet_loader_include_class(env->loader, class_name, env)) {
-                    puppet_warn("Failed to contain class '%s'", class_name);
+                    puppet_warning_at(name_expr->loc, "Failed to contain class '%s'", class_name);
                 }
             } else {
-                puppet_error("Class '%s' not found", class_name);
+                puppet_error_at(name_expr->loc, "Class '%s' not found", class_name);
             }
         }
     }
@@ -2972,10 +2972,10 @@ void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t
     }
 
     if (!class_def) {
-        puppet_error("Class '%s' not found", class_name);
+        puppet_error_at(class_instance_stmt->loc, "Class '%s' not found", class_name);
         return;
     }
-    
+
     // Create a new scope for the class instance
     puppet_scope_t *class_scope = puppet_scope_create(env->current_scope, class_name);
     puppet_scope_push(env, class_scope);

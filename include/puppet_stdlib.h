@@ -4,6 +4,52 @@
 #include "puppet_ast.h"
 #include "puppet_interpreter.h"
 
+/*
+ * ===========================================================================
+ * LOGGING WITH SOURCE LOCATION
+ * ===========================================================================
+ */
+
+/**
+ * @brief Log levels for puppet_log functions
+ */
+typedef enum {
+    PUPPET_LOG_DEBUG,
+    PUPPET_LOG_INFO,
+    PUPPET_LOG_NOTICE,
+    PUPPET_LOG_WARNING,
+    PUPPET_LOG_ERROR,
+    PUPPET_LOG_CRITICAL
+} puppet_log_level_t;
+
+/**
+ * @brief Log a message with source location information
+ * @param level Log level
+ * @param loc Source location (may have NULL filename)
+ * @param format Printf-style format string
+ * @param ... Format arguments
+ */
+void puppet_log_loc(puppet_log_level_t level, puppet_location_t loc, const char *format, ...)
+    __attribute__((format(printf, 3, 4)));
+
+/**
+ * @brief Log an error with source location
+ * @param loc Source location
+ * @param format Printf-style format string
+ * @param ... Format arguments
+ */
+void puppet_error_at(puppet_location_t loc, const char *format, ...)
+    __attribute__((format(printf, 2, 3)));
+
+/**
+ * @brief Log a warning with source location
+ * @param loc Source location
+ * @param format Printf-style format string
+ * @param ... Format arguments
+ */
+void puppet_warning_at(puppet_location_t loc, const char *format, ...)
+    __attribute__((format(printf, 2, 3)));
+
 // Core functions
 puppet_value_t *puppet_func_fail(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_notice(puppet_expr_list_t *args, puppet_env_t *env);

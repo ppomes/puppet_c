@@ -268,7 +268,7 @@ const char *puppet_facts_db_get_node_name(puppet_facts_db_t *facts_db, size_t in
 
 /* Expression evaluation */
 puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env);
-puppet_value_t *puppet_eval_variable(const char *name, puppet_env_t *env);
+puppet_value_t *puppet_eval_variable(const char *name, puppet_location_t loc, puppet_env_t *env);
 puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppet_value_t *right);
 puppet_value_t *puppet_eval_unop(puppet_unop_t op, puppet_value_t *operand);
 
