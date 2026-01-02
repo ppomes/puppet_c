@@ -48,14 +48,18 @@ static void print_usage(const char *program_name) {
     printf("  -f, --facts       Load facts from JSON file (facter or PuppetDB format)\n");
     printf("  -t, --template    Display template output for file resource with specified title\n");
     printf("  -D, --hiera-data  Path to Hiera data directory (default: ./data)\n");
+    printf("  -s, --summary     Print validation summary (for CI, implies -e)\n");
     printf("  -v, --verbose     Enable verbose/debug output\n");
     printf("  -h, --help        Show this help message\n");
     printf("\nWhen a directory is provided, site.pp will be loaded from manifests/\n");
     printf("and modules will be loaded from modules/ subdirectory.\n");
     printf("\nNode execution:\n");
     printf("  By default, only the 'default' node is executed.\n");
-    printf("  Use --node <name> to execute a specific node.\n");
-    printf("  Use --all-nodes to execute all defined nodes.\n");
+    printf("  Use --node <name> to execute a specific node (matches regex nodes).\n");
+    printf("  Use --all-nodes to execute all literal nodes (regex nodes are skipped).\n");
+    printf("\nCI/Validation mode:\n");
+    printf("  Use --all-nodes --summary to validate all nodes and get a summary.\n");
+    printf("  Exit code: 0 = all nodes OK, 1 = errors found\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -66,6 +70,7 @@ int main(int argc, char *argv[]) {
     int eval_mode = 0;
     int catalog_mode = 0;
     int pretty_mode = 0;
+    int summary_mode = 0;
     char *output_file = NULL;
     char *modules_path = NULL;
     char *node_name = NULL;
@@ -81,6 +86,7 @@ int main(int argc, char *argv[]) {
         {"eval", no_argument, 0, 'e'},
         {"catalog", no_argument, 0, 'c'},
         {"pretty", no_argument, 0, 'p'},
+        {"summary", no_argument, 0, 's'},
         {"output", required_argument, 0, 'o'},
         {"modules", required_argument, 0, 'm'},
         {"node", required_argument, 0, 'n'},
@@ -93,7 +99,7 @@ int main(int argc, char *argv[]) {
         {0, 0, 0, 0}
     };
 
-    while ((opt = getopt_long(argc, argv, "jecpo:m:n:af:t:D:vh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "jecpso:m:n:af:t:D:vh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'j':
                 json_output = 1;
@@ -108,6 +114,10 @@ int main(int argc, char *argv[]) {
             case 'p':
                 pretty_mode = 1;
                 eval_mode = 1;  /* Pretty implies eval */
+                break;
+            case 's':
+                summary_mode = 1;
+                eval_mode = 1;  /* Summary implies eval */
                 break;
             case 'o':
                 output_file = optarg;
@@ -424,6 +434,25 @@ int main(int argc, char *argv[]) {
                     puppet_catalog_pretty_print(catalog, out, use_color);
                     if (output_file) fclose(out);
                     puppet_catalog_destroy(catalog);
+                }
+            }
+
+            /* Print validation summary if requested */
+            if (summary_mode) {
+                size_t nodes_processed, nodes_failed, errors, warnings;
+                puppet_env_get_stats(env, &nodes_processed, &nodes_failed, &errors, &warnings);
+
+                fprintf(stderr, "\n=== Validation Summary ===\n");
+                fprintf(stderr, "Nodes processed: %zu\n", nodes_processed);
+                fprintf(stderr, "Nodes failed:    %zu\n", nodes_failed);
+                fprintf(stderr, "Total errors:    %zu\n", errors);
+                fprintf(stderr, "Total warnings:  %zu\n", warnings);
+
+                if (nodes_failed > 0 || errors > 0) {
+                    fprintf(stderr, "Status: FAILED\n");
+                    result = 1;
+                } else {
+                    fprintf(stderr, "Status: OK\n");
                 }
             }
 

@@ -223,18 +223,19 @@ puppet_value_t *puppet_func_fail(puppet_expr_list_t *args, puppet_env_t *env) {
     
     // Log as critical error
     puppet_log(PUPPET_LOG_CRITICAL, message);
-    
+
     // Set compilation failure flag in environment
     if (env) {
         env->compilation_failed = 1;
+        puppet_env_increment_error(env);
         if (env->failure_message) {
             puppet_free(env->failure_message);
         }
         env->failure_message = puppet_strdup(message);
     }
-    
+
     puppet_free(message);
-    
+
     // Return undef (compilation should stop after this)
     return puppet_value_create_undef();
 }

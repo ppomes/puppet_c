@@ -198,6 +198,15 @@ typedef struct puppet_env {
     /* Catalog building */
     puppet_catalog_t *catalog;                /**< Resource catalog (NULL if not building) */
     bool build_catalog;                       /**< Whether to build a catalog */
+
+    /* CI validation tracking */
+    size_t nodes_processed;                   /**< Number of nodes processed */
+    size_t nodes_failed;                      /**< Number of nodes with errors */
+    size_t errors_count;                      /**< Total errors encountered */
+    size_t warnings_count;                    /**< Total warnings encountered */
+    char *current_node_certname;              /**< Current node being processed (for error tracking) */
+    bool current_node_failed;                 /**< Whether current node has errors */
+    bool stop_on_error;                       /**< Stop processing on first error (fail-fast) */
 } puppet_env_t;
 
 /* Global verbose flag for use before environment is created */
@@ -297,5 +306,11 @@ void puppet_env_set_template_output(puppet_env_t *env, const char *template_targ
 /* Catalog building */
 void puppet_env_enable_catalog(puppet_env_t *env, const char *certname, const char *environment);
 puppet_catalog_t *puppet_env_get_catalog(puppet_env_t *env);
+
+/* CI validation tracking */
+void puppet_env_get_stats(puppet_env_t *env, size_t *nodes_processed, size_t *nodes_failed,
+                          size_t *errors, size_t *warnings);
+void puppet_env_increment_error(puppet_env_t *env);
+void puppet_env_increment_warning(puppet_env_t *env);
 
 #endif

@@ -295,6 +295,15 @@ puppet_env_t *puppet_env_create(void) {
     env->catalog = NULL;
     env->build_catalog = false;
 
+    /* Initialize CI validation tracking */
+    env->nodes_processed = 0;
+    env->nodes_failed = 0;
+    env->errors_count = 0;
+    env->warnings_count = 0;
+    env->current_node_certname = NULL;
+    env->current_node_failed = false;
+    env->stop_on_error = false;
+
     /* Register Hiera data provider */
     puppet_hiera_register_provider(env, "data");
 
@@ -878,6 +887,7 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
 
             else {
                 puppet_error_at(expr->loc, "Unknown function: %s", func_name);
+                puppet_env_increment_error(env);
                 return puppet_value_create_undef();
             }
         }
@@ -1726,6 +1736,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         if (puppet_hash_get(env->class_resource_decls, class_name, strlen(class_name))) {
                             puppet_error_at(stmt->loc, "Duplicate declaration - class[%s] is already declared", class_name);
                             fprintf(stderr, "       Use 'include' for idempotent class inclusion\n");
+                            puppet_env_increment_error(env);
                             puppet_value_destroy(title_val);
                             continue;
                         }
@@ -1750,6 +1761,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
 
                         if (!class_def) {
                             puppet_error_at(stmt->loc, "Class '%s' not found", class_name);
+                            puppet_env_increment_error(env);
                             puppet_value_destroy(title_val);
                             continue;
                         }
@@ -1965,6 +1977,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                                                                    resource_id, strlen(resource_id));
                         if (existing) {
                             puppet_error_at(stmt->loc, "Duplicate declaration - %s is already declared", resource_id);
+                            puppet_env_increment_error(env);
                             puppet_free(resource_id);
                             puppet_value_destroy(title_val);
                             continue;
@@ -2087,6 +2100,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         if (existing) {
                             puppet_error_at(stmt->loc, "Duplicate declaration - %s is already declared", resource_id);
                             fprintf(stderr, "       Resource titles must be unique within their type\n");
+                            puppet_env_increment_error(env);
                             puppet_free(resource_id);
                             continue;  // Skip this duplicate resource
                         }
@@ -2546,9 +2560,11 @@ void puppet_exec_include(puppet_stmt_t *include_stmt, puppet_env_t *env) {
             if (env->loader) {
                 if (!puppet_loader_include_class(env->loader, class_name, env)) {
                     puppet_warning_at(name_expr->loc, "Failed to include class '%s'", class_name);
+                    puppet_env_increment_warning(env);
                 }
             } else {
                 puppet_error_at(name_expr->loc, "Class '%s' not found", class_name);
+                puppet_env_increment_error(env);
             }
         }
     }
@@ -2583,9 +2599,11 @@ void puppet_exec_require(puppet_stmt_t *require_stmt, puppet_env_t *env) {
             if (env->loader) {
                 if (!puppet_loader_include_class(env->loader, class_name, env)) {
                     puppet_warning_at(name_expr->loc, "Failed to require class '%s'", class_name);
+                    puppet_env_increment_warning(env);
                 }
             } else {
                 puppet_error_at(name_expr->loc, "Class '%s' not found", class_name);
+                puppet_env_increment_error(env);
             }
         }
     }
@@ -2621,9 +2639,11 @@ void puppet_exec_contain(puppet_stmt_t *contain_stmt, puppet_env_t *env) {
             if (env->loader) {
                 if (!puppet_loader_include_class(env->loader, class_name, env)) {
                     puppet_warning_at(name_expr->loc, "Failed to contain class '%s'", class_name);
+                    puppet_env_increment_warning(env);
                 }
             } else {
                 puppet_error_at(name_expr->loc, "Class '%s' not found", class_name);
+                puppet_env_increment_error(env);
             }
         }
     }
@@ -2647,8 +2667,19 @@ void puppet_env_set_loader(puppet_env_t *env, puppet_loader_t *loader) {
 static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *certname, puppet_env_t *env) {
     if (!node_stmt || node_stmt->type != PUPPET_STMT_NODE || !certname) return;
 
+    /* Skip if we've already hit an error in fail-fast mode */
+    if (env->stop_on_error) {
+        return;
+    }
+
     puppet_debug("Executing node block for certname: %s", certname);
     env->node_matched = true;
+
+    /* Track node processing for CI validation */
+    env->nodes_processed++;
+    fprintf(stderr, "--- Node: %s ---\n", certname);
+    env->current_node_certname = (char*)certname;
+    env->current_node_failed = false;
 
     /* Clear state for this node (each node has its own catalog and class scope) */
     if (env->resource_catalog) {
@@ -2748,6 +2779,15 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
     /* Pop the node scope */
     puppet_scope_t *old_scope = puppet_scope_pop(env);
     puppet_scope_destroy(old_scope);
+
+    /* Track node failure for CI validation */
+    if (env->current_node_failed) {
+        env->nodes_failed++;
+        fprintf(stderr, "--- Node: %s FAILED ---\n", certname);
+        /* Stop processing on first failure */
+        env->stop_on_error = true;
+    }
+    env->current_node_certname = NULL;
 }
 
 void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
@@ -2770,18 +2810,26 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
     /* Check if we should execute this node */
     bool should_execute = false;
 
+    /* Check if node name is a regex pattern (starts and ends with /) */
+    size_t name_len = strlen(node_name);
+    bool is_regex = (name_len > 2 && node_name[0] == '/' && node_name[name_len - 1] == '/');
+
     if (env->execute_all_nodes) {
-        /* Execute all nodes when --all-nodes is specified */
-        should_execute = true;
+        /* Execute all literal nodes when --all-nodes is specified */
+        /* Skip regex nodes - they require a specific node name to match against */
+        if (is_regex) {
+            puppet_debug("Skipping regex node: %s (use --node to match)", node_name);
+            should_execute = false;
+        } else {
+            should_execute = true;
+        }
     } else if (!env->node_name) {
         /* No node specified - only execute 'default' node */
         should_execute = is_default;
     } else {
         /* Specific node requested - check for match (not default) */
         if (!is_default) {
-            size_t name_len = strlen(node_name);
-            /* Check if node name is a regex pattern (starts and ends with /) */
-            if (name_len > 2 && node_name[0] == '/' && node_name[name_len - 1] == '/') {
+            if (is_regex) {
                 /* Extract regex pattern (without the slashes) */
                 char *pattern = puppet_malloc(name_len - 1);
                 strncpy(pattern, node_name + 1, name_len - 2);
@@ -2803,9 +2851,24 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
         }
     }
 
+    /* Skip if we've already hit an error in fail-fast mode */
+    if (env->stop_on_error) {
+        return;
+    }
+
     if (should_execute) {
         puppet_debug("Executing node: %s", node_name);
         env->node_matched = true;
+
+        /* Track node processing for CI validation */
+        env->nodes_processed++;
+        env->current_node_certname = (char*)node_name;
+        env->current_node_failed = false;
+
+        /* Print node name for CI tracking */
+        if (env->execute_all_nodes) {
+            fprintf(stderr, "--- Node: %s ---\n", node_name);
+        }
 
         /* Clear state for this node when executing multiple nodes */
         if (env->execute_all_nodes) {
@@ -2908,6 +2971,17 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
         /* Pop the node scope */
         puppet_scope_t *old_scope = puppet_scope_pop(env);
         puppet_scope_destroy(old_scope);
+
+        /* Track node failure for CI validation */
+        if (env->current_node_failed) {
+            env->nodes_failed++;
+            if (env->execute_all_nodes) {
+                fprintf(stderr, "--- Node: %s FAILED ---\n", node_name);
+                /* Stop processing on first failure in all-nodes mode */
+                env->stop_on_error = true;
+            }
+        }
+        env->current_node_certname = NULL;
     } else {
         /* Skip this node */
         if (!env->execute_all_nodes && env->node_name) {
@@ -2973,6 +3047,7 @@ void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t
 
     if (!class_def) {
         puppet_error_at(class_instance_stmt->loc, "Class '%s' not found", class_name);
+        puppet_env_increment_error(env);
         return;
     }
 
@@ -4079,11 +4154,43 @@ puppet_value_t *puppet_facts_get_all_as_hash(puppet_env_t *env) {
 
 int puppet_env_set_facts_db(puppet_env_t *env, puppet_facts_db_t *facts_db) {
     if (!env) return -1;
-    
+
     if (env->facts_db) {
         puppet_facts_db_destroy(env->facts_db);
     }
-    
+
     env->facts_db = facts_db;
     return 0;
+}
+
+/*
+ * ===========================================================================
+ * CI VALIDATION TRACKING
+ * ===========================================================================
+ */
+
+void puppet_env_get_stats(puppet_env_t *env, size_t *nodes_processed, size_t *nodes_failed,
+                          size_t *errors, size_t *warnings) {
+    if (!env) {
+        if (nodes_processed) *nodes_processed = 0;
+        if (nodes_failed) *nodes_failed = 0;
+        if (errors) *errors = 0;
+        if (warnings) *warnings = 0;
+        return;
+    }
+    if (nodes_processed) *nodes_processed = env->nodes_processed;
+    if (nodes_failed) *nodes_failed = env->nodes_failed;
+    if (errors) *errors = env->errors_count;
+    if (warnings) *warnings = env->warnings_count;
+}
+
+void puppet_env_increment_error(puppet_env_t *env) {
+    if (!env) return;
+    env->errors_count++;
+    env->current_node_failed = true;
+}
+
+void puppet_env_increment_warning(puppet_env_t *env) {
+    if (!env) return;
+    env->warnings_count++;
 }
