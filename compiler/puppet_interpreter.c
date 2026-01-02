@@ -2177,11 +2177,14 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                 puppet_case_when_t *when = &stmt->data.case_stmt.whens[i];
                 puppet_value_t *test_val = puppet_eval_expr(when->test, env);
 
-                // Check for match (using equality comparison)
+                // Check for match (using equality comparison or regex match)
                 bool is_match = false;
                 if (expr_val && test_val) {
                     if (expr_val->type == test_val->type) {
                         switch (expr_val->type) {
+                            case PUPPET_VALUE_UNDEF:
+                                is_match = true;  // Both are undef
+                                break;
                             case PUPPET_VALUE_BOOL:
                                 is_match = (expr_val->data.boolean == test_val->data.boolean);
                                 break;
@@ -2189,16 +2192,25 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                                 is_match = (expr_val->data.number == test_val->data.number);
                                 break;
                             case PUPPET_VALUE_STRING:
+                                // Case-insensitive string comparison for case statements
                                 is_match = (expr_val->data.string.len == test_val->data.string.len &&
-                                           memcmp(expr_val->data.string.data, test_val->data.string.data,
+                                           strncasecmp(expr_val->data.string.data, test_val->data.string.data,
                                                   expr_val->data.string.len) == 0);
                                 break;
                             default:
                                 break;
                         }
+                    } else if (test_val->type == PUPPET_VALUE_REGEXP &&
+                               expr_val->type == PUPPET_VALUE_STRING) {
+                        // Regex match: test pattern against string value
+                        regex_t regex;
+                        int ret = regcomp(&regex, test_val->data.regexp.data, REG_EXTENDED | REG_NOSUB);
+                        if (ret == 0) {
+                            ret = regexec(&regex, expr_val->data.string.data, 0, NULL, 0);
+                            is_match = (ret == 0);
+                            regfree(&regex);
+                        }
                     }
-                    // Also check if test is 'default' keyword (represented as special value)
-                    // For now, we handle default_body separately
                 }
 
                 if (test_val) puppet_value_destroy(test_val);
@@ -3081,8 +3093,6 @@ puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name
                 value = puppet_scope_get_var(stored_scope, var_name, true);
                 puppet_free(class_name);
                 return value;
-            } else {
-                puppet_debug("Class %s not found in class_scopes", class_name);
             }
         }
 

@@ -1165,13 +1165,30 @@ static puppet_stmt_t *convert_case(TSNode node, const char *source) {
     size_t when_capacity = 8;
     stmt->data.case_stmt.whens = puppet_calloc(when_capacity, sizeof(puppet_case_when_t));
 
+    /* First pass: find the case expression (variable, possibly with access) */
+    TSNode var_child = find_child(node, "variable");
+    TSNode access_child = find_child(node, "access");
+
+    if (!ts_node_is_null(var_child)) {
+        puppet_expr_t *var_expr = convert_expression(var_child, source);
+
+        if (!ts_node_is_null(access_child)) {
+            /* Variable with bracket access: $var[key] */
+            stmt->data.case_stmt.expr = build_index_expr(var_expr, access_child, source);
+        } else {
+            stmt->data.case_stmt.expr = var_expr;
+        }
+    }
+
     for (uint32_t i = 0; i < count; i++) {
         TSNode child = ts_node_named_child(node, i);
         const char *type = ts_node_type(child);
 
-        if (strcmp(type, "condition") == 0 || strcmp(type, "variable") == 0 ||
-            strcmp(type, "binary") == 0) {
-            stmt->data.case_stmt.expr = convert_expression(child, source);
+        if (strcmp(type, "condition") == 0 || strcmp(type, "binary") == 0) {
+            /* Only handle these if we didn't already set expr */
+            if (!stmt->data.case_stmt.expr) {
+                stmt->data.case_stmt.expr = convert_expression(child, source);
+            }
         } else if (strcmp(type, "case_entry") == 0 || strcmp(type, "case_option") == 0) {
             /* Each case_entry/case_option has match values and a block */
             TSNode block = find_child(child, "block");
