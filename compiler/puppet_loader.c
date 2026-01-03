@@ -35,13 +35,25 @@ puppet_loader_t *puppet_loader_create(const char *base_path) {
     loader->loaded_classes.class_names = puppet_calloc(loader->loaded_classes.capacity, sizeof(char*));
     loader->loaded_classes.class_defs = puppet_calloc(loader->loaded_classes.capacity, sizeof(puppet_stmt_t*));
     loader->loaded_classes.count = 0;
-    
+
+    /* Initialize custom function cache */
+    loader->custom_functions.capacity = 32;
+    loader->custom_functions.func_names = puppet_calloc(loader->custom_functions.capacity, sizeof(char*));
+    loader->custom_functions.func_exists = puppet_calloc(loader->custom_functions.capacity, sizeof(bool));
+    loader->custom_functions.count = 0;
+
+    /* Initialize parsed manifest cache */
+    loader->parsed_manifests.capacity = 64;
+    loader->parsed_manifests.file_paths = puppet_calloc(loader->parsed_manifests.capacity, sizeof(char*));
+    loader->parsed_manifests.programs = puppet_calloc(loader->parsed_manifests.capacity, sizeof(puppet_program_t*));
+    loader->parsed_manifests.count = 0;
+
     return loader;
 }
 
 void puppet_loader_destroy(puppet_loader_t *loader) {
     if (!loader) return;
-    
+
     /* Clean up loaded classes cache */
     for (size_t i = 0; i < loader->loaded_classes.count; i++) {
         puppet_free(loader->loaded_classes.class_names[i]);
@@ -49,7 +61,24 @@ void puppet_loader_destroy(puppet_loader_t *loader) {
     }
     puppet_free(loader->loaded_classes.class_names);
     puppet_free(loader->loaded_classes.class_defs);
-    
+
+    /* Clean up custom function cache */
+    for (size_t i = 0; i < loader->custom_functions.count; i++) {
+        puppet_free(loader->custom_functions.func_names[i]);
+    }
+    puppet_free(loader->custom_functions.func_names);
+    puppet_free(loader->custom_functions.func_exists);
+
+    /* Clean up parsed manifest cache */
+    for (size_t i = 0; i < loader->parsed_manifests.count; i++) {
+        puppet_free(loader->parsed_manifests.file_paths[i]);
+        /* Note: programs are owned by the cache, but we don't destroy them
+         * because class_defs point into them. This is a memory trade-off
+         * for performance. */
+    }
+    puppet_free(loader->parsed_manifests.file_paths);
+    puppet_free(loader->parsed_manifests.programs);
+
     puppet_free(loader->base_path);
     puppet_free(loader->modules_path);
     puppet_free(loader->manifests_path);
@@ -211,8 +240,16 @@ puppet_stmt_t *puppet_loader_load_define(puppet_loader_t *loader,
 
 puppet_program_t *puppet_loader_load_manifest(puppet_loader_t *loader,
                                               const char *file_path) {
-    (void)loader; /* Currently unused */
     if (!file_path) return NULL;
+
+    /* Check manifest cache first */
+    if (loader) {
+        for (size_t i = 0; i < loader->parsed_manifests.count; i++) {
+            if (strcmp(loader->parsed_manifests.file_paths[i], file_path) == 0) {
+                return loader->parsed_manifests.programs[i];
+            }
+        }
+    }
 
     /* Parse the file with tree-sitter */
     puppet_stmt_list_t *stmts = puppet_ts_parse_file(file_path);
@@ -225,6 +262,22 @@ puppet_program_t *puppet_loader_load_manifest(puppet_loader_t *loader,
     puppet_program_t *program = puppet_calloc(1, sizeof(puppet_program_t));
     program->statements = *stmts;
     puppet_free(stmts);
+
+    /* Add to cache */
+    if (loader) {
+        if (loader->parsed_manifests.count >= loader->parsed_manifests.capacity) {
+            loader->parsed_manifests.capacity *= 2;
+            loader->parsed_manifests.file_paths = puppet_realloc(
+                loader->parsed_manifests.file_paths,
+                loader->parsed_manifests.capacity * sizeof(char*));
+            loader->parsed_manifests.programs = puppet_realloc(
+                loader->parsed_manifests.programs,
+                loader->parsed_manifests.capacity * sizeof(puppet_program_t*));
+        }
+        loader->parsed_manifests.file_paths[loader->parsed_manifests.count] = puppet_strdup(file_path);
+        loader->parsed_manifests.programs[loader->parsed_manifests.count] = program;
+        loader->parsed_manifests.count++;
+    }
 
     return program;
 }
@@ -379,6 +432,13 @@ bool puppet_loader_has_custom_function(puppet_loader_t *loader,
                                        const char *func_name) {
     if (!loader || !func_name || !loader->modules_path) return false;
 
+    /* Check cache first */
+    for (size_t i = 0; i < loader->custom_functions.count; i++) {
+        if (strcmp(loader->custom_functions.func_names[i], func_name) == 0) {
+            return loader->custom_functions.func_exists[i];
+        }
+    }
+
     /* Open modules directory */
     DIR *modules_dir = opendir(loader->modules_path);
     if (!modules_dir) return false;
@@ -424,5 +484,20 @@ bool puppet_loader_has_custom_function(puppet_loader_t *loader,
     }
 
     closedir(modules_dir);
+
+    /* Add to cache */
+    if (loader->custom_functions.count >= loader->custom_functions.capacity) {
+        loader->custom_functions.capacity *= 2;
+        loader->custom_functions.func_names = puppet_realloc(
+            loader->custom_functions.func_names,
+            loader->custom_functions.capacity * sizeof(char*));
+        loader->custom_functions.func_exists = puppet_realloc(
+            loader->custom_functions.func_exists,
+            loader->custom_functions.capacity * sizeof(bool));
+    }
+    loader->custom_functions.func_names[loader->custom_functions.count] = puppet_strdup(func_name);
+    loader->custom_functions.func_exists[loader->custom_functions.count] = found;
+    loader->custom_functions.count++;
+
     return found;
 }

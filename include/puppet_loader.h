@@ -27,7 +27,7 @@ typedef struct puppet_loader {
     char *base_path;           /**< Base directory for Puppet code */
     char *modules_path;        /**< Path to modules directory */
     char *manifests_path;      /**< Path to manifests directory */
-    
+
     /* Cache of loaded classes to avoid reloading */
     struct {
         char **class_names;
@@ -35,7 +35,23 @@ typedef struct puppet_loader {
         size_t count;
         size_t capacity;
     } loaded_classes;
-    
+
+    /* Cache of custom function lookups */
+    struct {
+        char **func_names;     /**< Function names checked */
+        bool *func_exists;     /**< Whether function exists */
+        size_t count;
+        size_t capacity;
+    } custom_functions;
+
+    /* Cache of parsed manifest files to avoid re-parsing */
+    struct {
+        char **file_paths;     /**< Absolute file paths */
+        puppet_program_t **programs;  /**< Parsed programs */
+        size_t count;
+        size_t capacity;
+    } parsed_manifests;
+
     /* Current parsing context */
     puppet_env_t *env;         /**< Environment for evaluation */
 } puppet_loader_t;
