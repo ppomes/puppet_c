@@ -112,6 +112,12 @@ Edit `puppetcode/manifests/site.pp` on your host - changes are reflected immedia
 
 # JSON AST output
 ./compiler/puppetc-compile -j manifest.pp
+
+# Validate all nodes from facts file
+./compiler/puppetc-compile --all-nodes -m modules/ -f allfacts.yaml manifests/site.pp
+
+# Parallel mode (much faster for many nodes)
+./compiler/puppetc-compile --all-nodes -P -m modules/ -f allfacts.yaml manifests/site.pp
 ```
 
 Run `./compiler/puppetc-compile --help` for all options.
@@ -149,6 +155,20 @@ Memory: 4294967296 bytes
 
 Total: 41 resources
 ```
+
+### Parallel Mode
+
+The `-P` / `--parallel` option enables parallel node validation when used with `--all-nodes`. Each node is processed in a separate thread, significantly improving performance for large node sets. This is useful for CI/CD pipelines to quickly validate manifests across all nodes.
+
+```bash
+# Sequential validation (default)
+./compiler/puppetc-compile --all-nodes -m modules/ -f allfacts.yaml manifests/site.pp
+
+# Parallel validation (much faster)
+./compiler/puppetc-compile --all-nodes -P -m modules/ -f allfacts.yaml manifests/site.pp
+```
+
+**Note**: ERB templates are skipped in parallel mode because Ruby's VM is not thread-safe. Use sequential mode if you need full template validation.
 
 ### Catalog Server
 
@@ -241,7 +261,7 @@ curl http://localhost:8140/pdb/query/v4/catalogs/node1.example.com
 ### Runtime Limitations
 
 - **No pluginsync**: Custom facts and functions must be pre-installed
-- **Single-threaded server**: The catalog server handles requests sequentially
+- **Parallel mode skips ERB**: The `-P` option skips ERB template rendering (Ruby is not thread-safe)
 
 ## Implemented Functions
 
