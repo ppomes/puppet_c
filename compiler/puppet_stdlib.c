@@ -5184,7 +5184,7 @@ puppet_value_t *puppet_func_inline_template(puppet_expr_list_t *args, puppet_env
         const char *template_str = template_val->data.string.data;
 
         /* Use the ERB processing function */
-        char *result = puppet_erb_render(template_str, env, ruby_ctx);
+        char *result = puppet_erb_render(template_str, env, ruby_ctx, "inline_template");
         puppet_value_destroy(template_val);
 
         if (result) {

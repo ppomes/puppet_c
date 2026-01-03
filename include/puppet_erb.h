@@ -18,7 +18,7 @@ void *puppet_value_to_ruby(puppet_value_t *value, puppet_ruby_context_t *ctx);
 puppet_value_t *ruby_to_puppet_value(void *ruby_obj, puppet_ruby_context_t *ctx);
 
 // ERB template processing
-char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx);
+char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx, const char *template_name);
 char *puppet_erb_file(const char *template_path, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx);
 
 // Simple template processing (fallback)

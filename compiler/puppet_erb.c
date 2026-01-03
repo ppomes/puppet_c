@@ -372,7 +372,7 @@ static void puppet_export_env_to_ruby(puppet_env_t *env, puppet_ruby_context_t *
     }
 }
 
-char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx) {
+char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx, const char *template_name) {
     // Skip ERB rendering if flag is set (for parallel mode)
     if (env && env->skip_erb) {
         return puppet_strdup("[ERB skipped in parallel mode]");
@@ -416,7 +416,11 @@ char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_
         pthread_mutex_unlock(&ruby_mutex);
         return result_str;
     } else {
-        printf("Error: ERB processing failed (state=%d)\n", state);
+        if (template_name) {
+            printf("Error: ERB processing failed in %s (state=%d)\n", template_name, state);
+        } else {
+            printf("Error: ERB processing failed (state=%d)\n", state);
+        }
         if (state == 6) {  // TAG_RAISE - exception occurred
             VALUE exception = rb_errinfo();
             if (!NIL_P(exception)) {
@@ -463,7 +467,7 @@ char *puppet_erb_file(const char *template_path, puppet_env_t *env, puppet_ruby_
     content[file_size] = '\0';
     fclose(file);
 
-    char *result = puppet_erb_render(content, env, ruby_ctx);
+    char *result = puppet_erb_render(content, env, ruby_ctx, template_path);
     puppet_free(content);
     return result;
 }
