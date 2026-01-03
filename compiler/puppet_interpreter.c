@@ -9,6 +9,10 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <regex.h>
+#include <unistd.h>
+#include <sys/wait.h>
+/* Note: Do NOT include ruby.h here - it redefines snprintf to ruby_snprintf
+ * which is not thread-safe. Ruby is only needed in puppet_erb.c */
 
 /* Global verbose flag */
 bool puppet_verbose = false;
@@ -16,6 +20,7 @@ bool puppet_verbose = false;
 /* Forward declarations for node definition management */
 static int puppet_register_node_def(puppet_env_t *env, puppet_stmt_t *node_def);
 static puppet_stmt_t *puppet_find_matching_node(puppet_env_t *env, const char *certname);
+void puppet_exec_nodes_parallel(puppet_env_t *env, size_t node_count);
 static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *certname, puppet_env_t *env);
 
 /**
@@ -122,7 +127,7 @@ static void puppet_value_to_string_buffer(puppet_value_t *value, char *buf, size
 static const char *puppet_value_to_string(puppet_value_t *value) {
     if (!value) return "";
 
-    static char buffer[4096];  // Increased buffer size for complex values
+    static __thread char buffer[4096];  // Thread-local buffer for thread safety
 
     switch (value->type) {
         case PUPPET_VALUE_STRING:
@@ -304,6 +309,11 @@ puppet_env_t *puppet_env_create(void) {
     env->current_node_certname = NULL;
     env->current_node_failed = false;
     env->stop_on_error = false;
+
+    /* Initialize parallel processing */
+    env->parallel_nodes = false;
+    env->skip_erb = false;
+    env->stats_mutex = NULL;  /* Allocated only when needed */
 
     /* Register Hiera data provider */
     puppet_hiera_register_provider(env, "data");
@@ -2411,18 +2421,24 @@ void puppet_exec_program(puppet_program_t *program, puppet_env_t *env) {
         size_t node_count = puppet_facts_db_node_count(env->facts_db);
         puppet_debug("Executing %zu nodes from facts database", node_count);
 
-        for (size_t i = 0; i < node_count; i++) {
-            const char *certname = puppet_facts_db_get_node_name(env->facts_db, i);
-            if (!certname) continue;
+        if (env->parallel_nodes) {
+            /* Parallel execution mode - one thread per node */
+            puppet_exec_nodes_parallel(env, node_count);
+        } else {
+            /* Sequential execution */
+            for (size_t i = 0; i < node_count; i++) {
+                const char *certname = puppet_facts_db_get_node_name(env->facts_db, i);
+                if (!certname) continue;
 
-            /* Find matching node definition */
-            puppet_stmt_t *matching_node = puppet_find_matching_node(env, certname);
+                /* Find matching node definition */
+                puppet_stmt_t *matching_node = puppet_find_matching_node(env, certname);
 
-            if (matching_node) {
-                /* Execute the matching node block for this certname */
-                puppet_exec_node_for_certname(matching_node, certname, env);
-            } else {
-                puppet_warn("No matching node block found for '%s'", certname);
+                if (matching_node) {
+                    /* Execute the matching node block for this certname */
+                    puppet_exec_node_for_certname(matching_node, certname, env);
+                } else {
+                    puppet_warn("No matching node block found for '%s'", certname);
+                }
             }
         }
     } else {
@@ -2768,8 +2784,8 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
         }
     }
 
-    /* Switch to node-specific facts */
-    if (env->facts_db) {
+    /* Switch to node-specific facts (skip in parallel mode - uses env->current_node_certname instead) */
+    if (env->facts_db && !env->parallel_nodes) {
         if (puppet_facts_db_set_current_node(env->facts_db, certname) == 0) {
             puppet_debug("Using facts for node: %s", certname);
         } else {
@@ -2961,8 +2977,8 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
             }
         }
 
-        /* Switch to node-specific facts if available */
-        if (env->facts_db) {
+        /* Switch to node-specific facts if available (skip in parallel mode - uses env->current_node_certname) */
+        if (env->facts_db && !env->parallel_nodes) {
             if (puppet_facts_db_set_current_node(env->facts_db, node_name) == 0) {
                 puppet_debug("Using facts for node: %s", node_name);
             } else {
@@ -4058,12 +4074,15 @@ puppet_value_t *puppet_facts_get(puppet_env_t *env, const char *fact_name) {
     }
 
     puppet_facts_db_t *facts_db = env->facts_db;
-    if (!facts_db->current_node) {
+
+    /* Use env->current_node_certname for thread-safe access, fall back to facts_db->current_node */
+    const char *certname = env->current_node_certname ? env->current_node_certname : facts_db->current_node;
+    if (!certname) {
         return NULL;
     }
-    
+
     // Find current node by index
-    puppet_value_t *index_value = puppet_hash_get(facts_db->node_index, facts_db->current_node, strlen(facts_db->current_node));
+    puppet_value_t *index_value = puppet_hash_get(facts_db->node_index, certname, strlen(certname));
     if (!index_value || index_value->type != PUPPET_VALUE_NUMBER) {
         return NULL;
     }
@@ -4105,11 +4124,14 @@ puppet_value_t *puppet_facts_get_all_as_hash(puppet_env_t *env) {
     }
 
     puppet_facts_db_t *facts_db = env->facts_db;
-    if (!facts_db->current_node) return NULL;
+
+    /* Use env->current_node_certname for thread-safe access, fall back to facts_db->current_node */
+    const char *certname = env->current_node_certname ? env->current_node_certname : facts_db->current_node;
+    if (!certname) return NULL;
 
     /* Find current node */
     puppet_value_t *index_value = puppet_hash_get(facts_db->node_index,
-        facts_db->current_node, strlen(facts_db->current_node));
+        certname, strlen(certname));
     if (!index_value || index_value->type != PUPPET_VALUE_NUMBER) return NULL;
 
     size_t index = (size_t)index_value->data.number;
@@ -4208,4 +4230,391 @@ void puppet_env_increment_error(puppet_env_t *env) {
 void puppet_env_increment_warning(puppet_env_t *env) {
     if (!env) return;
     env->warnings_count++;
+}
+
+/*
+ * ===========================================================================
+ * PARALLEL NODE PROCESSING
+ * ===========================================================================
+ */
+
+void puppet_env_set_parallel_nodes(puppet_env_t *env, bool parallel) {
+    if (!env) return;
+    env->parallel_nodes = parallel;
+    env->skip_erb = parallel;  /* Skip ERB in parallel mode for thread safety */
+
+    /* Allocate stats mutex if enabling parallel mode */
+    if (parallel && !env->stats_mutex) {
+        env->stats_mutex = puppet_malloc(sizeof(pthread_mutex_t));
+        pthread_mutex_init(env->stats_mutex, NULL);
+    }
+}
+
+/**
+ * @brief Helper to create a new hash table
+ */
+static puppet_hash_t *create_hash(size_t bucket_count) {
+    puppet_hash_t *h = puppet_calloc(1, sizeof(puppet_hash_t));
+    h->bucket_count = bucket_count;
+    h->buckets = puppet_calloc(bucket_count, sizeof(puppet_hash_entry_t*));
+    return h;
+}
+
+puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certname) {
+    if (!source) return NULL;
+
+    puppet_env_t *env = puppet_calloc(1, sizeof(puppet_env_t));
+
+    /* Create new scopes (fresh per node) */
+    env->global_scope = puppet_scope_create(NULL, "global");
+    env->current_scope = env->global_scope;
+    env->stack_capacity = 16;
+    env->scope_stack = puppet_calloc(env->stack_capacity, sizeof(puppet_scope_t*));
+    env->stack_depth = 0;
+    env->node_scope = puppet_scope_create(env->global_scope, "node");
+    env->class_scope = NULL;
+
+    /* Share read-only data from source */
+    env->loader = source->loader;  /* Shared, thread-safe */
+    env->facts_db = source->facts_db;  /* Shared, read-only per thread */
+    env->data_providers = source->data_providers;  /* Shared Hiera etc */
+    env->data_provider_count = source->data_provider_count;
+    env->data_provider_capacity = source->data_provider_capacity;
+
+    /* Copy class definitions array (contains read-only AST pointers, but array itself must be per-thread) */
+    env->class_def_capacity = source->class_def_capacity;
+    env->class_def_count = source->class_def_count;
+    env->class_definitions = puppet_calloc(env->class_def_capacity, sizeof(puppet_stmt_t*));
+    memcpy(env->class_definitions, source->class_definitions, env->class_def_count * sizeof(puppet_stmt_t*));
+
+    /* Copy node definitions array (contains read-only AST pointers, but array itself must be per-thread) */
+    env->node_def_capacity = source->node_def_capacity;
+    env->node_def_count = source->node_def_count;
+    env->node_definitions = puppet_calloc(env->node_def_capacity, sizeof(puppet_stmt_t*));
+    memcpy(env->node_definitions, source->node_definitions, env->node_def_count * sizeof(puppet_stmt_t*));
+    env->defer_node_execution = false;
+
+    /* Create fresh hashes for per-node state */
+    env->class_scopes = create_hash(32);
+    env->class_resource_decls = create_hash(32);
+    env->resource_catalog = create_hash(64);
+    env->virtual_resources = create_hash(64);
+    env->defined_resources = create_hash(64);
+
+    /* Copy define_types hash (shallow copy - AST pointers are shared but hash structure is per-thread) */
+    env->define_types = puppet_calloc(1, sizeof(puppet_hash_t));
+    env->define_types->bucket_count = source->define_types->bucket_count;
+    env->define_types->buckets = puppet_calloc(env->define_types->bucket_count, sizeof(puppet_hash_entry_t*));
+    for (size_t i = 0; i < source->define_types->bucket_count; i++) {
+        puppet_hash_entry_t *src_entry = source->define_types->buckets[i];
+        puppet_hash_entry_t **dst_ptr = &env->define_types->buckets[i];
+        while (src_entry) {
+            puppet_hash_entry_t *new_entry = puppet_calloc(1, sizeof(puppet_hash_entry_t));
+            new_entry->key.data = puppet_malloc(src_entry->key.len + 1);
+            memcpy(new_entry->key.data, src_entry->key.data, src_entry->key.len);
+            new_entry->key.data[src_entry->key.len] = '\0';
+            new_entry->key.len = src_entry->key.len;
+            new_entry->value = src_entry->value;  /* Share AST pointer */
+            new_entry->next = NULL;
+            *dst_ptr = new_entry;
+            dst_ptr = &new_entry->next;
+            src_entry = src_entry->next;
+        }
+    }
+
+    /* Node-specific settings */
+    env->node_name = certname ? puppet_strdup(certname) : NULL;
+    env->execute_all_nodes = false;  /* Single node mode */
+    env->node_matched = false;
+    env->default_node = source->default_node;
+
+    /* Copy output settings */
+    env->verbose = source->verbose;
+    env->template_output_target = NULL;
+    env->template_output_found = false;
+
+    /* Fresh catalog if needed (not typically used in --all-nodes mode) */
+    env->catalog = NULL;
+    env->build_catalog = false;
+
+    /* Fresh CI tracking per node */
+    env->nodes_processed = 0;
+    env->nodes_failed = 0;
+    env->nodes_skipped_regex = 0;
+    env->errors_count = 0;
+    env->warnings_count = 0;
+    env->current_node_certname = certname ? puppet_strdup(certname) : NULL;
+    env->current_node_failed = false;
+    env->stop_on_error = false;
+
+    /* Fresh compilation state */
+    env->compilation_failed = false;
+    env->failure_message = NULL;
+    env->current_tags = NULL;
+    env->in_hiera_interpolation = false;
+
+    /* Share the stats mutex for aggregation */
+    env->parallel_nodes = true;
+    env->skip_erb = source->skip_erb;
+    env->stats_mutex = source->stats_mutex;
+
+    return env;
+}
+
+/**
+ * @brief Destroy a cloned env (doesn't free shared data)
+ */
+static void puppet_env_destroy_clone(puppet_env_t *env) {
+    if (!env) return;
+
+    /* Free scopes */
+    puppet_scope_destroy(env->node_scope);
+    puppet_scope_destroy(env->global_scope);
+    puppet_free(env->scope_stack);
+
+    /* Free node name copies */
+    puppet_free(env->node_name);
+    puppet_free(env->current_node_certname);
+    puppet_free(env->failure_message);
+
+    /* Free per-node hashes (not the shared ones) */
+    if (env->class_scopes) {
+        for (size_t i = 0; i < env->class_scopes->bucket_count; i++) {
+            puppet_hash_entry_t *e = env->class_scopes->buckets[i];
+            while (e) {
+                puppet_hash_entry_t *next = e->next;
+                puppet_free(e->key.data);
+                puppet_free(e);
+                e = next;
+            }
+        }
+        puppet_free(env->class_scopes->buckets);
+        puppet_free(env->class_scopes);
+    }
+
+    if (env->class_resource_decls) {
+        for (size_t i = 0; i < env->class_resource_decls->bucket_count; i++) {
+            puppet_hash_entry_t *e = env->class_resource_decls->buckets[i];
+            while (e) {
+                puppet_hash_entry_t *next = e->next;
+                puppet_free(e->key.data);
+                puppet_value_destroy(e->value);
+                puppet_free(e);
+                e = next;
+            }
+        }
+        puppet_free(env->class_resource_decls->buckets);
+        puppet_free(env->class_resource_decls);
+    }
+
+    if (env->resource_catalog) {
+        for (size_t i = 0; i < env->resource_catalog->bucket_count; i++) {
+            puppet_hash_entry_t *e = env->resource_catalog->buckets[i];
+            while (e) {
+                puppet_hash_entry_t *next = e->next;
+                puppet_free(e->key.data);
+                puppet_value_destroy(e->value);
+                puppet_free(e);
+                e = next;
+            }
+        }
+        puppet_free(env->resource_catalog->buckets);
+        puppet_free(env->resource_catalog);
+    }
+
+    if (env->virtual_resources) {
+        for (size_t i = 0; i < env->virtual_resources->bucket_count; i++) {
+            puppet_hash_entry_t *e = env->virtual_resources->buckets[i];
+            while (e) {
+                puppet_hash_entry_t *next = e->next;
+                puppet_free(e->key.data);
+                puppet_value_destroy(e->value);
+                puppet_free(e);
+                e = next;
+            }
+        }
+        puppet_free(env->virtual_resources->buckets);
+        puppet_free(env->virtual_resources);
+    }
+
+    if (env->defined_resources) {
+        for (size_t i = 0; i < env->defined_resources->bucket_count; i++) {
+            puppet_hash_entry_t *e = env->defined_resources->buckets[i];
+            while (e) {
+                puppet_hash_entry_t *next = e->next;
+                puppet_free(e->key.data);
+                puppet_value_destroy(e->value);
+                puppet_free(e);
+                e = next;
+            }
+        }
+        puppet_free(env->defined_resources->buckets);
+        puppet_free(env->defined_resources);
+    }
+
+    if (env->current_tags) {
+        puppet_value_destroy(env->current_tags);
+    }
+
+    /* Free copied arrays (we own the array, but not the AST pointers inside) */
+    puppet_free(env->class_definitions);
+    puppet_free(env->node_definitions);
+
+    /* Free copied define_types hash (we own the hash and keys, but not the AST pointers) */
+    if (env->define_types) {
+        for (size_t i = 0; i < env->define_types->bucket_count; i++) {
+            puppet_hash_entry_t *e = env->define_types->buckets[i];
+            while (e) {
+                puppet_hash_entry_t *next = e->next;
+                puppet_free(e->key.data);
+                /* Don't destroy e->value - it's a shared AST pointer */
+                puppet_free(e);
+                e = next;
+            }
+        }
+        puppet_free(env->define_types->buckets);
+        puppet_free(env->define_types);
+    }
+
+    /* Don't free shared data: loader, facts_db, data_providers, stats_mutex */
+
+    puppet_free(env);
+}
+
+void puppet_env_merge_stats(puppet_env_t *target, puppet_env_t *source) {
+    if (!target || !source) return;
+
+    /* Use mutex if available for thread-safe updates */
+    if (target->stats_mutex) {
+        pthread_mutex_lock(target->stats_mutex);
+    }
+
+    target->nodes_processed += source->nodes_processed;
+    target->nodes_failed += source->nodes_failed;
+    target->nodes_skipped_regex += source->nodes_skipped_regex;
+    target->errors_count += source->errors_count;
+    target->warnings_count += source->warnings_count;
+
+    if (target->stats_mutex) {
+        pthread_mutex_unlock(target->stats_mutex);
+    }
+}
+
+/**
+ * @brief Thread worker data for parallel node processing
+ */
+typedef struct {
+    puppet_env_t *source_env;      /**< Original environment with shared data */
+    const char *certname;          /**< Node certname to process */
+    puppet_stmt_t *node_stmt;      /**< Node statement to execute */
+    size_t nodes_processed;        /**< Result: nodes processed */
+    size_t nodes_failed;           /**< Result: nodes failed */
+    size_t errors_count;           /**< Result: errors */
+    size_t warnings_count;         /**< Result: warnings */
+} parallel_node_work_t;
+
+/**
+ * @brief Worker function for parallel node processing
+ *
+ * Uses pthreads for true parallelism of C code. Ruby/ERB calls are
+ * serialized via mutex in puppet_erb.c to ensure thread safety.
+ */
+static void *parallel_node_worker(void *arg) {
+    parallel_node_work_t *work = (parallel_node_work_t *)arg;
+
+    /* Create cloned environment for this node */
+    puppet_env_t *node_env = puppet_env_clone_for_node(work->source_env, work->certname);
+    if (!node_env) {
+        work->nodes_failed = 1;
+        work->errors_count = 1;
+        return NULL;
+    }
+
+    /* Note: facts access uses env->current_node_certname (set in clone_for_node)
+     * instead of the shared facts_db->current_node for thread safety */
+
+    /* Execute the node (header is printed inside puppet_exec_node_for_certname) */
+    puppet_exec_node_for_certname(work->node_stmt, work->certname, node_env);
+
+    /* Capture results */
+    work->nodes_processed = node_env->nodes_processed;
+    work->nodes_failed = node_env->nodes_failed;
+    work->errors_count = node_env->errors_count;
+    work->warnings_count = node_env->warnings_count;
+
+    /* Check if node failed */
+    if (node_env->current_node_failed) {
+        fprintf(stderr, "--- Node: %s FAILED ---\n", work->certname);
+    }
+
+    /* Cleanup cloned env */
+    puppet_env_destroy_clone(node_env);
+
+    return NULL;
+}
+
+/**
+ * @brief Execute nodes in parallel using pthreads
+ *
+ * Uses native pthreads for true parallelism. ERB template rendering is
+ * skipped in parallel mode (env->skip_erb = true), allowing thread-safe
+ * execution without Ruby threading issues.
+ */
+void puppet_exec_nodes_parallel(puppet_env_t *env, size_t node_count) {
+    if (!env || node_count == 0) return;
+
+    puppet_debug("Starting parallel execution of %zu nodes using pthreads (ERB skipped)", node_count);
+
+    /* Allocate thread array and work items */
+    pthread_t *threads = puppet_calloc(node_count, sizeof(pthread_t));
+    parallel_node_work_t *work_items = puppet_calloc(node_count, sizeof(parallel_node_work_t));
+
+    size_t threads_started = 0;
+
+    /* Create threads for each node */
+    for (size_t i = 0; i < node_count; i++) {
+        const char *certname = puppet_facts_db_get_node_name(env->facts_db, i);
+        if (!certname) continue;
+
+        /* Find matching node definition */
+        puppet_stmt_t *matching_node = puppet_find_matching_node(env, certname);
+        if (!matching_node) {
+            puppet_warn("No matching node block found for '%s'", certname);
+            continue;
+        }
+
+        /* Set up work item */
+        work_items[threads_started].source_env = env;
+        work_items[threads_started].certname = certname;
+        work_items[threads_started].node_stmt = matching_node;
+        work_items[threads_started].nodes_processed = 0;
+        work_items[threads_started].nodes_failed = 0;
+        work_items[threads_started].errors_count = 0;
+        work_items[threads_started].warnings_count = 0;
+
+        /* Create thread */
+        int ret = pthread_create(&threads[threads_started], NULL,
+                                parallel_node_worker, &work_items[threads_started]);
+        if (ret != 0) {
+            puppet_error("Failed to create thread for node %s", certname);
+            continue;
+        }
+        threads_started++;
+    }
+
+    /* Wait for all threads and aggregate stats */
+    for (size_t i = 0; i < threads_started; i++) {
+        pthread_join(threads[i], NULL);
+
+        /* Aggregate stats into main env */
+        env->nodes_processed += work_items[i].nodes_processed;
+        env->nodes_failed += work_items[i].nodes_failed;
+        env->errors_count += work_items[i].errors_count;
+        env->warnings_count += work_items[i].warnings_count;
+    }
+
+    puppet_debug("Parallel execution complete: %zu nodes processed", env->nodes_processed);
+
+    puppet_free(threads);
+    puppet_free(work_items);
 }

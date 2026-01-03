@@ -49,6 +49,7 @@ static void print_usage(const char *program_name) {
     printf("  -t, --template    Display template output for file resource with specified title\n");
     printf("  -D, --hiera-data  Path to Hiera data directory (default: ./data)\n");
     printf("  -s, --summary     Print validation summary (for CI, implies -e)\n");
+    printf("  -P, --parallel    Process nodes in parallel (skips ERB templates)\n");
     printf("  -v, --verbose     Enable verbose/debug output\n");
     printf("  -h, --help        Show this help message\n");
     printf("\nWhen a directory is provided, site.pp will be loaded from manifests/\n");
@@ -71,6 +72,7 @@ int main(int argc, char *argv[]) {
     int catalog_mode = 0;
     int pretty_mode = 0;
     int summary_mode = 0;
+    int parallel_mode = 0;
     char *output_file = NULL;
     char *modules_path = NULL;
     char *node_name = NULL;
@@ -87,6 +89,7 @@ int main(int argc, char *argv[]) {
         {"catalog", no_argument, 0, 'c'},
         {"pretty", no_argument, 0, 'p'},
         {"summary", no_argument, 0, 's'},
+        {"parallel", no_argument, 0, 'P'},
         {"output", required_argument, 0, 'o'},
         {"modules", required_argument, 0, 'm'},
         {"node", required_argument, 0, 'n'},
@@ -99,7 +102,7 @@ int main(int argc, char *argv[]) {
         {0, 0, 0, 0}
     };
 
-    while ((opt = getopt_long(argc, argv, "jecpso:m:n:af:t:D:vh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "jecpsPo:m:n:af:t:D:vh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'j':
                 json_output = 1;
@@ -119,6 +122,10 @@ int main(int argc, char *argv[]) {
                 summary_mode = 1;
                 eval_mode = 1;  /* Summary implies eval */
                 break;
+            case 'P':
+                parallel_mode = 1;
+                eval_mode = 1;  /* Parallel implies eval */
+                break;
             case 'o':
                 output_file = optarg;
                 break;
@@ -130,6 +137,7 @@ int main(int argc, char *argv[]) {
                 break;
             case 'a':
                 all_nodes = 1;
+                eval_mode = 1;  /* All-nodes implies eval */
                 break;
             case 'f':
                 facts_file = optarg;
@@ -171,12 +179,22 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    /* Validate parallel mode - requires all-nodes and facts file */
+    if (parallel_mode && !all_nodes) {
+        fprintf(stderr, "Error: --parallel requires --all-nodes\n");
+        return 1;
+    }
+    if (parallel_mode && !facts_file) {
+        fprintf(stderr, "Error: --parallel requires --facts file with multiple nodes\n");
+        return 1;
+    }
+
     /* Validate template output option */
     if (template_output && !node_name) {
         fprintf(stderr, "Error: --template requires --node to be specified\n");
         return 1;
     }
-    
+
     if (template_output && !eval_mode) {
         fprintf(stderr, "Error: --template requires --eval mode\n");
         return 1;
@@ -326,7 +344,12 @@ int main(int argc, char *argv[]) {
             /* Configure node execution */
             if (all_nodes) {
                 puppet_env_set_execute_all_nodes(env, true);
-                if (verbose) fprintf(stderr, "Executing all nodes.\n");
+                if (parallel_mode) {
+                    puppet_env_set_parallel_nodes(env, true);
+                    if (verbose) fprintf(stderr, "Executing all nodes in parallel.\n");
+                } else {
+                    if (verbose) fprintf(stderr, "Executing all nodes.\n");
+                }
             } else if (node_name) {
                 puppet_env_set_node(env, node_name);
                 if (verbose) fprintf(stderr, "Executing node: %s\n", node_name);

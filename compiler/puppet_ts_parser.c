@@ -23,8 +23,8 @@ static puppet_stmt_list_t convert_block(TSNode node, const char *source);
 static puppet_lambda_t *convert_lambda(TSNode node, const char *source);
 static puppet_expr_t *build_index_expr(puppet_expr_t *object, TSNode access_node, const char *source);
 
-/* Current filename being parsed (for source location tracking) */
-static const char *current_parse_filename = NULL;
+/* Current filename being parsed (for source location tracking) - thread-local for parallel safety */
+static __thread const char *current_parse_filename = NULL;
 
 /*
  * ===========================================================================

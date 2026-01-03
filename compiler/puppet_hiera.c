@@ -529,10 +529,15 @@ puppet_value_t *puppet_hiera_lookup(
 ) {
     if (!context || !key) return default_value;
 
+    /* Skip cache in parallel mode - cache is shared and not thread-safe */
+    bool use_cache = !(context->env && context->env->parallel_nodes);
+
     // Check cache first
-    puppet_value_t *cached = puppet_hash_get(context->config->cache->data.hash, key, strlen(key));
-    if (cached) {
-        return cached;
+    if (use_cache) {
+        puppet_value_t *cached = puppet_hash_get(context->config->cache->data.hash, key, strlen(key));
+        if (cached) {
+            return cached;
+        }
     }
 
     /* Extract module_name from key (e.g., "tomee::wslist" -> "tomee") */
@@ -594,8 +599,8 @@ puppet_value_t *puppet_hiera_lookup(
         result = puppet_value_copy(default_value);
     }
 
-    // Cache the result
-    if (result) {
+    // Cache the result (skip in parallel mode - cache is shared and not thread-safe)
+    if (result && use_cache) {
         puppet_hash_set(context->config->cache->data.hash, key, strlen(key), puppet_value_copy(result));
     }
 

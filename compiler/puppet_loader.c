@@ -48,6 +48,9 @@ puppet_loader_t *puppet_loader_create(const char *base_path) {
     loader->parsed_manifests.programs = puppet_calloc(loader->parsed_manifests.capacity, sizeof(puppet_program_t*));
     loader->parsed_manifests.count = 0;
 
+    /* Initialize thread synchronization */
+    pthread_mutex_init(&loader->cache_mutex, NULL);
+
     return loader;
 }
 
@@ -78,6 +81,9 @@ void puppet_loader_destroy(puppet_loader_t *loader) {
     }
     puppet_free(loader->parsed_manifests.file_paths);
     puppet_free(loader->parsed_manifests.programs);
+
+    /* Destroy thread synchronization */
+    pthread_mutex_destroy(&loader->cache_mutex);
 
     puppet_free(loader->base_path);
     puppet_free(loader->modules_path);
@@ -141,13 +147,17 @@ bool puppet_loader_resolve_class_path(puppet_loader_t *loader,
 puppet_stmt_t *puppet_loader_load_class(puppet_loader_t *loader,
                                         const char *class_name) {
     if (!loader || !class_name) return NULL;
-    
-    /* Check if already loaded */
+
+    /* Check if already loaded (thread-safe) */
+    pthread_mutex_lock(&loader->cache_mutex);
     for (size_t i = 0; i < loader->loaded_classes.count; i++) {
         if (strcmp(loader->loaded_classes.class_names[i], class_name) == 0) {
-            return loader->loaded_classes.class_defs[i];
+            puppet_stmt_t *cached = loader->loaded_classes.class_defs[i];
+            pthread_mutex_unlock(&loader->cache_mutex);
+            return cached;
         }
     }
+    pthread_mutex_unlock(&loader->cache_mutex);
     
     /* Resolve the class path */
     char path_buffer[1024];
@@ -186,7 +196,18 @@ puppet_stmt_t *puppet_loader_load_class(puppet_loader_t *loader,
         return NULL;
     }
     
-    /* Cache the loaded class */
+    /* Cache the loaded class (thread-safe) */
+    pthread_mutex_lock(&loader->cache_mutex);
+
+    /* Double-check: another thread may have loaded while we were parsing */
+    for (size_t i = 0; i < loader->loaded_classes.count; i++) {
+        if (strcmp(loader->loaded_classes.class_names[i], class_name) == 0) {
+            puppet_stmt_t *cached = loader->loaded_classes.class_defs[i];
+            pthread_mutex_unlock(&loader->cache_mutex);
+            return cached;
+        }
+    }
+
     if (loader->loaded_classes.count >= loader->loaded_classes.capacity) {
         loader->loaded_classes.capacity *= 2;
         loader->loaded_classes.class_names = puppet_realloc(loader->loaded_classes.class_names,
@@ -194,10 +215,11 @@ puppet_stmt_t *puppet_loader_load_class(puppet_loader_t *loader,
         loader->loaded_classes.class_defs = puppet_realloc(loader->loaded_classes.class_defs,
             loader->loaded_classes.capacity * sizeof(puppet_stmt_t*));
     }
-    
+
     loader->loaded_classes.class_names[loader->loaded_classes.count] = puppet_strdup(class_name);
     loader->loaded_classes.class_defs[loader->loaded_classes.count] = class_def;
     loader->loaded_classes.count++;
+    pthread_mutex_unlock(&loader->cache_mutex);
 
     return class_def;
 }
@@ -242,13 +264,17 @@ puppet_program_t *puppet_loader_load_manifest(puppet_loader_t *loader,
                                               const char *file_path) {
     if (!file_path) return NULL;
 
-    /* Check manifest cache first */
+    /* Check manifest cache first (thread-safe) */
     if (loader) {
+        pthread_mutex_lock(&loader->cache_mutex);
         for (size_t i = 0; i < loader->parsed_manifests.count; i++) {
             if (strcmp(loader->parsed_manifests.file_paths[i], file_path) == 0) {
-                return loader->parsed_manifests.programs[i];
+                puppet_program_t *cached = loader->parsed_manifests.programs[i];
+                pthread_mutex_unlock(&loader->cache_mutex);
+                return cached;
             }
         }
+        pthread_mutex_unlock(&loader->cache_mutex);
     }
 
     /* Parse the file with tree-sitter */
@@ -263,8 +289,21 @@ puppet_program_t *puppet_loader_load_manifest(puppet_loader_t *loader,
     program->statements = *stmts;
     puppet_free(stmts);
 
-    /* Add to cache */
+    /* Add to cache (thread-safe) */
     if (loader) {
+        pthread_mutex_lock(&loader->cache_mutex);
+
+        /* Double-check: another thread may have parsed while we were */
+        for (size_t i = 0; i < loader->parsed_manifests.count; i++) {
+            if (strcmp(loader->parsed_manifests.file_paths[i], file_path) == 0) {
+                /* Another thread already cached it - use theirs and destroy our copy */
+                puppet_program_t *cached = loader->parsed_manifests.programs[i];
+                pthread_mutex_unlock(&loader->cache_mutex);
+                puppet_program_destroy(program);
+                return cached;
+            }
+        }
+
         if (loader->parsed_manifests.count >= loader->parsed_manifests.capacity) {
             loader->parsed_manifests.capacity *= 2;
             loader->parsed_manifests.file_paths = puppet_realloc(
@@ -277,6 +316,7 @@ puppet_program_t *puppet_loader_load_manifest(puppet_loader_t *loader,
         loader->parsed_manifests.file_paths[loader->parsed_manifests.count] = puppet_strdup(file_path);
         loader->parsed_manifests.programs[loader->parsed_manifests.count] = program;
         loader->parsed_manifests.count++;
+        pthread_mutex_unlock(&loader->cache_mutex);
     }
 
     return program;
@@ -402,13 +442,16 @@ bool puppet_loader_include_class(puppet_loader_t *loader,
 bool puppet_loader_is_class_loaded(puppet_loader_t *loader,
                                    const char *class_name) {
     if (!loader || !class_name) return false;
-    
+
+    pthread_mutex_lock(&loader->cache_mutex);
     for (size_t i = 0; i < loader->loaded_classes.count; i++) {
         if (strcmp(loader->loaded_classes.class_names[i], class_name) == 0) {
+            pthread_mutex_unlock(&loader->cache_mutex);
             return true;
         }
     }
-    
+    pthread_mutex_unlock(&loader->cache_mutex);
+
     return false;
 }
 
@@ -432,12 +475,16 @@ bool puppet_loader_has_custom_function(puppet_loader_t *loader,
                                        const char *func_name) {
     if (!loader || !func_name || !loader->modules_path) return false;
 
-    /* Check cache first */
+    /* Check cache first (thread-safe) */
+    pthread_mutex_lock(&loader->cache_mutex);
     for (size_t i = 0; i < loader->custom_functions.count; i++) {
         if (strcmp(loader->custom_functions.func_names[i], func_name) == 0) {
-            return loader->custom_functions.func_exists[i];
+            bool cached = loader->custom_functions.func_exists[i];
+            pthread_mutex_unlock(&loader->cache_mutex);
+            return cached;
         }
     }
+    pthread_mutex_unlock(&loader->cache_mutex);
 
     /* Open modules directory */
     DIR *modules_dir = opendir(loader->modules_path);
@@ -485,7 +532,18 @@ bool puppet_loader_has_custom_function(puppet_loader_t *loader,
 
     closedir(modules_dir);
 
-    /* Add to cache */
+    /* Add to cache (thread-safe) */
+    pthread_mutex_lock(&loader->cache_mutex);
+
+    /* Double-check: another thread may have searched while we were */
+    for (size_t i = 0; i < loader->custom_functions.count; i++) {
+        if (strcmp(loader->custom_functions.func_names[i], func_name) == 0) {
+            bool cached = loader->custom_functions.func_exists[i];
+            pthread_mutex_unlock(&loader->cache_mutex);
+            return cached;
+        }
+    }
+
     if (loader->custom_functions.count >= loader->custom_functions.capacity) {
         loader->custom_functions.capacity *= 2;
         loader->custom_functions.func_names = puppet_realloc(
@@ -498,6 +556,7 @@ bool puppet_loader_has_custom_function(puppet_loader_t *loader,
     loader->custom_functions.func_names[loader->custom_functions.count] = puppet_strdup(func_name);
     loader->custom_functions.func_exists[loader->custom_functions.count] = found;
     loader->custom_functions.count++;
+    pthread_mutex_unlock(&loader->cache_mutex);
 
     return found;
 }

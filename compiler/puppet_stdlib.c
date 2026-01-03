@@ -4991,6 +4991,12 @@ puppet_value_t *puppet_func_inline_template(puppet_expr_list_t *args, puppet_env
         return puppet_value_create_undef();
     }
 
+    /* Skip ERB in parallel mode - return placeholder */
+    if (env && env->skip_erb) {
+        return puppet_value_create_string("[inline_template skipped in parallel mode]",
+                                          strlen("[inline_template skipped in parallel mode]"));
+    }
+
     /* Initialize Ruby if needed (shared context) */
     static puppet_ruby_context_t *ruby_ctx = NULL;
     if (!ruby_ctx) {

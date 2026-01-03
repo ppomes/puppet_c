@@ -16,6 +16,7 @@
 #include "puppet_ast.h"
 #include "puppet_interpreter.h"
 #include <stdbool.h>
+#include <pthread.h>
 
 /**
  * @brief Module loader context
@@ -51,6 +52,9 @@ typedef struct puppet_loader {
         size_t count;
         size_t capacity;
     } parsed_manifests;
+
+    /* Thread synchronization for parallel node processing */
+    pthread_mutex_t cache_mutex;   /**< Protects all caches */
 
     /* Current parsing context */
     puppet_env_t *env;         /**< Environment for evaluation */

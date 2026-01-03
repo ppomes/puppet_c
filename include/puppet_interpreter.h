@@ -21,6 +21,7 @@
 
 #include "puppet_ast.h"
 #include "puppet_catalog.h"
+#include <pthread.h>
 
 /* Forward declarations */
 typedef struct puppet_env puppet_env_t;
@@ -208,6 +209,11 @@ typedef struct puppet_env {
     char *current_node_certname;              /**< Current node being processed (for error tracking) */
     bool current_node_failed;                 /**< Whether current node has errors */
     bool stop_on_error;                       /**< Stop processing on first error (fail-fast) */
+
+    /* Parallel node processing */
+    bool parallel_nodes;                      /**< Process nodes in parallel */
+    bool skip_erb;                            /**< Skip ERB template rendering (for parallel mode) */
+    pthread_mutex_t *stats_mutex;             /**< Mutex for stats updates (shared between threads) */
 } puppet_env_t;
 
 /* Global verbose flag for use before environment is created */
@@ -313,5 +319,10 @@ void puppet_env_get_stats(puppet_env_t *env, size_t *nodes_processed, size_t *no
                           size_t *nodes_skipped_regex, size_t *errors, size_t *warnings);
 void puppet_env_increment_error(puppet_env_t *env);
 void puppet_env_increment_warning(puppet_env_t *env);
+
+/* Parallel node processing */
+void puppet_env_set_parallel_nodes(puppet_env_t *env, bool parallel);
+puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certname);
+void puppet_env_merge_stats(puppet_env_t *target, puppet_env_t *source);
 
 #endif

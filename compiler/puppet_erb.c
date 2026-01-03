@@ -18,12 +18,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <pthread.h>
 
 #include <ruby.h>
 #include <ruby/encoding.h>
 
 // Global Ruby context for VM management
 static puppet_ruby_context_t *global_ruby_ctx = NULL;
+
+// Global mutex for Ruby VM access (Ruby is not thread-safe)
+static pthread_mutex_t ruby_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /**
  * Initialize Ruby VM for ERB template processing
@@ -35,8 +39,12 @@ static puppet_ruby_context_t *global_ruby_ctx = NULL;
  * @return Initialized Ruby context
  */
 puppet_ruby_context_t *puppet_ruby_init(void) {
+    // Acquire lock for thread-safe initialization
+    pthread_mutex_lock(&ruby_mutex);
+
     // Return existing context if already initialized - Ruby can only be initialized once
     if (global_ruby_ctx && global_ruby_ctx->initialized) {
+        pthread_mutex_unlock(&ruby_mutex);
         return global_ruby_ctx;
     }
 
@@ -117,6 +125,7 @@ puppet_ruby_context_t *puppet_ruby_init(void) {
     ctx->initialized = 1;
 
     global_ruby_ctx = ctx;
+    pthread_mutex_unlock(&ruby_mutex);
     return ctx;
 }
 
@@ -364,11 +373,19 @@ static void puppet_export_env_to_ruby(puppet_env_t *env, puppet_ruby_context_t *
 }
 
 char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx) {
+    // Skip ERB rendering if flag is set (for parallel mode)
+    if (env && env->skip_erb) {
+        return puppet_strdup("[ERB skipped in parallel mode]");
+    }
+
     // Use Ruby ERB - this is now required
     if (!ruby_ctx || !ruby_ctx->initialized) {
         printf("Error: Ruby ERB context not initialized\n");
         return NULL;
     }
+
+    // Acquire Ruby mutex for thread-safety (Ruby VM is not thread-safe)
+    pthread_mutex_lock(&ruby_mutex);
 
     // Clear $puppet_vars hash before populating
     int state = 0;
@@ -395,7 +412,9 @@ char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_
     
     if (state == 0) {
         const char *rendered = StringValueCStr(result);
-        return puppet_strdup(rendered);
+        char *result_str = puppet_strdup(rendered);
+        pthread_mutex_unlock(&ruby_mutex);
+        return result_str;
     } else {
         printf("Error: ERB processing failed (state=%d)\n", state);
         if (state == 6) {  // TAG_RAISE - exception occurred
@@ -405,6 +424,7 @@ char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_
                 printf("Ruby exception: %s\n", StringValueCStr(message));
             }
         }
+        pthread_mutex_unlock(&ruby_mutex);
         return NULL;
     }
 }
@@ -546,6 +566,12 @@ puppet_value_t *puppet_func_template(puppet_expr_list_t *args, puppet_env_t *env
     if (!args || args->count < 1) {
         printf("Error: template() function requires at least 1 argument\n");
         return puppet_value_create_undef();
+    }
+
+    // Skip ERB in parallel mode - return placeholder
+    if (env && env->skip_erb) {
+        return puppet_value_create_string("[template skipped in parallel mode]",
+                                          strlen("[template skipped in parallel mode]"));
     }
 
     // Initialize Ruby if needed (once for all templates)
