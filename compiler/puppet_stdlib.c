@@ -164,6 +164,15 @@ static bool puppet_value_is_truthy(puppet_value_t *value) {
 static void exec_lambda_body(puppet_lambda_t *lambda, puppet_env_t *env);
 static puppet_value_t *exec_lambda_with_result(puppet_lambda_t *lambda, puppet_env_t *env);
 
+// Helper to get source location from function arguments
+static puppet_location_t get_args_location(puppet_expr_list_t *args) {
+    puppet_location_t loc = {0};
+    if (args && args->count > 0 && args->exprs[0]) {
+        loc = args->exprs[0]->loc;
+    }
+    return loc;
+}
+
 // Convert Puppet value to display string for logging
 char *puppet_value_to_display_string(puppet_value_t *value) {
     if (!value) return puppet_strdup("(null)");
@@ -259,9 +268,9 @@ static char *concat_args_to_message(puppet_expr_list_t *args, puppet_env_t *env)
  */
 puppet_value_t *puppet_func_fail(puppet_expr_list_t *args, puppet_env_t *env) {
     char *message = concat_args_to_message(args, env);
-    
+
     // Log as critical error
-    puppet_log(PUPPET_LOG_CRITICAL, message);
+    puppet_log_loc(PUPPET_LOG_CRITICAL, get_args_location(args), "%s", message);
 
     // Set compilation failure flag in environment
     if (env) {
@@ -286,7 +295,7 @@ puppet_value_t *puppet_func_fail(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_notice(puppet_expr_list_t *args, puppet_env_t *env) {
     char *message = concat_args_to_message(args, env);
-    puppet_log(PUPPET_LOG_NOTICE, message);
+    puppet_log_loc(PUPPET_LOG_NOTICE, get_args_location(args), "%s", message);
     puppet_free(message);
     return puppet_value_create_undef();
 }
@@ -298,7 +307,7 @@ puppet_value_t *puppet_func_notice(puppet_expr_list_t *args, puppet_env_t *env) 
  */
 puppet_value_t *puppet_func_info(puppet_expr_list_t *args, puppet_env_t *env) {
     char *message = concat_args_to_message(args, env);
-    puppet_log(PUPPET_LOG_INFO, message);
+    puppet_log_loc(PUPPET_LOG_INFO, get_args_location(args), "%s", message);
     puppet_free(message);
     return puppet_value_create_undef();
 }
@@ -310,7 +319,7 @@ puppet_value_t *puppet_func_info(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_warning(puppet_expr_list_t *args, puppet_env_t *env) {
     char *message = concat_args_to_message(args, env);
-    puppet_log(PUPPET_LOG_WARNING, message);
+    puppet_log_loc(PUPPET_LOG_WARNING, get_args_location(args), "%s", message);
     puppet_free(message);
     return puppet_value_create_undef();
 }
@@ -322,7 +331,7 @@ puppet_value_t *puppet_func_warning(puppet_expr_list_t *args, puppet_env_t *env)
  */
 puppet_value_t *puppet_func_err(puppet_expr_list_t *args, puppet_env_t *env) {
     char *message = concat_args_to_message(args, env);
-    puppet_log(PUPPET_LOG_ERROR, message);
+    puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args), "%s", message);
     puppet_free(message);
     return puppet_value_create_undef();
 }
@@ -334,7 +343,7 @@ puppet_value_t *puppet_func_err(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_debug(puppet_expr_list_t *args, puppet_env_t *env) {
     char *message = concat_args_to_message(args, env);
-    puppet_log(PUPPET_LOG_DEBUG, message);
+    puppet_log_loc(PUPPET_LOG_DEBUG, get_args_location(args), "%s", message);
     puppet_free(message);
     return puppet_value_create_undef();
 }
@@ -347,7 +356,8 @@ puppet_value_t *puppet_func_debug(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_defined(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count != 1) {
-        puppet_log(PUPPET_LOG_ERROR, "defined() requires exactly one argument");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "defined() requires exactly one argument");
         return puppet_value_create_bool(false);
     }
     
@@ -518,7 +528,7 @@ void realize_single_resource(puppet_stmt_t *stmt, size_t instance_idx, puppet_en
  */
 puppet_value_t *puppet_func_realize(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count == 0) {
-        puppet_log(PUPPET_LOG_ERROR, "realize() requires at least one argument");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args), "realize() requires at least one argument");
         return puppet_value_create_undef();
     }
 
@@ -561,9 +571,8 @@ puppet_value_t *puppet_func_realize(puppet_expr_list_t *args, puppet_env_t *env)
             puppet_virtual_resource_t *vres = (puppet_virtual_resource_t *)stored->data.string.data;
 
             if (vres->realized) {
-                char msg[512];
-                snprintf(msg, sizeof(msg), "Virtual resource %s already realized", ref_str);
-                puppet_log(PUPPET_LOG_WARNING, msg);
+                puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
+                    "Virtual resource %s already realized", ref_str);
             } else {
                 /* Build resource identifier for duplicate check */
                 size_t res_id_len = strlen(vres->type) + strlen(vres->title) + 3;
@@ -573,9 +582,8 @@ puppet_value_t *puppet_func_realize(puppet_expr_list_t *args, puppet_env_t *env)
                 /* Check for duplicate in resource catalog */
                 puppet_value_t *existing = puppet_hash_get(env->resource_catalog, resource_id, strlen(resource_id));
                 if (existing) {
-                    char msg[512];
-                    snprintf(msg, sizeof(msg), "Duplicate declaration - %s is already declared", resource_id);
-                    puppet_log(PUPPET_LOG_ERROR, msg);
+                    puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[i]->loc,
+                        "Duplicate declaration - %s is already declared", resource_id);
                     puppet_free(resource_id);
                 } else {
                     /* Add to resource catalog */
@@ -608,15 +616,12 @@ puppet_value_t *puppet_func_realize(puppet_expr_list_t *args, puppet_env_t *env)
                     vres->realized = true;
                     puppet_free(resource_id);
 
-                    char msg[512];
-                    snprintf(msg, sizeof(msg), "Realized: %s", ref_str);
-                    puppet_log(PUPPET_LOG_INFO, msg);
+                    puppet_log_loc(PUPPET_LOG_INFO, args->exprs[i]->loc, "Realized: %s", ref_str);
                 }
             }
         } else {
-            char msg[512];
-            snprintf(msg, sizeof(msg), "realize: %s is not a virtual resource", ref_str);
-            puppet_log(PUPPET_LOG_WARNING, msg);
+            puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
+                "realize: %s is not a virtual resource", ref_str);
         }
 
         puppet_free(lookup_key);
@@ -636,30 +641,31 @@ puppet_value_t *puppet_func_realize(puppet_expr_list_t *args, puppet_env_t *env)
  */
 puppet_value_t *puppet_func_tag(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count == 0) {
-        puppet_log(PUPPET_LOG_ERROR, "tag() requires at least one argument");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "tag() requires at least one argument");
         return puppet_value_create_undef();
     }
-    
+
     // Initialize tags array if not already present
     if (!env->current_tags) {
         env->current_tags = puppet_value_create_array();
     }
-    
+
     // Add each tag to the current scope
     for (size_t i = 0; i < args->count; i++) {
         puppet_value_t *tag_val = puppet_eval_expr(args->exprs[i], env);
-        
+
         if (tag_val->type == PUPPET_VALUE_STRING) {
             // Add to tags array
             puppet_array_append(env->current_tags->data.array, puppet_value_copy(tag_val));
-            
-            char message[256];
-            snprintf(message, sizeof(message), "Added tag: %s", tag_val->data.string.data);
-            puppet_log(PUPPET_LOG_DEBUG, message);
+
+            puppet_log_loc(PUPPET_LOG_DEBUG, args->exprs[i]->loc,
+                "Added tag: %s", tag_val->data.string.data);
         } else {
-            puppet_log(PUPPET_LOG_WARNING, "tag() argument must be a string");
+            puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
+                "tag() argument must be a string");
         }
-        
+
         puppet_value_destroy(tag_val);
     }
     
@@ -673,7 +679,8 @@ puppet_value_t *puppet_func_tag(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_tagged(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count != 1) {
-        puppet_log(PUPPET_LOG_ERROR, "tagged() requires exactly one argument");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "tagged() requires exactly one argument");
         return puppet_value_create_bool(false);
     }
     
@@ -709,7 +716,8 @@ puppet_value_t *puppet_func_tagged(puppet_expr_list_t *args, puppet_env_t *env) 
  */
 puppet_value_t *puppet_func_lookup(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count == 0) {
-        puppet_log(PUPPET_LOG_ERROR, "lookup() requires at least one argument");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "lookup() requires at least one argument");
         return puppet_value_create_undef();
     }
     
@@ -723,7 +731,8 @@ puppet_value_t *puppet_func_lookup(puppet_expr_list_t *args, puppet_env_t *env) 
         /* puppet_value_t *merge_val = puppet_hash_get(first_arg->data.hash, "merge", strlen("merge")); */ /* Currently unused */
         
         if (!key_val || key_val->type != PUPPET_VALUE_STRING) {
-            puppet_log(PUPPET_LOG_ERROR, "lookup() options hash must contain 'key' string");
+            puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+                "lookup() options hash must contain 'key' string");
             puppet_value_destroy(first_arg);
             return puppet_value_create_undef();
         }
@@ -755,7 +764,8 @@ puppet_value_t *puppet_func_lookup(puppet_expr_list_t *args, puppet_env_t *env) 
     
     // Simple lookup(key) or lookup(key, default) style
     if (first_arg->type != PUPPET_VALUE_STRING) {
-        puppet_log(PUPPET_LOG_ERROR, "lookup() key must be a string");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "lookup() key must be a string");
         puppet_value_destroy(first_arg);
         return puppet_value_create_undef();
     }
@@ -807,7 +817,8 @@ puppet_value_t *puppet_func_lookup(puppet_expr_list_t *args, puppet_env_t *env) 
  */
 puppet_value_t *puppet_func_split(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 2) {
-        puppet_log(PUPPET_LOG_ERROR, "split() requires 2 arguments: string and pattern");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "split() requires 2 arguments: string and pattern");
         return puppet_value_create_undef();
     }
 
@@ -816,14 +827,16 @@ puppet_value_t *puppet_func_split(puppet_expr_list_t *args, puppet_env_t *env) {
     puppet_value_t *pattern_val = puppet_eval_expr(args->exprs[1], env);
 
     if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
-        puppet_log(PUPPET_LOG_ERROR, "split() first argument must be a string");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "split() first argument must be a string");
         if (str_val) puppet_value_destroy(str_val);
         if (pattern_val) puppet_value_destroy(pattern_val);
         return puppet_value_create_undef();
     }
 
     if (!pattern_val || pattern_val->type != PUPPET_VALUE_STRING) {
-        puppet_log(PUPPET_LOG_ERROR, "split() second argument must be a string pattern");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[1]->loc,
+            "split() second argument must be a string pattern");
         puppet_value_destroy(str_val);
         if (pattern_val) puppet_value_destroy(pattern_val);
         return puppet_value_create_undef();
@@ -883,7 +896,8 @@ puppet_value_t *puppet_func_split(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_join(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 2) {
-        puppet_log(PUPPET_LOG_ERROR, "join() requires 2 arguments: array and separator");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "join() requires 2 arguments: array and separator");
         return puppet_value_create_undef();
     }
 
@@ -892,14 +906,16 @@ puppet_value_t *puppet_func_join(puppet_expr_list_t *args, puppet_env_t *env) {
     puppet_value_t *sep_val = puppet_eval_expr(args->exprs[1], env);
 
     if (!array_val || array_val->type != PUPPET_VALUE_ARRAY) {
-        puppet_log(PUPPET_LOG_ERROR, "join() first argument must be an array");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "join() first argument must be an array");
         if (array_val) puppet_value_destroy(array_val);
         if (sep_val) puppet_value_destroy(sep_val);
         return puppet_value_create_undef();
     }
 
     if (!sep_val || sep_val->type != PUPPET_VALUE_STRING) {
-        puppet_log(PUPPET_LOG_ERROR, "join() second argument must be a string separator");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[1]->loc,
+            "join() second argument must be a string separator");
         puppet_value_destroy(array_val);
         if (sep_val) puppet_value_destroy(sep_val);
         return puppet_value_create_undef();
@@ -965,14 +981,16 @@ puppet_value_t *puppet_func_join(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_downcase(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "downcase() requires 1 argument: string");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "downcase() requires 1 argument: string");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
-        puppet_log(PUPPET_LOG_ERROR, "downcase() argument must be a string");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "downcase() argument must be a string");
         if (str_val) puppet_value_destroy(str_val);
         return puppet_value_create_undef();
     }
@@ -1011,14 +1029,16 @@ puppet_value_t *puppet_func_downcase(puppet_expr_list_t *args, puppet_env_t *env
  */
 puppet_value_t *puppet_func_upcase(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "upcase() requires 1 argument: string");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "upcase() requires 1 argument: string");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
-        puppet_log(PUPPET_LOG_ERROR, "upcase() argument must be a string");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "upcase() argument must be a string");
         if (str_val) puppet_value_destroy(str_val);
         return puppet_value_create_undef();
     }
@@ -1057,14 +1077,16 @@ puppet_value_t *puppet_func_upcase(puppet_expr_list_t *args, puppet_env_t *env) 
  */
 puppet_value_t *puppet_func_strip(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "strip() requires 1 argument: string");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "strip() requires 1 argument: string");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
-        puppet_log(PUPPET_LOG_ERROR, "strip() argument must be a string");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "strip() argument must be a string");
         if (str_val) puppet_value_destroy(str_val);
         return puppet_value_create_undef();
     }
@@ -1112,14 +1134,16 @@ puppet_value_t *puppet_func_strip(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_lstrip(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "lstrip() requires 1 argument: string");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "lstrip() requires 1 argument: string");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
-        puppet_log(PUPPET_LOG_ERROR, "lstrip() argument must be a string");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "lstrip() argument must be a string");
         if (str_val) puppet_value_destroy(str_val);
         return puppet_value_create_undef();
     }
@@ -1160,14 +1184,16 @@ puppet_value_t *puppet_func_lstrip(puppet_expr_list_t *args, puppet_env_t *env) 
  */
 puppet_value_t *puppet_func_rstrip(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "rstrip() requires 1 argument: string");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "rstrip() requires 1 argument: string");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
-        puppet_log(PUPPET_LOG_ERROR, "rstrip() argument must be a string");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "rstrip() argument must be a string");
         if (str_val) puppet_value_destroy(str_val);
         return puppet_value_create_undef();
     }
@@ -1208,14 +1234,16 @@ puppet_value_t *puppet_func_rstrip(puppet_expr_list_t *args, puppet_env_t *env) 
  */
 puppet_value_t *puppet_func_chomp(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "chomp() requires 1 argument: string");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "chomp() requires 1 argument: string");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
-        puppet_log(PUPPET_LOG_ERROR, "chomp() argument must be a string");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "chomp() argument must be a string");
         if (str_val) puppet_value_destroy(str_val);
         return puppet_value_create_undef();
     }
@@ -1255,14 +1283,16 @@ puppet_value_t *puppet_func_chomp(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_chop(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "chop() requires 1 argument: string");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "chop() requires 1 argument: string");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
-        puppet_log(PUPPET_LOG_ERROR, "chop() argument must be a string");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "chop() argument must be a string");
         if (str_val) puppet_value_destroy(str_val);
         return puppet_value_create_undef();
     }
@@ -1296,14 +1326,16 @@ puppet_value_t *puppet_func_chop(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_capitalize(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "capitalize() requires 1 argument: string");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "capitalize() requires 1 argument: string");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!str_val || str_val->type != PUPPET_VALUE_STRING) {
-        puppet_log(PUPPET_LOG_ERROR, "capitalize() argument must be a string");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "capitalize() argument must be a string");
         if (str_val) puppet_value_destroy(str_val);
         return puppet_value_create_undef();
     }
@@ -1341,7 +1373,8 @@ puppet_value_t *puppet_func_capitalize(puppet_expr_list_t *args, puppet_env_t *e
  */
 puppet_value_t *puppet_func_size(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "size() requires 1 argument");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "size() requires 1 argument");
         return puppet_value_create_undef();
     }
 
@@ -1368,7 +1401,8 @@ puppet_value_t *puppet_func_size(puppet_expr_list_t *args, puppet_env_t *env) {
             }
             break;
         default:
-            puppet_log(PUPPET_LOG_ERROR, "size() argument must be a string, array, or hash");
+            puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+                "size() argument must be a string, array, or hash");
             puppet_value_destroy(val);
             return puppet_value_create_undef();
     }
@@ -1392,7 +1426,8 @@ puppet_value_t *puppet_func_size(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_empty(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "empty() requires 1 argument");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "empty() requires 1 argument");
         return puppet_value_create_undef();
     }
 
@@ -1441,14 +1476,16 @@ puppet_value_t *puppet_func_empty(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_keys(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "keys() requires 1 argument: hash");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "keys() requires 1 argument: hash");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *hash_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!hash_val || hash_val->type != PUPPET_VALUE_HASH) {
-        puppet_log(PUPPET_LOG_ERROR, "keys() argument must be a hash");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "keys() argument must be a hash");
         if (hash_val) puppet_value_destroy(hash_val);
         return puppet_value_create_undef();
     }
@@ -1482,14 +1519,16 @@ puppet_value_t *puppet_func_keys(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_values(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "values() requires 1 argument: hash");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "values() requires 1 argument: hash");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *hash_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!hash_val || hash_val->type != PUPPET_VALUE_HASH) {
-        puppet_log(PUPPET_LOG_ERROR, "values() argument must be a hash");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "values() argument must be a hash");
         if (hash_val) puppet_value_destroy(hash_val);
         return puppet_value_create_undef();
     }
@@ -1522,7 +1561,8 @@ puppet_value_t *puppet_func_values(puppet_expr_list_t *args, puppet_env_t *env) 
  */
 puppet_value_t *puppet_func_has_key(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 2) {
-        puppet_log(PUPPET_LOG_ERROR, "has_key() requires 2 arguments: hash and key");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "has_key() requires 2 arguments: hash and key");
         return puppet_value_create_bool(false);
     }
 
@@ -1530,14 +1570,16 @@ puppet_value_t *puppet_func_has_key(puppet_expr_list_t *args, puppet_env_t *env)
     puppet_value_t *key_val = puppet_eval_expr(args->exprs[1], env);
 
     if (!hash_val || hash_val->type != PUPPET_VALUE_HASH) {
-        puppet_log(PUPPET_LOG_ERROR, "has_key() first argument must be a hash");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "has_key() first argument must be a hash");
         if (hash_val) puppet_value_destroy(hash_val);
         if (key_val) puppet_value_destroy(key_val);
         return puppet_value_create_bool(false);
     }
 
     if (!key_val || key_val->type != PUPPET_VALUE_STRING) {
-        puppet_log(PUPPET_LOG_ERROR, "has_key() second argument must be a string");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[1]->loc,
+            "has_key() second argument must be a string");
         puppet_value_destroy(hash_val);
         if (key_val) puppet_value_destroy(key_val);
         return puppet_value_create_bool(false);
@@ -1568,7 +1610,8 @@ puppet_value_t *puppet_func_has_key(puppet_expr_list_t *args, puppet_env_t *env)
  */
 puppet_value_t *puppet_func_member(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 2) {
-        puppet_log(PUPPET_LOG_ERROR, "member() requires 2 arguments: array and value");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "member() requires 2 arguments: array and value");
         return puppet_value_create_bool(false);
     }
 
@@ -1576,7 +1619,8 @@ puppet_value_t *puppet_func_member(puppet_expr_list_t *args, puppet_env_t *env) 
     puppet_value_t *search_val = puppet_eval_expr(args->exprs[1], env);
 
     if (!array_val || array_val->type != PUPPET_VALUE_ARRAY) {
-        puppet_log(PUPPET_LOG_ERROR, "member() first argument must be an array");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "member() first argument must be an array");
         if (array_val) puppet_value_destroy(array_val);
         if (search_val) puppet_value_destroy(search_val);
         return puppet_value_create_bool(false);
@@ -1631,14 +1675,16 @@ puppet_value_t *puppet_func_member(puppet_expr_list_t *args, puppet_env_t *env) 
  */
 puppet_value_t *puppet_func_reverse(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "reverse() requires 1 argument: array");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "reverse() requires 1 argument: array");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *array_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!array_val || array_val->type != PUPPET_VALUE_ARRAY) {
-        puppet_log(PUPPET_LOG_ERROR, "reverse() argument must be an array");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "reverse() argument must be an array");
         if (array_val) puppet_value_destroy(array_val);
         return puppet_value_create_undef();
     }
@@ -1667,14 +1713,16 @@ puppet_value_t *puppet_func_reverse(puppet_expr_list_t *args, puppet_env_t *env)
  */
 puppet_value_t *puppet_func_unique(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "unique() requires 1 argument: array");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "unique() requires 1 argument: array");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *array_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!array_val || array_val->type != PUPPET_VALUE_ARRAY) {
-        puppet_log(PUPPET_LOG_ERROR, "unique() argument must be an array");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "unique() argument must be an array");
         if (array_val) puppet_value_destroy(array_val);
         return puppet_value_create_undef();
     }
@@ -1751,14 +1799,16 @@ static int compare_numbers(const void *a, const void *b) {
  */
 puppet_value_t *puppet_func_sort(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "sort() requires 1 argument: array");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "sort() requires 1 argument: array");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *array_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!array_val || array_val->type != PUPPET_VALUE_ARRAY) {
-        puppet_log(PUPPET_LOG_ERROR, "sort() argument must be an array");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "sort() argument must be an array");
         if (array_val) puppet_value_destroy(array_val);
         return puppet_value_create_undef();
     }
@@ -1815,14 +1865,16 @@ static void flatten_recursive(puppet_value_t *item, puppet_array_t *result) {
  */
 puppet_value_t *puppet_func_flatten(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "flatten() requires 1 argument: array");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "flatten() requires 1 argument: array");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *array_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!array_val || array_val->type != PUPPET_VALUE_ARRAY) {
-        puppet_log(PUPPET_LOG_ERROR, "flatten() argument must be an array");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "flatten() argument must be an array");
         if (array_val) puppet_value_destroy(array_val);
         return puppet_value_create_undef();
     }
@@ -1850,7 +1902,8 @@ puppet_value_t *puppet_func_flatten(puppet_expr_list_t *args, puppet_env_t *env)
  */
 puppet_value_t *puppet_func_concat(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "concat() requires at least 1 argument");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "concat() requires at least 1 argument");
         return puppet_value_create_undef();
     }
 
@@ -1885,7 +1938,8 @@ puppet_value_t *puppet_func_concat(puppet_expr_list_t *args, puppet_env_t *env) 
  */
 puppet_value_t *puppet_func_delete(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 2) {
-        puppet_log(PUPPET_LOG_ERROR, "delete() requires 2 arguments: collection, value");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "delete() requires 2 arguments: collection, value");
         return puppet_value_create_undef();
     }
 
@@ -1960,7 +2014,8 @@ puppet_value_t *puppet_func_delete(puppet_expr_list_t *args, puppet_env_t *env) 
         return result;
     }
 
-    puppet_log(PUPPET_LOG_ERROR, "delete() first argument must be an array or hash");
+    puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+        "delete() first argument must be an array or hash");
     puppet_value_destroy(coll);
     if (target) puppet_value_destroy(target);
     return puppet_value_create_undef();
@@ -1979,7 +2034,8 @@ puppet_value_t *puppet_func_delete(puppet_expr_list_t *args, puppet_env_t *env) 
  */
 puppet_value_t *puppet_func_delete_at(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 2) {
-        puppet_log(PUPPET_LOG_ERROR, "delete_at() requires 2 arguments: array, index");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "delete_at() requires 2 arguments: array, index");
         return puppet_value_create_undef();
     }
 
@@ -1987,14 +2043,16 @@ puppet_value_t *puppet_func_delete_at(puppet_expr_list_t *args, puppet_env_t *en
     puppet_value_t *idx_val = puppet_eval_expr(args->exprs[1], env);
 
     if (!arr || arr->type != PUPPET_VALUE_ARRAY) {
-        puppet_log(PUPPET_LOG_ERROR, "delete_at() first argument must be an array");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "delete_at() first argument must be an array");
         if (arr) puppet_value_destroy(arr);
         if (idx_val) puppet_value_destroy(idx_val);
         return puppet_value_create_undef();
     }
 
     if (!idx_val || idx_val->type != PUPPET_VALUE_NUMBER) {
-        puppet_log(PUPPET_LOG_ERROR, "delete_at() second argument must be a number");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[1]->loc,
+            "delete_at() second argument must be a number");
         puppet_value_destroy(arr);
         if (idx_val) puppet_value_destroy(idx_val);
         return puppet_value_create_undef();
@@ -2034,14 +2092,16 @@ puppet_value_t *puppet_func_delete_at(puppet_expr_list_t *args, puppet_env_t *en
  */
 puppet_value_t *puppet_func_first(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "first() requires 1 argument: array");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "first() requires 1 argument: array");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *arr = puppet_eval_expr(args->exprs[0], env);
 
     if (!arr || arr->type != PUPPET_VALUE_ARRAY) {
-        puppet_log(PUPPET_LOG_ERROR, "first() argument must be an array");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "first() argument must be an array");
         if (arr) puppet_value_destroy(arr);
         return puppet_value_create_undef();
     }
@@ -2068,14 +2128,16 @@ puppet_value_t *puppet_func_first(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_last(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "last() requires 1 argument: array");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "last() requires 1 argument: array");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *arr = puppet_eval_expr(args->exprs[0], env);
 
     if (!arr || arr->type != PUPPET_VALUE_ARRAY) {
-        puppet_log(PUPPET_LOG_ERROR, "last() argument must be an array");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "last() argument must be an array");
         if (arr) puppet_value_destroy(arr);
         return puppet_value_create_undef();
     }
@@ -2104,7 +2166,8 @@ puppet_value_t *puppet_func_last(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_range(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 2) {
-        puppet_log(PUPPET_LOG_ERROR, "range() requires at least 2 arguments: start, end");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "range() requires at least 2 arguments: start, end");
         return puppet_value_create_undef();
     }
 
@@ -2182,7 +2245,8 @@ puppet_value_t *puppet_func_range(puppet_expr_list_t *args, puppet_env_t *env) {
             }
         }
     } else {
-        puppet_log(PUPPET_LOG_ERROR, "range() requires numeric or single-character string arguments");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "range() requires numeric or single-character string arguments");
     }
 
     puppet_value_destroy(start_val);
@@ -2205,7 +2269,8 @@ puppet_value_t *puppet_func_range(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_merge(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "merge() requires at least 1 argument");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "merge() requires at least 1 argument");
         return puppet_value_create_undef();
     }
 
@@ -2221,7 +2286,8 @@ puppet_value_t *puppet_func_merge(puppet_expr_list_t *args, puppet_env_t *env) {
         }
 
         if (hash_val->type != PUPPET_VALUE_HASH) {
-            puppet_log(PUPPET_LOG_WARNING, "merge() skipping non-hash argument");
+            puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
+                "merge() skipping non-hash argument");
             puppet_value_destroy(hash_val);
             continue;
         }
@@ -2320,14 +2386,16 @@ puppet_value_t *puppet_func_is_bool(puppet_expr_list_t *args, puppet_env_t *env)
  */
 puppet_value_t *puppet_func_abs(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "abs() requires 1 argument: number");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "abs() requires 1 argument: number");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *num_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!num_val || num_val->type != PUPPET_VALUE_NUMBER) {
-        puppet_log(PUPPET_LOG_ERROR, "abs() argument must be a number");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "abs() argument must be a number");
         if (num_val) puppet_value_destroy(num_val);
         return puppet_value_create_undef();
     }
@@ -2354,7 +2422,8 @@ puppet_value_t *puppet_func_abs(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_min(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "min() requires at least 1 argument");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "min() requires at least 1 argument");
         return puppet_value_create_undef();
     }
 
@@ -2390,7 +2459,8 @@ puppet_value_t *puppet_func_min(puppet_expr_list_t *args, puppet_env_t *env) {
 
     /* min(a, b, ...) form */
     if (!first || first->type != PUPPET_VALUE_NUMBER) {
-        puppet_log(PUPPET_LOG_ERROR, "min() arguments must be numbers or an array");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "min() arguments must be numbers or an array");
         if (first) puppet_value_destroy(first);
         return puppet_value_create_undef();
     }
@@ -2424,7 +2494,8 @@ puppet_value_t *puppet_func_min(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_max(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "max() requires at least 1 argument");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "max() requires at least 1 argument");
         return puppet_value_create_undef();
     }
 
@@ -2460,7 +2531,8 @@ puppet_value_t *puppet_func_max(puppet_expr_list_t *args, puppet_env_t *env) {
 
     /* max(a, b, ...) form */
     if (!first || first->type != PUPPET_VALUE_NUMBER) {
-        puppet_log(PUPPET_LOG_ERROR, "max() arguments must be numbers or an array");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "max() arguments must be numbers or an array");
         if (first) puppet_value_destroy(first);
         return puppet_value_create_undef();
     }
@@ -2486,14 +2558,16 @@ puppet_value_t *puppet_func_max(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_floor(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "floor() requires 1 argument: number");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "floor() requires 1 argument: number");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *num_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!num_val || num_val->type != PUPPET_VALUE_NUMBER) {
-        puppet_log(PUPPET_LOG_ERROR, "floor() argument must be a number");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "floor() argument must be a number");
         if (num_val) puppet_value_destroy(num_val);
         return puppet_value_create_undef();
     }
@@ -2508,14 +2582,16 @@ puppet_value_t *puppet_func_floor(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_ceil(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "ceil() requires 1 argument: number");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "ceil() requires 1 argument: number");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *num_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!num_val || num_val->type != PUPPET_VALUE_NUMBER) {
-        puppet_log(PUPPET_LOG_ERROR, "ceil() argument must be a number");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "ceil() argument must be a number");
         if (num_val) puppet_value_destroy(num_val);
         return puppet_value_create_undef();
     }
@@ -2530,14 +2606,16 @@ puppet_value_t *puppet_func_ceil(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_round(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "round() requires 1 argument: number");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "round() requires 1 argument: number");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *num_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!num_val || num_val->type != PUPPET_VALUE_NUMBER) {
-        puppet_log(PUPPET_LOG_ERROR, "round() argument must be a number");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "round() argument must be a number");
         if (num_val) puppet_value_destroy(num_val);
         return puppet_value_create_undef();
     }
@@ -2552,20 +2630,23 @@ puppet_value_t *puppet_func_round(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_sqrt(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "sqrt() requires 1 argument: number");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "sqrt() requires 1 argument: number");
         return puppet_value_create_undef();
     }
 
     puppet_value_t *num_val = puppet_eval_expr(args->exprs[0], env);
 
     if (!num_val || num_val->type != PUPPET_VALUE_NUMBER) {
-        puppet_log(PUPPET_LOG_ERROR, "sqrt() argument must be a number");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "sqrt() argument must be a number");
         if (num_val) puppet_value_destroy(num_val);
         return puppet_value_create_undef();
     }
 
     if (num_val->data.number < 0) {
-        puppet_log(PUPPET_LOG_ERROR, "sqrt() argument must be non-negative");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "sqrt() argument must be non-negative");
         puppet_value_destroy(num_val);
         return puppet_value_create_undef();
     }
@@ -2588,7 +2669,8 @@ puppet_value_t *puppet_func_sqrt(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_basename(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "basename() requires 1 argument: path");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "basename() requires 1 argument: path");
         return puppet_value_create_undef();
     }
 
@@ -3783,7 +3865,8 @@ puppet_value_t *puppet_func_reduce(puppet_expr_t *expr, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_validate_re(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 2) {
-        puppet_log(PUPPET_LOG_ERROR, "validate_re() requires at least 2 arguments");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "validate_re() requires at least 2 arguments");
         return puppet_value_create_undef();
     }
 
@@ -3791,12 +3874,14 @@ puppet_value_t *puppet_func_validate_re(puppet_expr_list_t *args, puppet_env_t *
     /* Handle undef gracefully - treat as empty string for validation */
     if (!str_val || str_val->type == PUPPET_VALUE_UNDEF) {
         if (str_val) puppet_value_destroy(str_val);
-        puppet_log(PUPPET_LOG_WARNING, "validate_re() first argument is undef, skipping validation");
+        puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[0]->loc,
+            "validate_re() first argument is undef, skipping validation");
         return puppet_value_create_bool(true);  /* Allow undef to pass validation */
     }
     if (str_val->type != PUPPET_VALUE_STRING) {
         if (str_val) puppet_value_destroy(str_val);
-        puppet_log(PUPPET_LOG_ERROR, "validate_re() first argument must be a string");
+        puppet_log_loc(PUPPET_LOG_ERROR, args->exprs[0]->loc,
+            "validate_re() first argument must be a string");
         return puppet_value_create_undef();
     }
 
@@ -3835,7 +3920,8 @@ puppet_value_t *puppet_func_validate_re(puppet_expr_list_t *args, puppet_env_t *
 
     if (!matched) {
         /* Log warning but don't fail - this allows catalog compilation to continue */
-        puppet_log(PUPPET_LOG_WARNING, "validate_re(): string does not match pattern");
+        puppet_log_loc(PUPPET_LOG_WARNING, get_args_location(args),
+            "validate_re(): string does not match pattern");
     }
 
     return puppet_value_create_bool(matched);
@@ -3850,7 +3936,8 @@ puppet_value_t *puppet_func_validate_re(puppet_expr_list_t *args, puppet_env_t *
  */
 puppet_value_t *puppet_func_validate_hash(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "validate_hash() requires 1 argument");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "validate_hash() requires 1 argument");
         return puppet_value_create_undef();
     }
 
@@ -3860,7 +3947,8 @@ puppet_value_t *puppet_func_validate_hash(puppet_expr_list_t *args, puppet_env_t
     if (val) puppet_value_destroy(val);
 
     if (!is_hash) {
-        puppet_log(PUPPET_LOG_WARNING, "validate_hash(): value is not a hash");
+        puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[0]->loc,
+            "validate_hash(): value is not a hash");
     }
 
     return puppet_value_create_bool(is_hash);
@@ -3875,7 +3963,8 @@ puppet_value_t *puppet_func_validate_hash(puppet_expr_list_t *args, puppet_env_t
  */
 puppet_value_t *puppet_func_validate_string(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "validate_string() requires 1 argument");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "validate_string() requires 1 argument");
         return puppet_value_create_undef();
     }
 
@@ -3885,7 +3974,8 @@ puppet_value_t *puppet_func_validate_string(puppet_expr_list_t *args, puppet_env
     if (val) puppet_value_destroy(val);
 
     if (!is_string) {
-        puppet_log(PUPPET_LOG_WARNING, "validate_string(): value is not a string");
+        puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[0]->loc,
+            "validate_string(): value is not a string");
     }
 
     return puppet_value_create_bool(is_string);
@@ -3900,7 +3990,8 @@ puppet_value_t *puppet_func_validate_string(puppet_expr_list_t *args, puppet_env
  */
 puppet_value_t *puppet_func_validate_array(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "validate_array() requires 1 argument");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "validate_array() requires 1 argument");
         return puppet_value_create_undef();
     }
 
@@ -3910,7 +4001,8 @@ puppet_value_t *puppet_func_validate_array(puppet_expr_list_t *args, puppet_env_
     if (val) puppet_value_destroy(val);
 
     if (!is_array) {
-        puppet_log(PUPPET_LOG_WARNING, "validate_array(): value is not an array");
+        puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[0]->loc,
+            "validate_array(): value is not an array");
     }
 
     return puppet_value_create_bool(is_array);
@@ -3925,7 +4017,8 @@ puppet_value_t *puppet_func_validate_array(puppet_expr_list_t *args, puppet_env_
  */
 puppet_value_t *puppet_func_validate_bool(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "validate_bool() requires 1 argument");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "validate_bool() requires 1 argument");
         return puppet_value_create_undef();
     }
 
@@ -3935,7 +4028,8 @@ puppet_value_t *puppet_func_validate_bool(puppet_expr_list_t *args, puppet_env_t
     if (val) puppet_value_destroy(val);
 
     if (!is_bool) {
-        puppet_log(PUPPET_LOG_WARNING, "validate_bool(): value is not a boolean");
+        puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[0]->loc,
+            "validate_bool(): value is not a boolean");
     }
 
     return puppet_value_create_bool(is_bool);
@@ -4912,7 +5006,8 @@ puppet_value_t *puppet_func_hiera(puppet_expr_list_t *args, puppet_env_t *env) {
         return default_val;
     }
 
-    puppet_log(PUPPET_LOG_WARNING, "hiera(): key not found and no default provided");
+    puppet_log_loc(PUPPET_LOG_WARNING, get_args_location(args),
+        "hiera(): key not found and no default provided");
     return puppet_value_create_undef();
 }
 
@@ -4924,14 +5019,15 @@ puppet_value_t *puppet_func_hiera(puppet_expr_list_t *args, puppet_env_t *env) {
  */
 puppet_value_t *puppet_func_getvar(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
-        puppet_log(PUPPET_LOG_ERROR, "getvar() requires at least 1 argument (variable name)");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "getvar() requires at least 1 argument (variable name)");
         return puppet_value_create_undef();
     }
 
     /* Get the variable name */
     puppet_value_t *name_val = puppet_eval_expr(args->exprs[0], env);
     if (!name_val || name_val->type != PUPPET_VALUE_STRING) {
-        puppet_log(PUPPET_LOG_ERROR, "getvar() argument must be a string");
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args), "getvar() argument must be a string");
         if (name_val) puppet_value_destroy(name_val);
         return puppet_value_create_undef();
     }
