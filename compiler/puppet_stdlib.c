@@ -3279,6 +3279,12 @@ puppet_value_t *puppet_func_each(puppet_expr_t *expr, puppet_env_t *env) {
         return puppet_value_create_undef();
     }
 
+    /* Handle undef gracefully - treat as empty collection (zero iterations) */
+    if (collection->type == PUPPET_VALUE_UNDEF) {
+        puppet_value_destroy(collection);
+        return puppet_value_create_undef();
+    }
+
     /* Get lambda parameter names */
     size_t param_count = lambda->params.count;
     const char *param1_name = NULL;
@@ -3454,6 +3460,12 @@ puppet_value_t *puppet_func_map(puppet_expr_t *expr, puppet_env_t *env) {
         return puppet_value_create_undef();
     }
 
+    /* Handle undef gracefully - return empty array */
+    if (collection->type == PUPPET_VALUE_UNDEF) {
+        puppet_value_destroy(collection);
+        return puppet_value_create_array();
+    }
+
     /* Get lambda parameter names */
     size_t param_count = lambda->params.count;
     const char *param1_name = NULL;
@@ -3588,6 +3600,12 @@ puppet_value_t *puppet_func_filter(puppet_expr_t *expr, puppet_env_t *env) {
     puppet_value_t *collection = puppet_eval_expr(expr->data.funcall.args.exprs[0], env);
     if (!collection) {
         return puppet_value_create_undef();
+    }
+
+    /* Handle undef gracefully - return empty array */
+    if (collection->type == PUPPET_VALUE_UNDEF) {
+        puppet_value_destroy(collection);
+        return puppet_value_create_array();
     }
 
     size_t param_count = lambda->params.count;
@@ -3743,6 +3761,13 @@ puppet_value_t *puppet_func_reduce(puppet_expr_t *expr, puppet_env_t *env) {
     puppet_value_t *collection = puppet_eval_expr(expr->data.funcall.args.exprs[0], env);
     if (!collection) {
         return puppet_value_create_undef();
+    }
+
+    /* Handle undef gracefully - return the initial value (zero iterations) */
+    if (collection->type == PUPPET_VALUE_UNDEF) {
+        puppet_value_destroy(collection);
+        /* Evaluate and return the initial value */
+        return puppet_eval_expr(expr->data.funcall.args.exprs[1], env);
     }
 
     puppet_value_t *memo = puppet_eval_expr(expr->data.funcall.args.exprs[1], env);
