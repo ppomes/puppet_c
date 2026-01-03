@@ -2390,6 +2390,9 @@ void puppet_exec_class_def(puppet_stmt_t *class_stmt, puppet_env_t *env) {
 }
 
 void puppet_exec_program(puppet_program_t *program, puppet_env_t *env) {
+    /* Set thread-local log env for error/warning counting */
+    puppet_set_log_env(env);
+
     /* Reset node matching state */
     env->node_matched = false;
     env->default_node = NULL;
@@ -2700,6 +2703,9 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
         return;
     }
 
+    /* Set thread-local log env for error/warning counting */
+    puppet_set_log_env(env);
+
     puppet_debug("Executing node block for certname: %s", certname);
     env->node_matched = true;
 
@@ -2888,6 +2894,9 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
     if (should_execute) {
         puppet_debug("Executing node: %s", node_name);
         env->node_matched = true;
+
+        /* Set thread-local log env for error/warning counting */
+        puppet_set_log_env(env);
 
         /* Track node processing for CI validation */
         env->nodes_processed++;

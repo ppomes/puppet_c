@@ -26,6 +26,17 @@
 
 // Note: puppet_log_level_t is now defined in puppet_stdlib.h
 
+/* Thread-local current environment for context-aware logging */
+static __thread puppet_env_t *current_log_env = NULL;
+
+void puppet_set_log_env(puppet_env_t *env) {
+    current_log_env = env;
+}
+
+puppet_env_t *puppet_get_log_env(void) {
+    return current_log_env;
+}
+
 // Get log level string
 static const char *puppet_log_level_str(puppet_log_level_t level) {
     switch (level) {
@@ -48,6 +59,15 @@ static void puppet_log(puppet_log_level_t level, const char *message) {
     strftime(time_buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
 
     fprintf(stderr, "[%s] %s: %s\n", time_buffer, puppet_log_level_str(level), message);
+
+    /* Increment counters via thread-local env */
+    if (current_log_env) {
+        if (level == PUPPET_LOG_ERROR || level == PUPPET_LOG_CRITICAL) {
+            puppet_env_increment_error(current_log_env);
+        } else if (level == PUPPET_LOG_WARNING) {
+            puppet_env_increment_warning(current_log_env);
+        }
+    }
 }
 
 // Log with source location (public API)
@@ -75,6 +95,15 @@ void puppet_log_loc(puppet_log_level_t level, puppet_location_t loc, const char 
         fprintf(stderr, "[%s] %s: %s\n",
                 time_buffer, puppet_log_level_str(level), message);
     }
+
+    /* Increment counters via thread-local env */
+    if (current_log_env) {
+        if (level == PUPPET_LOG_ERROR || level == PUPPET_LOG_CRITICAL) {
+            puppet_env_increment_error(current_log_env);
+        } else if (level == PUPPET_LOG_WARNING) {
+            puppet_env_increment_warning(current_log_env);
+        }
+    }
 }
 
 // Convenience: log error with location
@@ -93,6 +122,11 @@ void puppet_error_at(puppet_location_t loc, const char *format, ...) {
     } else {
         fprintf(stderr, "[ERROR] %s\n", message);
     }
+
+    /* Increment error counter via thread-local env */
+    if (current_log_env) {
+        puppet_env_increment_error(current_log_env);
+    }
 }
 
 // Convenience: log warning with location
@@ -110,6 +144,11 @@ void puppet_warning_at(puppet_location_t loc, const char *format, ...) {
         fprintf(stderr, "[WARNING] line %d: %s\n", loc.line, message);
     } else {
         fprintf(stderr, "[WARNING] %s\n", message);
+    }
+
+    /* Increment warning counter via thread-local env */
+    if (current_log_env) {
+        puppet_env_increment_warning(current_log_env);
     }
 }
 

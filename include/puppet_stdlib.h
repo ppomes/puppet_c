@@ -50,6 +50,22 @@ void puppet_error_at(puppet_location_t loc, const char *format, ...)
 void puppet_warning_at(puppet_location_t loc, const char *format, ...)
     __attribute__((format(printf, 2, 3)));
 
+/**
+ * @brief Set thread-local environment for context-aware logging
+ *
+ * When set, logging functions will automatically increment error/warning
+ * counters in the environment. Thread-local for parallel safety.
+ *
+ * @param env Environment to use for logging counters (NULL to disable)
+ */
+void puppet_set_log_env(puppet_env_t *env);
+
+/**
+ * @brief Get the current thread-local logging environment
+ * @return Current logging environment or NULL if not set
+ */
+puppet_env_t *puppet_get_log_env(void);
+
 // Core functions
 puppet_value_t *puppet_func_fail(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_notice(puppet_expr_list_t *args, puppet_env_t *env);
