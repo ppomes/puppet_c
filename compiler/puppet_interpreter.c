@@ -2601,37 +2601,43 @@ void puppet_exec_include(puppet_stmt_t *include_stmt, puppet_env_t *env) {
     /* Process each included class */
     for (size_t i = 0; i < include_stmt->data.names.count; i++) {
         puppet_expr_t *name_expr = include_stmt->data.names.exprs[i];
+        if (!name_expr) continue;
 
-        /* Extract class name from expression */
-        if (name_expr && name_expr->type == PUPPET_EXPR_VALUE &&
-            name_expr->data.value->type == PUPPET_VALUE_STRING) {
-
-            const char *class_name_raw = name_expr->data.value->data.string.data;
-
-            /* Normalize class name by stripping leading :: */
-            const char *class_name = class_name_raw;
-            if (strncmp(class_name, "::", 2) == 0) {
-                class_name = class_name_raw + 2;
-            }
-
-            /* First, try to find the class in registered definitions */
-            puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
-            if (class_def) {
-                puppet_include_class_from_def(class_def, env);
-                continue;
-            }
-
-            /* If not found, try to load from module files using the loader */
-            if (env->loader) {
-                if (!puppet_loader_include_class(env->loader, class_name, env)) {
-                    puppet_warning_at(name_expr->loc, "Failed to include class '%s'", class_name);
-                    puppet_env_increment_warning(env);
-                }
-            } else {
-                puppet_error_at(name_expr->loc, "Class '%s' not found", class_name);
-                puppet_env_increment_error(env);
-            }
+        /* Evaluate the expression to get the class name (supports string interpolation) */
+        puppet_value_t *name_val = puppet_eval_expr(name_expr, env);
+        if (!name_val || name_val->type != PUPPET_VALUE_STRING) {
+            if (name_val) puppet_value_destroy(name_val);
+            continue;
         }
+
+        const char *class_name_raw = name_val->data.string.data;
+
+        /* Normalize class name by stripping leading :: */
+        const char *class_name = class_name_raw;
+        if (strncmp(class_name, "::", 2) == 0) {
+            class_name = class_name_raw + 2;
+        }
+
+        /* First, try to find the class in registered definitions */
+        puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
+        if (class_def) {
+            puppet_include_class_from_def(class_def, env);
+            puppet_value_destroy(name_val);
+            continue;
+        }
+
+        /* If not found, try to load from module files using the loader */
+        if (env->loader) {
+            if (!puppet_loader_include_class(env->loader, class_name, env)) {
+                puppet_warning_at(name_expr->loc, "Failed to include class '%s'", class_name);
+                puppet_env_increment_warning(env);
+            }
+        } else {
+            puppet_error_at(name_expr->loc, "Class '%s' not found", class_name);
+            puppet_env_increment_error(env);
+        }
+
+        puppet_value_destroy(name_val);
     }
 }
 

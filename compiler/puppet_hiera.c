@@ -62,33 +62,43 @@ static puppet_value_t *yaml_mapping_to_hash(yaml_node_t *node, yaml_document_t *
 
 /**
  * @brief Convert YAML scalar to appropriate Puppet value type
+ *
+ * Respects YAML quoting: quoted values ('foo' or "foo") are always strings.
+ * Unquoted values are auto-converted to booleans, null, or numbers if possible.
  */
 static puppet_value_t *yaml_scalar_to_value(yaml_node_t *node) {
     char *scalar = (char *)node->data.scalar.value;
-    
+    yaml_scalar_style_t style = node->data.scalar.style;
+
+    /* Quoted values are always strings - don't auto-convert */
+    if (style == YAML_SINGLE_QUOTED_SCALAR_STYLE ||
+        style == YAML_DOUBLE_QUOTED_SCALAR_STYLE) {
+        return puppet_value_create_string(scalar, strlen(scalar));
+    }
+
     /* Check for boolean values */
-    if (strcmp(scalar, "true") == 0 || strcmp(scalar, "yes") == 0 || 
+    if (strcmp(scalar, "true") == 0 || strcmp(scalar, "yes") == 0 ||
         strcmp(scalar, "on") == 0 || strcmp(scalar, "TRUE") == 0) {
         return puppet_value_create_bool(1);
     }
-    if (strcmp(scalar, "false") == 0 || strcmp(scalar, "no") == 0 || 
+    if (strcmp(scalar, "false") == 0 || strcmp(scalar, "no") == 0 ||
         strcmp(scalar, "off") == 0 || strcmp(scalar, "FALSE") == 0) {
         return puppet_value_create_bool(0);
     }
-    
+
     /* Check for null */
-    if (strcmp(scalar, "null") == 0 || strcmp(scalar, "~") == 0 || 
+    if (strcmp(scalar, "null") == 0 || strcmp(scalar, "~") == 0 ||
         strcmp(scalar, "NULL") == 0 || strlen(scalar) == 0) {
         return puppet_value_create_undef();
     }
-    
+
     /* Check for number */
     char *endptr;
     double num = strtod(scalar, &endptr);
     if (*endptr == '\0') {
         return puppet_value_create_number(num);
     }
-    
+
     /* Default to string */
     return puppet_value_create_string(scalar, strlen(scalar));
 }
