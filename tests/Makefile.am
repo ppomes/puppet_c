@@ -156,7 +156,7 @@ check-core-functions:
 	@echo "Running core function tests..."
 	@$(MKDIR_P) output
 	@echo "  Testing logging functions (notice, info, warning, debug)..."
-	@if $(top_builddir)/compiler/puppetc-compile --eval $(srcdir)/puppet/simple_core_test.pp > output/core_functions.out 2>&1; then \
+	@if $(top_builddir)/compiler/puppetc-compile --eval --verbose $(srcdir)/puppet/simple_core_test.pp > output/core_functions.out 2>&1; then \
 		if grep -q "Notice: Test message" output/core_functions.out && \
 		   grep -q "Info: Info test" output/core_functions.out && \
 		   grep -q "Warning: Warning test" output/core_functions.out && \

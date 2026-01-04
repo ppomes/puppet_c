@@ -22,6 +22,7 @@ static puppet_expr_t *convert_expression(TSNode node, const char *source);
 static puppet_stmt_list_t convert_block(TSNode node, const char *source);
 static puppet_lambda_t *convert_lambda(TSNode node, const char *source);
 static puppet_expr_t *build_index_expr(puppet_expr_t *object, TSNode access_node, const char *source);
+static puppet_expr_t *convert_selector(TSNode node, const char *source);
 
 /* Current filename being parsed (for source location tracking) - thread-local for parallel safety */
 static __thread const char *current_parse_filename = NULL;
@@ -190,9 +191,21 @@ static puppet_expr_t *convert_string_literal(TSNode node, const char *source) {
                 }
 
                 /* Convert the interpolated expression */
-                TSNode interp_expr = ts_node_named_child_count(child) > 0 ?
-                                     ts_node_named_child(child, 0) : child;
-                expr->data.interpolated.exprs[part_idx] = convert_expression(interp_expr, source);
+                /* Check for variable + access pattern (e.g., ${hash['a']}) */
+                uint32_t interp_child_count = ts_node_named_child_count(child);
+                TSNode var_child = find_child(child, "variable");
+                TSNode access_child = find_child(child, "access");
+
+                if (!ts_node_is_null(var_child) && !ts_node_is_null(access_child)) {
+                    /* Variable with bracket access: ${var[key]} */
+                    puppet_expr_t *var_expr = convert_variable(var_child, source);
+                    expr->data.interpolated.exprs[part_idx] = build_index_expr(var_expr, access_child, source);
+                } else if (interp_child_count > 0) {
+                    TSNode interp_expr = ts_node_named_child(child, 0);
+                    expr->data.interpolated.exprs[part_idx] = convert_expression(interp_expr, source);
+                } else {
+                    expr->data.interpolated.exprs[part_idx] = convert_expression(child, source);
+                }
 
                 string_start = ts_node_end_byte(child);
                 part_idx++;
@@ -445,6 +458,60 @@ static puppet_expr_t *convert_hash(TSNode node, const char *source) {
         puppet_free(temp_vals);
     }
 
+    return expr;
+}
+
+/* Convert selector expression: $x ? { val1 => result1, default => defaultval } */
+static puppet_expr_t *convert_selector(TSNode node, const char *source) {
+    puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
+    expr->type = PUPPET_EXPR_SELECTOR;
+    expr->loc = node_location(node);
+
+    /* Count selector_option children */
+    uint32_t count = ts_node_named_child_count(node);
+    size_t opt_count = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(node, i);
+        if (node_is(child, "selector_option")) {
+            opt_count++;
+        }
+    }
+
+    /* Allocate cases array */
+    if (opt_count > 0) {
+        expr->data.selector.cases = puppet_calloc(opt_count, sizeof(*expr->data.selector.cases));
+    }
+
+    size_t case_idx = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(node, i);
+        const char *type = ts_node_type(child);
+
+        if (strcmp(type, "selector_option") == 0) {
+            /* Find name (match) and value parts */
+            TSNode match_node = ts_node_child_by_field_name(child, "name", 4);
+            TSNode value_node = ts_node_child_by_field_name(child, "value", 5);
+
+            if (!ts_node_is_null(value_node)) {
+                puppet_expr_t *value_expr = convert_expression(value_node, source);
+
+                if (!ts_node_is_null(match_node)) {
+                    const char *match_type = ts_node_type(match_node);
+                    if (strcmp(match_type, "default") == 0) {
+                        /* This is the default case */
+                        expr->data.selector.default_value = value_expr;
+                    } else {
+                        /* Regular case */
+                        expr->data.selector.cases[case_idx].match = convert_expression(match_node, source);
+                        expr->data.selector.cases[case_idx].value = value_expr;
+                        case_idx++;
+                    }
+                }
+            }
+        }
+    }
+
+    expr->data.selector.case_count = case_idx;
     return expr;
 }
 
@@ -709,6 +776,8 @@ static puppet_expr_t *convert_expression(TSNode node, const char *source) {
         return convert_array(node, source);
     if (strcmp(type, "hash") == 0)
         return convert_hash(node, source);
+    if (strcmp(type, "selector") == 0)
+        return convert_selector(node, source);
     if (strcmp(type, "function_call") == 0 || strcmp(type, "statement_function") == 0)
         return convert_funcall(node, source);
     if (strcmp(type, "call_method_with_lambda") == 0)
@@ -738,6 +807,10 @@ static puppet_expr_t *convert_expression(TSNode node, const char *source) {
 static puppet_attribute_t convert_attribute(TSNode node, const char *source) {
     puppet_attribute_t attr = {0};
 
+    /* First check for variable + access pattern (e.g., ensure => $hash['key']) */
+    TSNode var_child = find_child(node, "variable");
+    TSNode access_child = find_child(node, "access");
+
     uint32_t count = ts_node_named_child_count(node);
     for (uint32_t i = 0; i < count; i++) {
         TSNode child = ts_node_named_child(node, i);
@@ -760,6 +833,18 @@ static puppet_attribute_t convert_attribute(TSNode node, const char *source) {
                 }
                 puppet_free(name);
             }
+
+            /* Handle variable + access as combined index expression */
+            if (strcmp(type, "variable") == 0 && !ts_node_is_null(access_child)) {
+                puppet_expr_t *var_expr = convert_variable(child, source);
+                attr.value = build_index_expr(var_expr, access_child, source);
+                /* Skip the access child since we handled it */
+                continue;
+            } else if (strcmp(type, "access") == 0 && !ts_node_is_null(var_child)) {
+                /* Already handled with variable above, skip */
+                continue;
+            }
+
             attr.value = convert_expression(child, source);
         }
     }
@@ -823,13 +908,49 @@ static puppet_stmt_t *convert_assignment(TSNode node, const char *source) {
     stmt->loc = node_location(node);
 
     /*
-     * Assignment can have two forms:
+     * Assignment can have multiple forms:
      * 1. Simple: $var = expr
      *    Children: variable, expr
      * 2. With bracket access on RHS: $var = $obj['key1']['key2']
      *    Children: variable, variable, access, access
      *    First variable is LHS, second + access nodes are the indexed expression
+     * 3. With selector: $var = $cond ? { val1 => res1, default => res2 }
+     *    Children: variable, lhs:variable, selector
+     *    First variable is LHS, lhs: variable is selector control, selector has cases
      */
+
+    /* Check for selector with lhs: control expression */
+    TSNode selector_node = find_child(node, "selector");
+    TSNode lhs_node = ts_node_child_by_field_name(node, "lhs", 3);
+
+    if (!ts_node_is_null(selector_node) && !ts_node_is_null(lhs_node)) {
+        /* Assignment with selector: $x = $y ? { ... } */
+        /* First unnamed variable is the target */
+        uint32_t count = ts_node_named_child_count(node);
+        for (uint32_t i = 0; i < count; i++) {
+            TSNode child = ts_node_named_child(node, i);
+            if (node_is(child, "variable")) {
+                /* Check if this is the lhs: field (control) or just a variable (target) */
+                if (ts_node_eq(child, lhs_node)) {
+                    continue; /* Skip the control expression, handled below */
+                }
+                TSNode name_node = find_child(child, "name");
+                if (!ts_node_is_null(name_node)) {
+                    char *name = node_text(name_node, source);
+                    stmt->data.assignment.variable = puppet_string_create(name);
+                    puppet_free(name);
+                }
+                break;
+            }
+        }
+
+        /* Build selector expression with control from lhs: */
+        puppet_expr_t *selector_expr = convert_selector(selector_node, source);
+        selector_expr->data.selector.control = convert_expression(lhs_node, source);
+        stmt->data.assignment.value = selector_expr;
+        return stmt;
+    }
+
     bool lhs_set = false;
     puppet_expr_t *rhs_expr = NULL;
 
