@@ -1,0 +1,4 @@
+theme: jekyll-theme-cayman
+title: Puppet-C
+description: Fast, lightweight Puppet compiler for local development and CI/CD
+show_downloads: true
