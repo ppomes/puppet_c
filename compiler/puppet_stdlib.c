@@ -72,6 +72,11 @@ static void puppet_log(puppet_log_level_t level, const char *message) {
 
 // Log with source location (public API)
 void puppet_log_loc(puppet_log_level_t level, puppet_location_t loc, const char *format, ...) {
+    /* Skip INFO and DEBUG messages unless verbose mode is enabled */
+    if ((level == PUPPET_LOG_INFO || level == PUPPET_LOG_DEBUG) && !puppet_verbose) {
+        return;
+    }
+
     va_list args;
     va_start(args, format);
 
