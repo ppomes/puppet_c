@@ -1,21 +1,56 @@
 # Puppet-C
 
-A C implementation of a Puppet language parser and interpreter using tree-sitter.
+A fast, lightweight Puppet compiler written in C for local manifest development and CI/CD validation.
 
-**Note**: This is an experimental project. It implements a subset of the Puppet language and is not a replacement for the real Puppet.
+## Why Puppet-C?
+
+**The problem**: Ruby Puppet doesn't provide a good way to compile and validate manifests locally without a full Puppet infrastructure. Developers working on Puppet code often need to push changes to test them, making the feedback loop slow and cumbersome.
+
+**The solution**: Puppet-C compiles catalogs locally in under a second, with full support for modules, templates, Hiera, and facts. It's ideal for:
+
+- **Local development**: Validate your manifests and templates before committing
+- **CI/CD pipelines**: Check catalog coherence for all nodes in seconds
+- **Debugging**: See exactly what resources would be created for any node
+
+## Key Features
+
+- **Fast**: Compile a full catalog with templates in <1 second
+- **Parallel validation**: Check hundreds of nodes in parallel for CI/CD
+- **Minimal dependencies**: Pure C with optional Ruby for ERB templates
+- **Complete toolchain**: Includes compiler, server, agent, and facter binaries
+- **language-puppet compatible**: Similar pretty output format and workflow
+
+## Why C?
+
+C was chosen for:
+- **Minimal runtime dependencies** - no JVM, no Go runtime, no Rust toolchain needed
+- **Native Ruby integration** - Ruby's embedding API is written in C, so integration is direct and natural
+- **Portability** - builds with standard toolchains on Linux and macOS
 
 ## Related Projects
 
-This project is inspired by [language-puppet](https://github.com/bartavelle/language-puppet), a Haskell implementation of the Puppet language. Both projects aim to provide fast, alternative implementations for validating and compiling Puppet manifests outside of the Ruby-based Puppet toolchain.
+Inspired by [language-puppet](https://github.com/bartavelle/language-puppet), a Haskell implementation with similar goals. Both projects provide fast, alternative implementations for validating Puppet manifests outside the Ruby toolchain.
+
+## Quick Start
+
+```bash
+# Compile a catalog for a node (pretty output)
+./compiler/puppetc-compile -p -n mynode.example.com -m modules/ manifests/site.pp
+
+# With facts file
+./compiler/puppetc-compile -p -n mynode -m modules/ -f facts.yaml manifests/site.pp
+
+# Validate ALL nodes in parallel (great for CI/CD)
+./compiler/puppetc-compile --all-nodes -P -m modules/ -f allfacts.yaml manifests/site.pp
+```
 
 ## Building
 
-Prerequisites:
-- GCC
-- libtree-sitter (tree-sitter runtime library)
+### Prerequisites
+
+- GCC and standard build tools
+- libtree-sitter
 - Ruby 3.0-3.3 with development headers (for ERB templates)
-  - Ruby 3.4+ has incompatible embedding API changes
-  - Recommended: Ruby 3.2 or 3.3
 - libyaml (for Hiera)
 - libssl/openssl (for crypto functions)
 - libmicrohttpd (for puppetc-server)
@@ -24,16 +59,17 @@ Prerequisites:
 
 ### Installing Dependencies
 
-**macOS (Homebrew):**
-```bash
-brew install pkg-config tree-sitter ruby@3.3 libyaml openssl libmicrohttpd curl sqlite3 autoconf automake libtool
-```
-
-**Debian/Ubuntu (APT):**
+**Debian/Ubuntu:**
 ```bash
 sudo apt-get install build-essential autoconf automake libtool \
-  libtree-sitter-dev ruby3.0-dev libyaml-dev libssl-dev \
+  libtree-sitter-dev ruby3.2-dev libyaml-dev libssl-dev \
   libmicrohttpd-dev libcurl4-openssl-dev libsqlite3-dev
+```
+
+**macOS (Homebrew):**
+```bash
+brew install pkg-config tree-sitter ruby@3.3 libyaml openssl \
+  libmicrohttpd curl sqlite3 autoconf automake libtool
 ```
 
 ### Building from Source
@@ -46,7 +82,7 @@ make
 make check
 ```
 
-**macOS (with Homebrew dependencies):**
+**macOS (with Homebrew):**
 ```bash
 ./autogen.sh
 ./configure \
@@ -63,75 +99,39 @@ make check
 
 Note: On Intel Macs, use `/usr/local/opt/` instead of `/opt/homebrew/opt/`.
 
-## Docker
-
-Build and run using Docker (no dependencies needed on host).
-
-Sample manifests, modules, and hiera data are provided in `puppetcode/` (shared with Vagrant).
-
-```bash
-# Build images
-docker-compose build
-
-# Start server
-docker-compose up -d server
-
-# Run agent once (noop mode)
-docker-compose run --rm agent
-
-# Run agent once (apply mode)
-docker-compose run --rm agent -a
-
-# Interactive shell for multiple agent runs
-docker-compose up -d agent-shell
-docker-compose exec agent-shell bash
-# Inside container:
-#   puppetc-agent -n    # noop mode
-#   puppetc-agent -a    # apply mode
-```
-
-Edit `puppetcode/manifests/site.pp` on your host - changes are reflected immediately in the server.
-
 ## Usage
 
-```bash
-# Parse only
-./compiler/puppetc-compile manifest.pp
+### Compiler (puppetc-compile)
 
-# Parse and evaluate
-./compiler/puppetc-compile -e manifest.pp
+The main tool for local development and CI/CD validation.
+
+```bash
+# Pretty output (human-readable, colored)
+./compiler/puppetc-compile -p -n mynode.example.com -m modules/ manifests/site.pp
 
 # With facts
-./compiler/puppetc-compile -e -f facts.json manifest.pp
+./compiler/puppetc-compile -p -n mynode -m modules/ -f facts.yaml manifests/site.pp
 
-# Compile to catalog JSON
-./compiler/puppetc-compile -c manifest.pp
+# JSON catalog output
+./compiler/puppetc-compile -c -n mynode -m modules/ manifests/site.pp
 
-# Pretty output (human-readable, similar to language-puppet)
-./compiler/puppetc-compile -p -n mynode.example.com manifest.pp
-
-# JSON AST output
-./compiler/puppetc-compile -j manifest.pp
-
-# Validate all nodes from facts file
+# Validate all nodes (CI/CD)
 ./compiler/puppetc-compile --all-nodes -m modules/ -f allfacts.yaml manifests/site.pp
 
-# Parallel mode (much faster for many nodes)
+# Parallel validation (much faster for many nodes)
 ./compiler/puppetc-compile --all-nodes -P -m modules/ -f allfacts.yaml manifests/site.pp
+
+# Parse only (syntax check)
+./compiler/puppetc-compile manifest.pp
+
+# Verbose output (show variable assignments, debug info)
+./compiler/puppetc-compile -v -p -n mynode manifests/site.pp
 ```
 
 Run `./compiler/puppetc-compile --help` for all options.
 
-### Pretty Output
+### Pretty Output Example
 
-The `-p` / `--pretty` option outputs the catalog in a human-readable format with ANSI colors (when output goes to a terminal), similar to [language-puppet](https://github.com/bartavelle/language-puppet):
-
-```bash
-# Using the included sample manifests
-./compiler/puppetc-compile -p -n testnode.example.com -m puppetcode/modules/ -f puppetcode/facts.yaml puppetcode/manifests/site.pp
-```
-
-Example output:
 ```
 notify/system_info:  testnode.example.com
   message => Host: testnode.example.com (192.168.1.10) - OS: Debian,
@@ -143,64 +143,17 @@ file//tmp/puppetc-demo:  testnode.example.com
 file//tmp/puppetc-demo/system-info.txt:  testnode.example.com
   ensure => present,
   content => # System Information
-# Generated by puppetc
-
 Hostname: testnode
 FQDN: testnode.example.com
-IP Address: 192.168.1.10
-OS Family: Debian
-Memory: 4294967296 bytes
 ,
   mode => 0644,
 
 Total: 41 resources
 ```
 
-### Parallel Mode
+### Facter (facter_c)
 
-The `-P` / `--parallel` option enables parallel node validation when used with `--all-nodes`. Each node is processed in a separate thread, significantly improving performance for large node sets. This is useful for CI/CD pipelines to quickly validate manifests across all nodes.
-
-```bash
-# Sequential validation (default)
-./compiler/puppetc-compile --all-nodes -m modules/ -f allfacts.yaml manifests/site.pp
-
-# Parallel validation (much faster)
-./compiler/puppetc-compile --all-nodes -P -m modules/ -f allfacts.yaml manifests/site.pp
-```
-
-**Note**: ERB templates are skipped in parallel mode because Ruby's VM is not thread-safe. Use sequential mode if you need full template validation.
-
-### Catalog Server
-
-```bash
-# Start server (pass base directory, not manifests/)
-./server/puppetc-server -p 8140 /etc/puppet
-
-# With PuppetDB enabled
-./server/puppetc-server -p 8140 -P /var/lib/puppetc/puppetdb.sqlite /etc/puppet
-
-# Compile catalog via API
-curl -X POST http://localhost:8140/puppet/v4/catalog \
-     -H 'Content-Type: application/json' \
-     -d '{"certname": "node1.example.com", "facts": {"hostname": "node1"}}'
-```
-
-### PuppetDB
-
-The server includes an embedded SQLite-based PuppetDB for storing facts and catalogs.
-
-```bash
-# Query all nodes
-curl http://localhost:8140/pdb/query/v4/nodes
-
-# Get facts for a node
-curl http://localhost:8140/pdb/query/v4/facts/node1.example.com
-
-# Get catalog for a node
-curl http://localhost:8140/pdb/query/v4/catalogs/node1.example.com
-```
-
-### Native Fact Collection
+Native fact collection, compatible with Puppet facts format.
 
 ```bash
 # Show all facts
@@ -213,7 +166,30 @@ curl http://localhost:8140/pdb/query/v4/catalogs/node1.example.com
 ./facter/facter_c -j
 ```
 
-### Puppet Agent
+### Server (puppetc-server)
+
+REST API server for catalog compilation, with embedded PuppetDB.
+
+```bash
+# Start server
+./server/puppetc-server -p 8140 /etc/puppet
+
+# With PuppetDB enabled
+./server/puppetc-server -p 8140 -P /var/lib/puppetc/puppetdb.sqlite /etc/puppet
+
+# Compile catalog via API
+curl -X POST http://localhost:8140/puppet/v4/catalog \
+     -H 'Content-Type: application/json' \
+     -d '{"certname": "node1.example.com", "facts": {"hostname": "node1"}}'
+
+# Query PuppetDB
+curl http://localhost:8140/pdb/query/v4/nodes
+curl http://localhost:8140/pdb/query/v4/facts/node1.example.com
+```
+
+### Agent (puppetc-agent)
+
+Basic Puppet agent for applying catalogs.
 
 ```bash
 # Run agent (connects to localhost:8140)
@@ -227,43 +203,44 @@ curl http://localhost:8140/pdb/query/v4/catalogs/node1.example.com
 
 # Specify server
 ./agent/puppetc-agent -s http://puppet:8140 -a
-
-# Just show collected facts
-./agent/puppetc-agent -f
 ```
 
-## What Works
+## Docker
 
-- Basic parsing of classes, resources, nodes, defines
+Build and run using Docker (no dependencies needed on host).
+
+```bash
+# Build images
+docker-compose build
+
+# Start server
+docker-compose up -d server
+
+# Run agent (noop mode)
+docker-compose run --rm agent
+
+# Run agent (apply mode)
+docker-compose run --rm agent -a
+```
+
+Edit `puppetcode/manifests/site.pp` on your host - changes are reflected immediately.
+
+## Language Support
+
+### What Works
+
+- Classes, resources, nodes, defined types
 - Conditionals: if/elsif/else, unless, case, ternary, selector
-- Variable scoping and interpolation, multi-line strings
+- Variable scoping, string interpolation, heredocs
 - ERB templates (via embedded Ruby)
 - Hiera lookups (YAML backend)
 - Module autoloading
-- Virtual resources (`@resource`), `realize()`, collectors (`<| |>`), and exported collectors (`<<| |>>`)
+- Virtual resources (`@resource`), `realize()`, collectors (`<| |>`)
+- Resource overrides (`Type['title'] { attr => value }`)
 - Iterator functions: `each()`, `map()`, `filter()`, `reduce()`
-- PuppetDB (SQLite): stores facts and catalogs, query API
-- Many stdlib functions (see below)
-- Resource providers for: file, package, service, exec, cron, host, group, user, sysctl, mount
+- ~50 stdlib functions
 
-## Known Limitations
-
-### Parser Limitations
-
-- **Type matching**: The `=~ Type` syntax (e.g., `$var =~ String`) is parsed but not yet evaluated
-
-### Feature Limitations
-
-- **Exported resources**: The `@@resource` syntax is parsed but exported resources are not yet sent to PuppetDB for cross-node collection
-- **Resource relationships**: Chaining arrows (`->`, `~>`) have limited support
-- **Incomplete stdlib coverage**: Many stdlib functions are implemented but not all
-
-### Runtime Limitations
-
-- **No pluginsync**: Custom facts and functions must be pre-installed
-- **Parallel mode skips ERB**: The `-P` option skips ERB template rendering (Ruby is not thread-safe)
-
-## Implemented Functions
+### Implemented Functions
 
 **Logging**: notice, info, warning, debug, err, fail
 
@@ -285,15 +262,13 @@ curl http://localhost:8140/pdb/query/v4/catalogs/node1.example.com
 
 **Iterators**: each, map, filter, reduce
 
-**Resources**: realize
+**Resources**: realize, create_resources
 
-## Implemented Resources
-
-The agent supports the following resource types:
+### Resource Providers (Agent)
 
 | Resource | Description |
 |----------|-------------|
-| file | Manage files, directories, and symlinks. Supports `puppet:///` URLs |
+| file | Files, directories, symlinks. Supports `puppet:///` URLs |
 | package | Install/remove packages (apt, dnf) |
 | service | Manage systemd services |
 | exec | Execute commands with conditions |
@@ -301,13 +276,19 @@ The agent supports the following resource types:
 | host | Manage /etc/hosts entries |
 | group | Manage system groups |
 | user | Manage system users |
-| sysctl | Manage kernel parameters via /proc/sys and /etc/sysctl.d |
-| mount | Manage filesystem mounts and /etc/fstab |
-| notify | Log messages during catalog application |
+| sysctl | Manage kernel parameters |
+| mount | Manage filesystem mounts |
+| notify | Log messages |
 
-## Roadmap
+### Known Limitations
 
-### Target Architecture
+- **Type matching**: `=~ Type` syntax parsed but not evaluated
+- **Exported resources**: `@@resource` parsed but not sent to PuppetDB
+- **Resource chains**: `->`, `~>` have limited support
+- **Parallel mode**: ERB templates skipped (Ruby not thread-safe)
+- **No pluginsync**: Custom facts/functions must be pre-installed
+
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -316,7 +297,7 @@ The agent supports the following resource types:
 │  libpuppetc         │  libfacter_c                          │
 │  - Tree-sitter      │  - Native fact collection             │
 │  - AST              │  - JSON fact loading                  │
-│  - Interpreter      │  - System info (hostname, os, etc.)   │
+│  - Interpreter      │  - System info                        │
 │  - Stdlib           │                                       │
 │  - Hiera            │                                       │
 │  - Catalog builder  │                                       │
@@ -328,8 +309,12 @@ The agent supports the following resource types:
 │                 │  │                  │  │                 │
 │ - REST API      │  │ - Collect facts  │  │ - Parse/eval    │
 │ - Compile       │  │ - Request catalog│  │ - JSON output   │
-│   catalogs      │  │ - Apply catalog  │  │ - Catalog gen   │
-│ - PuppetDB      │  │                  │  │                 │
+│   catalogs      │  │ - Apply catalog  │  │ - Pretty output │
+│ - PuppetDB      │  │                  │  │ - CI/CD mode    │
 │   (SQLite)      │  │                  │  │                 │
 └─────────────────┘  └──────────────────┘  └─────────────────┘
 ```
+
+## License
+
+This project is open source. See LICENSE file for details.
