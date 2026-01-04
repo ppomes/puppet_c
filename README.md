@@ -18,7 +18,6 @@ A fast, lightweight Puppet compiler written in C for local manifest development 
 - **Parallel validation**: Check hundreds of nodes in parallel for CI/CD
 - **Minimal dependencies**: Pure C with optional Ruby for ERB templates
 - **Complete toolchain**: Includes compiler, server, agent, and facter binaries
-- **language-puppet compatible**: Similar pretty output format and workflow
 
 ## Why C?
 
