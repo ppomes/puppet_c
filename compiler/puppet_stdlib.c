@@ -3893,6 +3893,24 @@ puppet_value_t *puppet_func_reduce(puppet_expr_t *expr, puppet_env_t *env) {
  *   validate_re('one', ['^one', 'two'])   => passes (matches first)
  *   validate_re('foo', '^bar$')           => raises error
  */
+
+/**
+ * Get human-readable name for puppet value type
+ */
+static const char *puppet_value_type_name(puppet_value_type_t type) {
+    switch (type) {
+        case PUPPET_VALUE_UNDEF:  return "Undef";
+        case PUPPET_VALUE_BOOL:   return "Boolean";
+        case PUPPET_VALUE_STRING: return "String";
+        case PUPPET_VALUE_NUMBER: return "Number";
+        case PUPPET_VALUE_ARRAY:  return "Array";
+        case PUPPET_VALUE_HASH:   return "Hash";
+        case PUPPET_VALUE_REGEXP: return "Regexp";
+        case PUPPET_VALUE_TYPE:   return "Type";
+        default:                  return "Unknown";
+    }
+}
+
 /**
  * Convert Ruby regex anchors to POSIX equivalents
  * \A -> ^ (start of string)
@@ -3964,28 +3982,41 @@ puppet_value_t *puppet_func_validate_re(puppet_expr_list_t *args, puppet_env_t *
 
     const char *str = str_val->data.string.data;
     bool matched = false;
+    char pattern_desc[256] = "";
 
     if (pattern_val->type == PUPPET_VALUE_STRING) {
         /* Single pattern */
         matched = validate_re_match(str, pattern_val->data.string.data);
+        snprintf(pattern_desc, sizeof(pattern_desc), "'%s'", pattern_val->data.string.data);
     } else if (pattern_val->type == PUPPET_VALUE_ARRAY) {
         /* Array of patterns - match any */
+        size_t offset = 0;
+        offset += snprintf(pattern_desc + offset, sizeof(pattern_desc) - offset, "[");
         for (size_t i = 0; i < pattern_val->data.array->count && !matched; i++) {
             puppet_value_t *pat = pattern_val->data.array->items[i];
             if (pat && pat->type == PUPPET_VALUE_STRING) {
                 matched = validate_re_match(str, pat->data.string.data);
+                if (i > 0 && offset < sizeof(pattern_desc) - 1) {
+                    offset += snprintf(pattern_desc + offset, sizeof(pattern_desc) - offset, ", ");
+                }
+                if (offset < sizeof(pattern_desc) - 1) {
+                    offset += snprintf(pattern_desc + offset, sizeof(pattern_desc) - offset, "'%s'", pat->data.string.data);
+                }
             }
         }
+        if (offset < sizeof(pattern_desc) - 1) {
+            snprintf(pattern_desc + offset, sizeof(pattern_desc) - offset, "]");
+        }
+    }
+
+    if (!matched) {
+        /* Log warning with actual value and pattern for debugging */
+        puppet_log_loc(PUPPET_LOG_WARNING, get_args_location(args),
+            "validate_re(): '%s' does not match %s", str, pattern_desc);
     }
 
     puppet_value_destroy(str_val);
     puppet_value_destroy(pattern_val);
-
-    if (!matched) {
-        /* Log warning but don't fail - this allows catalog compilation to continue */
-        puppet_log_loc(PUPPET_LOG_WARNING, get_args_location(args),
-            "validate_re(): string does not match pattern");
-    }
 
     return puppet_value_create_bool(matched);
 }
@@ -4011,13 +4042,14 @@ puppet_value_t *puppet_func_validate_hash(puppet_expr_list_t *args, puppet_env_t
         puppet_value_t *val = puppet_eval_expr(args->exprs[i], env);
         bool is_hash = val && val->type == PUPPET_VALUE_HASH;
 
-        if (val) puppet_value_destroy(val);
-
         if (!is_hash) {
             puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
-                "validate_hash(): value is not a hash");
+                "validate_hash(): got %s, expected Hash",
+                val ? puppet_value_type_name(val->type) : "null");
             all_valid = false;
         }
+
+        if (val) puppet_value_destroy(val);
     }
 
     return puppet_value_create_bool(all_valid);
@@ -4045,13 +4077,14 @@ puppet_value_t *puppet_func_validate_string(puppet_expr_list_t *args, puppet_env
         /* undef is allowed, only non-string non-undef values fail */
         bool is_valid = !val || val->type == PUPPET_VALUE_UNDEF || val->type == PUPPET_VALUE_STRING;
 
-        if (val) puppet_value_destroy(val);
-
         if (!is_valid) {
             puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
-                "validate_string(): value is not a string");
+                "validate_string(): got %s, expected String",
+                val ? puppet_value_type_name(val->type) : "null");
             all_valid = false;
         }
+
+        if (val) puppet_value_destroy(val);
     }
 
     return puppet_value_create_bool(all_valid);
@@ -4078,13 +4111,14 @@ puppet_value_t *puppet_func_validate_array(puppet_expr_list_t *args, puppet_env_
         puppet_value_t *val = puppet_eval_expr(args->exprs[i], env);
         bool is_array = val && val->type == PUPPET_VALUE_ARRAY;
 
-        if (val) puppet_value_destroy(val);
-
         if (!is_array) {
             puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
-                "validate_array(): value is not an array");
+                "validate_array(): got %s, expected Array",
+                val ? puppet_value_type_name(val->type) : "null");
             all_valid = false;
         }
+
+        if (val) puppet_value_destroy(val);
     }
 
     return puppet_value_create_bool(all_valid);
@@ -4111,13 +4145,20 @@ puppet_value_t *puppet_func_validate_bool(puppet_expr_list_t *args, puppet_env_t
         puppet_value_t *val = puppet_eval_expr(args->exprs[i], env);
         bool is_bool = val && val->type == PUPPET_VALUE_BOOL;
 
-        if (val) puppet_value_destroy(val);
-
         if (!is_bool) {
-            puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
-                "validate_bool(): value is not a boolean");
+            if (val && val->type == PUPPET_VALUE_STRING) {
+                puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
+                    "validate_bool(): got String '%s', expected Boolean",
+                    val->data.string.data);
+            } else {
+                puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
+                    "validate_bool(): got %s, expected Boolean",
+                    val ? puppet_value_type_name(val->type) : "null");
+            }
             all_valid = false;
         }
+
+        if (val) puppet_value_destroy(val);
     }
 
     return puppet_value_create_bool(all_valid);
