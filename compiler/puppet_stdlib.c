@@ -576,7 +576,7 @@ puppet_value_t *puppet_func_realize(puppet_expr_list_t *args, puppet_env_t *env)
             puppet_virtual_resource_t *vres = (puppet_virtual_resource_t *)stored->data.string.data;
 
             if (vres->realized) {
-                puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
+                puppet_log_loc(PUPPET_LOG_INFO, args->exprs[i]->loc,
                     "Virtual resource %s already realized", ref_str);
             } else {
                 /* Build resource identifier for duplicate check */
