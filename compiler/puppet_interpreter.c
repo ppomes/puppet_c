@@ -2934,7 +2934,9 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
 
         /* Track node processing for CI validation */
         env->nodes_processed++;
-        env->current_node_certname = (char*)node_name;
+        /* Use actual node name from -n option when available (for regex matches),
+         * otherwise use node_name from the node block */
+        env->current_node_certname = (char*)(env->node_name ? env->node_name : node_name);
         env->current_node_failed = false;
 
         /* Print node name for CI tracking */
@@ -4129,14 +4131,14 @@ puppet_value_t *puppet_facts_get(puppet_env_t *env, const char *fact_name) {
     if (!index_value || index_value->type != PUPPET_VALUE_NUMBER) {
         return NULL;
     }
-    
+
     size_t index = (size_t)index_value->data.number;
     if (index >= facts_db->node_count) {
         return NULL;
     }
-    
+
     puppet_node_facts_t *node = &facts_db->nodes[index];
-    
+
     // Look up fact
     puppet_value_t *fact_value = puppet_hash_get(node->facts, fact_name, strlen(fact_name));
     if (!fact_value) {
