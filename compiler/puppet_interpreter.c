@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <ctype.h>
 #include <regex.h>
 #include <unistd.h>
@@ -2859,7 +2860,11 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
 
     /* Track node processing for CI validation */
     env->nodes_processed++;
-    fprintf(stderr, "--- Node: %s ---\n", certname);
+    if (env->output_buffer) {
+        puppet_env_buffer_printf(env, "--- Node: %s ---\n", certname);
+    } else {
+        fprintf(stderr, "--- Node: %s ---\n", certname);
+    }
     env->current_node_certname = (char*)certname;
     env->current_node_failed = false;
 
@@ -2973,7 +2978,11 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
     /* Track node failure for CI validation */
     if (env->current_node_failed) {
         env->nodes_failed++;
-        fprintf(stderr, "--- Node: %s FAILED ---\n", certname);
+        if (env->output_buffer) {
+            puppet_env_buffer_printf(env, "--- Node: %s FAILED ---\n", certname);
+        } else {
+            fprintf(stderr, "--- Node: %s FAILED ---\n", certname);
+        }
         /* Stop processing on first failure */
         env->stop_on_error = true;
     }
@@ -3063,7 +3072,11 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
 
         /* Print node name for CI tracking */
         if (env->execute_all_nodes) {
-            fprintf(stderr, "--- Node: %s ---\n", node_name);
+            if (env->output_buffer) {
+                puppet_env_buffer_printf(env, "--- Node: %s ---\n", node_name);
+            } else {
+                fprintf(stderr, "--- Node: %s ---\n", node_name);
+            }
         }
 
         /* Clear state for this node when executing multiple nodes */
@@ -3177,7 +3190,11 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
         if (env->current_node_failed) {
             env->nodes_failed++;
             if (env->execute_all_nodes) {
-                fprintf(stderr, "--- Node: %s FAILED ---\n", node_name);
+                if (env->output_buffer) {
+                    puppet_env_buffer_printf(env, "--- Node: %s FAILED ---\n", node_name);
+                } else {
+                    fprintf(stderr, "--- Node: %s FAILED ---\n", node_name);
+                }
                 /* Stop processing on first failure in all-nodes mode */
                 env->stop_on_error = true;
             }
@@ -4546,6 +4563,9 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
     env->skip_erb = source->skip_erb;
     env->stats_mutex = source->stats_mutex;
 
+    /* Initialize output buffer for ordered output in parallel mode */
+    puppet_env_buffer_init(env);
+
     return env;
 }
 
@@ -4688,6 +4708,89 @@ void puppet_env_merge_stats(puppet_env_t *target, puppet_env_t *source) {
     }
 }
 
+/*
+ * ===========================================================================
+ * BUFFERED OUTPUT FOR PARALLEL MODE
+ * ===========================================================================
+ */
+
+#define OUTPUT_BUFFER_INITIAL_SIZE 8192
+
+/**
+ * @brief Initialize output buffer for parallel mode
+ */
+void puppet_env_buffer_init(puppet_env_t *env) {
+    if (!env) return;
+    env->output_buffer_capacity = OUTPUT_BUFFER_INITIAL_SIZE;
+    env->output_buffer = puppet_malloc(env->output_buffer_capacity);
+    env->output_buffer[0] = '\0';
+    env->output_buffer_size = 0;
+}
+
+/**
+ * @brief Free output buffer
+ */
+void puppet_env_buffer_free(puppet_env_t *env) {
+    if (!env) return;
+    puppet_free(env->output_buffer);
+    env->output_buffer = NULL;
+    env->output_buffer_size = 0;
+    env->output_buffer_capacity = 0;
+}
+
+/**
+ * @brief Printf to output buffer (grows as needed)
+ */
+void puppet_env_buffer_printf(puppet_env_t *env, const char *format, ...) {
+    if (!env || !env->output_buffer) {
+        /* Fallback to stderr if no buffer */
+        va_list args;
+        va_start(args, format);
+        vfprintf(stderr, format, args);
+        va_end(args);
+        return;
+    }
+
+    va_list args;
+    va_start(args, format);
+
+    /* Try to write to current buffer */
+    size_t remaining = env->output_buffer_capacity - env->output_buffer_size;
+    int written = vsnprintf(env->output_buffer + env->output_buffer_size, remaining, format, args);
+    va_end(args);
+
+    if (written < 0) return;  /* Error */
+
+    if ((size_t)written >= remaining) {
+        /* Need more space - grow buffer */
+        size_t needed = env->output_buffer_size + written + 1;
+        while (env->output_buffer_capacity < needed) {
+            env->output_buffer_capacity *= 2;
+        }
+        env->output_buffer = puppet_realloc(env->output_buffer, env->output_buffer_capacity);
+
+        /* Try again with bigger buffer */
+        va_start(args, format);
+        remaining = env->output_buffer_capacity - env->output_buffer_size;
+        written = vsnprintf(env->output_buffer + env->output_buffer_size, remaining, format, args);
+        va_end(args);
+    }
+
+    if (written > 0) {
+        env->output_buffer_size += written;
+    }
+}
+
+/**
+ * @brief Flush output buffer to stderr
+ */
+void puppet_env_buffer_flush(puppet_env_t *env) {
+    if (!env || !env->output_buffer || env->output_buffer_size == 0) return;
+    fwrite(env->output_buffer, 1, env->output_buffer_size, stderr);
+    env->output_buffer_size = 0;
+    env->output_buffer[0] = '\0';
+}
+
 /**
  * @brief Thread worker data for parallel node processing
  */
@@ -4699,6 +4802,8 @@ typedef struct {
     size_t nodes_failed;           /**< Result: nodes failed */
     size_t errors_count;           /**< Result: errors */
     size_t warnings_count;         /**< Result: warnings */
+    char *output_buffer;           /**< Captured output for ordered printing */
+    size_t output_buffer_size;     /**< Size of captured output */
 } parallel_node_work_t;
 
 /**
@@ -4730,12 +4835,13 @@ static void *parallel_node_worker(void *arg) {
     work->errors_count = node_env->errors_count;
     work->warnings_count = node_env->warnings_count;
 
-    /* Check if node failed */
-    if (node_env->current_node_failed) {
-        fprintf(stderr, "--- Node: %s FAILED ---\n", work->certname);
-    }
+    /* Transfer output buffer to work struct (for ordered printing later) */
+    work->output_buffer = node_env->output_buffer;
+    work->output_buffer_size = node_env->output_buffer_size;
+    node_env->output_buffer = NULL;  /* Prevent double-free */
+    node_env->output_buffer_size = 0;
 
-    /* Cleanup cloned env */
+    /* Cleanup cloned env (buffer already transferred) */
     puppet_env_destroy_clone(node_env);
 
     return NULL;
@@ -4779,6 +4885,8 @@ void puppet_exec_nodes_parallel(puppet_env_t *env, size_t node_count) {
         work_items[threads_started].nodes_failed = 0;
         work_items[threads_started].errors_count = 0;
         work_items[threads_started].warnings_count = 0;
+        work_items[threads_started].output_buffer = NULL;
+        work_items[threads_started].output_buffer_size = 0;
 
         /* Create thread */
         int ret = pthread_create(&threads[threads_started], NULL,
@@ -4790,9 +4898,18 @@ void puppet_exec_nodes_parallel(puppet_env_t *env, size_t node_count) {
         threads_started++;
     }
 
-    /* Wait for all threads and aggregate stats */
+    /* Wait for all threads */
     for (size_t i = 0; i < threads_started; i++) {
         pthread_join(threads[i], NULL);
+    }
+
+    /* Print output buffers in order (same order as facts file) and aggregate stats */
+    for (size_t i = 0; i < threads_started; i++) {
+        /* Print buffered output for this node */
+        if (work_items[i].output_buffer && work_items[i].output_buffer_size > 0) {
+            fwrite(work_items[i].output_buffer, 1, work_items[i].output_buffer_size, stderr);
+        }
+        puppet_free(work_items[i].output_buffer);
 
         /* Aggregate stats into main env */
         env->nodes_processed += work_items[i].nodes_processed;

@@ -58,7 +58,13 @@ static void puppet_log(puppet_log_level_t level, const char *message) {
     char time_buffer[26];
     strftime(time_buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
 
-    fprintf(stderr, "[%s] %s: %s\n", time_buffer, puppet_log_level_str(level), message);
+    /* Use buffered output if available (parallel mode) */
+    if (current_log_env && current_log_env->output_buffer) {
+        puppet_env_buffer_printf(current_log_env, "[%s] %s: %s\n",
+            time_buffer, puppet_log_level_str(level), message);
+    } else {
+        fprintf(stderr, "[%s] %s: %s\n", time_buffer, puppet_log_level_str(level), message);
+    }
 
     /* Increment counters via thread-local env */
     if (current_log_env) {
@@ -90,15 +96,29 @@ void puppet_log_loc(puppet_log_level_t level, puppet_location_t loc, const char 
     char time_buffer[26];
     strftime(time_buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
 
-    if (loc.filename && loc.line > 0) {
-        fprintf(stderr, "[%s] %s: %s at %s:%d\n",
-                time_buffer, puppet_log_level_str(level), message, loc.filename, loc.line);
-    } else if (loc.line > 0) {
-        fprintf(stderr, "[%s] %s: %s at line %d\n",
-                time_buffer, puppet_log_level_str(level), message, loc.line);
+    /* Use buffered output if available (parallel mode) */
+    if (current_log_env && current_log_env->output_buffer) {
+        if (loc.filename && loc.line > 0) {
+            puppet_env_buffer_printf(current_log_env, "[%s] %s: %s at %s:%d\n",
+                    time_buffer, puppet_log_level_str(level), message, loc.filename, loc.line);
+        } else if (loc.line > 0) {
+            puppet_env_buffer_printf(current_log_env, "[%s] %s: %s at line %d\n",
+                    time_buffer, puppet_log_level_str(level), message, loc.line);
+        } else {
+            puppet_env_buffer_printf(current_log_env, "[%s] %s: %s\n",
+                    time_buffer, puppet_log_level_str(level), message);
+        }
     } else {
-        fprintf(stderr, "[%s] %s: %s\n",
-                time_buffer, puppet_log_level_str(level), message);
+        if (loc.filename && loc.line > 0) {
+            fprintf(stderr, "[%s] %s: %s at %s:%d\n",
+                    time_buffer, puppet_log_level_str(level), message, loc.filename, loc.line);
+        } else if (loc.line > 0) {
+            fprintf(stderr, "[%s] %s: %s at line %d\n",
+                    time_buffer, puppet_log_level_str(level), message, loc.line);
+        } else {
+            fprintf(stderr, "[%s] %s: %s\n",
+                    time_buffer, puppet_log_level_str(level), message);
+        }
     }
 
     /* Increment counters via thread-local env */
@@ -120,12 +140,23 @@ void puppet_error_at(puppet_location_t loc, const char *format, ...) {
     vsnprintf(message, sizeof(message), format, args);
     va_end(args);
 
-    if (loc.filename && loc.line > 0) {
-        fprintf(stderr, "[ERROR] %s:%d: %s\n", loc.filename, loc.line, message);
-    } else if (loc.line > 0) {
-        fprintf(stderr, "[ERROR] line %d: %s\n", loc.line, message);
+    /* Use buffered output if available (parallel mode) */
+    if (current_log_env && current_log_env->output_buffer) {
+        if (loc.filename && loc.line > 0) {
+            puppet_env_buffer_printf(current_log_env, "[ERROR] %s:%d: %s\n", loc.filename, loc.line, message);
+        } else if (loc.line > 0) {
+            puppet_env_buffer_printf(current_log_env, "[ERROR] line %d: %s\n", loc.line, message);
+        } else {
+            puppet_env_buffer_printf(current_log_env, "[ERROR] %s\n", message);
+        }
     } else {
-        fprintf(stderr, "[ERROR] %s\n", message);
+        if (loc.filename && loc.line > 0) {
+            fprintf(stderr, "[ERROR] %s:%d: %s\n", loc.filename, loc.line, message);
+        } else if (loc.line > 0) {
+            fprintf(stderr, "[ERROR] line %d: %s\n", loc.line, message);
+        } else {
+            fprintf(stderr, "[ERROR] %s\n", message);
+        }
     }
 
     /* Increment error counter via thread-local env */
@@ -143,12 +174,23 @@ void puppet_warning_at(puppet_location_t loc, const char *format, ...) {
     vsnprintf(message, sizeof(message), format, args);
     va_end(args);
 
-    if (loc.filename && loc.line > 0) {
-        fprintf(stderr, "[WARNING] %s:%d: %s\n", loc.filename, loc.line, message);
-    } else if (loc.line > 0) {
-        fprintf(stderr, "[WARNING] line %d: %s\n", loc.line, message);
+    /* Use buffered output if available (parallel mode) */
+    if (current_log_env && current_log_env->output_buffer) {
+        if (loc.filename && loc.line > 0) {
+            puppet_env_buffer_printf(current_log_env, "[WARNING] %s:%d: %s\n", loc.filename, loc.line, message);
+        } else if (loc.line > 0) {
+            puppet_env_buffer_printf(current_log_env, "[WARNING] line %d: %s\n", loc.line, message);
+        } else {
+            puppet_env_buffer_printf(current_log_env, "[WARNING] %s\n", message);
+        }
     } else {
-        fprintf(stderr, "[WARNING] %s\n", message);
+        if (loc.filename && loc.line > 0) {
+            fprintf(stderr, "[WARNING] %s:%d: %s\n", loc.filename, loc.line, message);
+        } else if (loc.line > 0) {
+            fprintf(stderr, "[WARNING] line %d: %s\n", loc.line, message);
+        } else {
+            fprintf(stderr, "[WARNING] %s\n", message);
+        }
     }
 
     /* Increment warning counter via thread-local env */

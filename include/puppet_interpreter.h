@@ -214,6 +214,11 @@ typedef struct puppet_env {
     bool parallel_nodes;                      /**< Process nodes in parallel */
     bool skip_erb;                            /**< Skip ERB template rendering (for parallel mode) */
 
+    /* Output buffering for parallel mode (ordered output) */
+    char *output_buffer;                      /**< Buffer for capturing output */
+    size_t output_buffer_size;                /**< Current content size in buffer */
+    size_t output_buffer_capacity;            /**< Allocated buffer capacity */
+
     /* Module context for hiera lookups */
     char *caller_module_name;                 /**< Current module name for hiera $module_name */
     pthread_mutex_t *stats_mutex;             /**< Mutex for stats updates (shared between threads) */
@@ -327,5 +332,11 @@ void puppet_env_increment_warning(puppet_env_t *env);
 void puppet_env_set_parallel_nodes(puppet_env_t *env, bool parallel);
 puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certname);
 void puppet_env_merge_stats(puppet_env_t *target, puppet_env_t *source);
+
+/* Buffered output for parallel mode */
+void puppet_env_buffer_init(puppet_env_t *env);
+void puppet_env_buffer_free(puppet_env_t *env);
+void puppet_env_buffer_printf(puppet_env_t *env, const char *format, ...);
+void puppet_env_buffer_flush(puppet_env_t *env);
 
 #endif
