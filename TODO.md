@@ -9,8 +9,8 @@
 
 ### Statement Types
 - [ ] `PUPPET_STMT_DEFINE` - Defined types (`define mytype($param) { }`)
-- [ ] `PUPPET_STMT_RESOURCE_DEFAULT` - Resource defaults (`File { mode => '0644' }`)
-- [ ] `PUPPET_STMT_RESOURCE_OVERRIDE` - Resource override (`File['/x'] { attr +> val }`)
+- [~] `PUPPET_STMT_RESOURCE_DEFAULT` - Resource defaults (`File { mode => '0644' }`) - parsed, not applied
+- [x] `PUPPET_STMT_RESOURCE_OVERRIDE` - Resource override (`File['/x'] { attr => val }`) - updates catalog entry
 - [x] `PUPPET_STMT_RESOURCE_COLLECTOR` - Virtual collectors (`File <| ensure == present |>`)
 - [ ] `PUPPET_STMT_RESOURCE_CHAIN` - Ordering arrows (`Package['x'] -> Service['y']`)
 - [ ] `PUPPET_STMT_APPEND` - Array append (`$arr += ['value']`)

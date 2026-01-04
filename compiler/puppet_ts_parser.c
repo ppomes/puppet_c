@@ -1468,6 +1468,83 @@ static puppet_stmt_t *convert_statement(TSNode node, const char *source) {
         return stmt;
     }
 
+    /* Handle resource overrides and resource defaults:
+     * Resource override: Type['title'] { attr => value } - has access element (title)
+     * Resource default: Type { attr => value } - no access element
+     */
+    if (strcmp(type, "resource_reference") == 0) {
+        TSNode attr_list = find_child(node, "attribute_list");
+        if (!ts_node_is_null(attr_list)) {
+            TSNode type_node = find_child(node, "type");
+            TSNode access_node = find_child(node, "access");
+
+            if (!ts_node_is_null(type_node) && !ts_node_is_null(access_node)) {
+                /* Resource override: Type['title'] { attr => value } */
+                puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
+                stmt->type = PUPPET_STMT_RESOURCE_OVERRIDE;
+                stmt->loc = node_location(node);
+
+                /* Create resource reference expression */
+                puppet_expr_t *ref = puppet_calloc(1, sizeof(puppet_expr_t));
+                ref->type = PUPPET_EXPR_RESOURCE_REF;
+                ref->loc = node_location(node);
+
+                char *type_str = node_text(type_node, source);
+                ref->data.resource_ref.type = puppet_string_create(type_str);
+                puppet_free(type_str);
+
+                /* Get title from access element */
+                TSNode access_elem = find_child(access_node, "access_element");
+                if (!ts_node_is_null(access_elem)) {
+                    TSNode title_node = ts_node_named_child(access_elem, 0);
+                    ref->data.resource_ref.title = convert_expression(title_node, source);
+                }
+
+                stmt->data.resource_override.reference = ref;
+
+                /* Convert attributes */
+                uint32_t attr_count = ts_node_named_child_count(attr_list);
+                stmt->data.resource_override.attributes = puppet_calloc(attr_count, sizeof(puppet_attribute_t));
+                stmt->data.resource_override.attr_count = 0;
+
+                for (uint32_t i = 0; i < attr_count; i++) {
+                    TSNode attr_node = ts_node_named_child(attr_list, i);
+                    if (node_is(attr_node, "attribute")) {
+                        stmt->data.resource_override.attributes[stmt->data.resource_override.attr_count++] =
+                            convert_attribute(attr_node, source);
+                    }
+                }
+
+                return stmt;
+            } else if (!ts_node_is_null(type_node)) {
+                /* Resource default: Type { attr => value } */
+                puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
+                stmt->type = PUPPET_STMT_RESOURCE_DEFAULT;
+                stmt->loc = node_location(node);
+
+                char *type_str = node_text(type_node, source);
+                stmt->data.resource_default.type = puppet_string_create(type_str);
+                puppet_free(type_str);
+
+                /* Convert attributes */
+                uint32_t attr_count = ts_node_named_child_count(attr_list);
+                stmt->data.resource_default.attributes = puppet_calloc(attr_count, sizeof(puppet_attribute_t));
+                stmt->data.resource_default.attr_count = 0;
+
+                for (uint32_t i = 0; i < attr_count; i++) {
+                    TSNode attr_node = ts_node_named_child(attr_list, i);
+                    if (node_is(attr_node, "attribute")) {
+                        stmt->data.resource_default.attributes[stmt->data.resource_default.attr_count++] =
+                            convert_attribute(attr_node, source);
+                    }
+                }
+
+                return stmt;
+            }
+        }
+        /* Resource reference without attribute_list is just an expression */
+    }
+
     /* Handle resource collectors: File <| ensure == present |> */
     if (strcmp(type, "resource_collector") == 0) {
         puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));

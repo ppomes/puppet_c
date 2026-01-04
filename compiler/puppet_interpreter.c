@@ -2350,6 +2350,114 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
             puppet_exec_collector(stmt, env);
             break;
 
+        case PUPPET_STMT_RESOURCE_DEFAULT:
+            /* Resource defaults (Type { attr => value }) set default values for resources.
+             * TODO: Store defaults in scope and apply when creating resources.
+             * For now, just log and continue - the resources will use their own defaults.
+             */
+            puppet_debug("Resource default for %s (not yet applied)",
+                        stmt->data.resource_default.type.data);
+            break;
+
+        case PUPPET_STMT_RESOURCE_OVERRIDE: {
+            /* Resource override: Type['title'] { attr => value } */
+            if (!stmt->data.resource_override.reference) {
+                puppet_error_at(stmt->loc, "Resource override: missing reference");
+                puppet_env_increment_error(env);
+                break;
+            }
+
+            puppet_expr_t *ref = stmt->data.resource_override.reference;
+            if (ref->type != PUPPET_EXPR_RESOURCE_REF) {
+                puppet_error_at(stmt->loc, "Resource override: invalid reference type");
+                puppet_env_increment_error(env);
+                break;
+            }
+
+            /* Get the resource type and convert to lowercase */
+            const char *res_type_orig = ref->data.resource_ref.type.data;
+            if (!res_type_orig) {
+                puppet_error_at(stmt->loc, "Resource override: missing resource type");
+                puppet_env_increment_error(env);
+                break;
+            }
+
+            /* Normalize type to lowercase (Puppet types are case-insensitive) */
+            size_t type_len = strlen(res_type_orig);
+            char *res_type = puppet_malloc(type_len + 1);
+            for (size_t i = 0; i < type_len; i++) {
+                res_type[i] = tolower((unsigned char)res_type_orig[i]);
+            }
+            res_type[type_len] = '\0';
+
+            /* Evaluate title expression */
+            puppet_value_t *title_val = puppet_eval_expr(ref->data.resource_ref.title, env);
+            const char *title_str = puppet_value_to_string(title_val);
+
+            /* Build resource ID for lookup */
+            size_t res_id_len = type_len + strlen(title_str) + 3;
+            char *resource_id = puppet_malloc(res_id_len);
+            snprintf(resource_id, res_id_len, "%s[%s]", res_type, title_str);
+
+            /* Check if resource exists in resource catalog */
+            puppet_value_t *existing = puppet_hash_get(env->resource_catalog,
+                                                       resource_id, strlen(resource_id));
+            if (!existing) {
+                puppet_error_at(stmt->loc, "Resource override: %s has not been declared", resource_id);
+                puppet_env_increment_error(env);
+                puppet_free(res_type);
+                puppet_free(resource_id);
+                puppet_value_destroy(title_val);
+                break;
+            }
+
+            /* Find resource in catalog and update attributes */
+            if (env->build_catalog && env->catalog) {
+                puppet_catalog_resource_t *cat_res = puppet_catalog_find_resource(
+                    env->catalog, res_type, title_str);
+
+                if (cat_res) {
+                    /* Apply override attributes */
+                    for (size_t i = 0; i < stmt->data.resource_override.attr_count; i++) {
+                        const char *attr_name = stmt->data.resource_override.attributes[i].name.data;
+                        puppet_value_t *attr_val = puppet_eval_expr(
+                            stmt->data.resource_override.attributes[i].value, env);
+
+                        /* Check if attribute already exists */
+                        bool found = false;
+                        for (size_t j = 0; j < cat_res->param_count; j++) {
+                            if (strcmp(cat_res->parameters[j].name, attr_name) == 0) {
+                                /* Replace existing value */
+                                puppet_value_destroy(cat_res->parameters[j].value);
+                                cat_res->parameters[j].value = puppet_value_copy(attr_val);
+                                found = true;
+                                break;
+                            }
+                        }
+
+                        if (!found) {
+                            /* Add new attribute */
+                            size_t new_count = cat_res->param_count + 1;
+                            cat_res->parameters = puppet_realloc(cat_res->parameters,
+                                new_count * sizeof(puppet_catalog_param_t));
+                            cat_res->parameters[cat_res->param_count].name = puppet_strdup(attr_name);
+                            cat_res->parameters[cat_res->param_count].value = puppet_value_copy(attr_val);
+                            cat_res->param_count = new_count;
+                        }
+
+                        puppet_value_destroy(attr_val);
+                    }
+
+                    puppet_debug("Applied resource override to %s", resource_id);
+                }
+            }
+
+            puppet_free(res_type);
+            puppet_free(resource_id);
+            puppet_value_destroy(title_val);
+            break;
+        }
+
         default:
             puppet_warn("Unimplemented statement type: %d", stmt->type);
             break;
