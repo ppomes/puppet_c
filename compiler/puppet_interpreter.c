@@ -2843,9 +2843,17 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
     puppet_scope_t *node_scope = puppet_scope_create(env->current_scope, certname);
     puppet_scope_push(env, node_scope);
 
-    /* Set automatic variables using the certname */
-    puppet_value_t *hostname_value = puppet_value_create_string(certname, strlen(certname));
-    puppet_scope_set_var(node_scope, "hostname", hostname_value);
+    /* Set $hostname from certname only if no hostname fact exists.
+     * Facts take precedence since $hostname fact is the short hostname,
+     * while certname is typically the FQDN.
+     */
+    puppet_value_t *hostname_fact = puppet_facts_get(env, "hostname");
+    if (!hostname_fact) {
+        puppet_value_t *hostname_value = puppet_value_create_string(certname, strlen(certname));
+        puppet_scope_set_var(node_scope, "hostname", hostname_value);
+    } else {
+        puppet_value_destroy(hostname_fact);
+    }
 
     /* Execute node body */
     puppet_exec_stmt_list(&node_stmt->data.node.body, env);
@@ -3041,9 +3049,14 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
         puppet_scope_t *node_scope = puppet_scope_create(env->current_scope, node_name);
         puppet_scope_push(env, node_scope);
 
-        /* Set automatic variables like $hostname */
-        puppet_value_t *hostname_value = puppet_value_create_string(node_name, strlen(node_name));
-        puppet_scope_set_var(node_scope, "hostname", hostname_value);
+        /* Set $hostname from node name only if no hostname fact exists */
+        puppet_value_t *hostname_fact = puppet_facts_get(env, "hostname");
+        if (!hostname_fact) {
+            puppet_value_t *hostname_value = puppet_value_create_string(node_name, strlen(node_name));
+            puppet_scope_set_var(node_scope, "hostname", hostname_value);
+        } else {
+            puppet_value_destroy(hostname_fact);
+        }
 
         /* Execute node body */
         puppet_exec_stmt_list(&node_stmt->data.node.body, env);
