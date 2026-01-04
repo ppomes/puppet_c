@@ -3893,6 +3893,49 @@ puppet_value_t *puppet_func_reduce(puppet_expr_t *expr, puppet_env_t *env) {
  *   validate_re('one', ['^one', 'two'])   => passes (matches first)
  *   validate_re('foo', '^bar$')           => raises error
  */
+/**
+ * Convert Ruby regex anchors to POSIX equivalents
+ * \A -> ^ (start of string)
+ * \z -> $ (end of string)
+ * \Z -> $ (end of string, ignoring trailing newline - approximate)
+ */
+static char *convert_ruby_regex_to_posix(const char *pattern) {
+    size_t len = strlen(pattern);
+    char *result = puppet_malloc(len * 2 + 1);  /* Worst case: every char doubles */
+    size_t j = 0;
+
+    for (size_t i = 0; i < len; i++) {
+        if (pattern[i] == '\\' && i + 1 < len) {
+            if (pattern[i + 1] == 'A') {
+                result[j++] = '^';
+                i++;  /* Skip the 'A' */
+            } else if (pattern[i + 1] == 'z' || pattern[i + 1] == 'Z') {
+                result[j++] = '$';
+                i++;  /* Skip the 'z' or 'Z' */
+            } else {
+                result[j++] = pattern[i];
+            }
+        } else {
+            result[j++] = pattern[i];
+        }
+    }
+    result[j] = '\0';
+    return result;
+}
+
+static bool validate_re_match(const char *str, const char *pattern) {
+    char *posix_pattern = convert_ruby_regex_to_posix(pattern);
+    regex_t regex;
+    bool matched = false;
+
+    if (regcomp(&regex, posix_pattern, REG_EXTENDED | REG_NOSUB) == 0) {
+        matched = (regexec(&regex, str, 0, NULL, 0) == 0);
+        regfree(&regex);
+    }
+    puppet_free(posix_pattern);
+    return matched;
+}
+
 puppet_value_t *puppet_func_validate_re(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 2) {
         puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
@@ -3901,11 +3944,9 @@ puppet_value_t *puppet_func_validate_re(puppet_expr_list_t *args, puppet_env_t *
     }
 
     puppet_value_t *str_val = puppet_eval_expr(args->exprs[0], env);
-    /* Handle undef gracefully - treat as empty string for validation */
+    /* Handle undef gracefully - skip validation */
     if (!str_val || str_val->type == PUPPET_VALUE_UNDEF) {
         if (str_val) puppet_value_destroy(str_val);
-        puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[0]->loc,
-            "validate_re() first argument is undef, skipping validation");
         return puppet_value_create_bool(true);  /* Allow undef to pass validation */
     }
     if (str_val->type != PUPPET_VALUE_STRING) {
@@ -3926,21 +3967,13 @@ puppet_value_t *puppet_func_validate_re(puppet_expr_list_t *args, puppet_env_t *
 
     if (pattern_val->type == PUPPET_VALUE_STRING) {
         /* Single pattern */
-        regex_t regex;
-        if (regcomp(&regex, pattern_val->data.string.data, REG_EXTENDED | REG_NOSUB) == 0) {
-            matched = (regexec(&regex, str, 0, NULL, 0) == 0);
-            regfree(&regex);
-        }
+        matched = validate_re_match(str, pattern_val->data.string.data);
     } else if (pattern_val->type == PUPPET_VALUE_ARRAY) {
         /* Array of patterns - match any */
         for (size_t i = 0; i < pattern_val->data.array->count && !matched; i++) {
             puppet_value_t *pat = pattern_val->data.array->items[i];
             if (pat && pat->type == PUPPET_VALUE_STRING) {
-                regex_t regex;
-                if (regcomp(&regex, pat->data.string.data, REG_EXTENDED | REG_NOSUB) == 0) {
-                    matched = (regexec(&regex, str, 0, NULL, 0) == 0);
-                    regfree(&regex);
-                }
+                matched = validate_re_match(str, pat->data.string.data);
             }
         }
     }
@@ -3958,111 +3991,136 @@ puppet_value_t *puppet_func_validate_re(puppet_expr_list_t *args, puppet_env_t *
 }
 
 /**
- * @brief Puppet validate_hash() function - validate that value is a hash
+ * @brief Puppet validate_hash() function - validate that values are hashes
  *
- * Usage: validate_hash(value)
- * Raises an error if the value is not a hash.
+ * Usage: validate_hash(value, ...)
+ * Validates that all arguments are hashes.
  * This is a legacy stdlib function - in modern Puppet, use type checking instead.
  */
 puppet_value_t *puppet_func_validate_hash(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
         puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
-            "validate_hash() requires 1 argument");
+            "validate_hash() requires at least 1 argument");
         return puppet_value_create_undef();
     }
 
-    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
-    bool is_hash = val && val->type == PUPPET_VALUE_HASH;
+    bool all_valid = true;
 
-    if (val) puppet_value_destroy(val);
+    /* Validate ALL arguments */
+    for (size_t i = 0; i < args->count; i++) {
+        puppet_value_t *val = puppet_eval_expr(args->exprs[i], env);
+        bool is_hash = val && val->type == PUPPET_VALUE_HASH;
 
-    if (!is_hash) {
-        puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[0]->loc,
-            "validate_hash(): value is not a hash");
+        if (val) puppet_value_destroy(val);
+
+        if (!is_hash) {
+            puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
+                "validate_hash(): value is not a hash");
+            all_valid = false;
+        }
     }
 
-    return puppet_value_create_bool(is_hash);
+    return puppet_value_create_bool(all_valid);
 }
 
 /**
- * @brief Puppet validate_string() function - validate that value is a string
+ * @brief Puppet validate_string() function - validate that values are strings
  *
- * Usage: validate_string(value)
- * Raises an error if the value is not a string.
- * This is a legacy stdlib function.
+ * Usage: validate_string(value, ...)
+ * Validates that all arguments are strings or undef.
+ * This is a legacy stdlib function - allows undef as valid.
  */
 puppet_value_t *puppet_func_validate_string(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
         puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
-            "validate_string() requires 1 argument");
+            "validate_string() requires at least 1 argument");
         return puppet_value_create_undef();
     }
 
-    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
-    bool is_string = val && val->type == PUPPET_VALUE_STRING;
+    bool all_valid = true;
 
-    if (val) puppet_value_destroy(val);
+    /* Validate ALL arguments */
+    for (size_t i = 0; i < args->count; i++) {
+        puppet_value_t *val = puppet_eval_expr(args->exprs[i], env);
+        /* undef is allowed, only non-string non-undef values fail */
+        bool is_valid = !val || val->type == PUPPET_VALUE_UNDEF || val->type == PUPPET_VALUE_STRING;
 
-    if (!is_string) {
-        puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[0]->loc,
-            "validate_string(): value is not a string");
+        if (val) puppet_value_destroy(val);
+
+        if (!is_valid) {
+            puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
+                "validate_string(): value is not a string");
+            all_valid = false;
+        }
     }
 
-    return puppet_value_create_bool(is_string);
+    return puppet_value_create_bool(all_valid);
 }
 
 /**
- * @brief Puppet validate_array() function - validate that value is an array
+ * @brief Puppet validate_array() function - validate that values are arrays
  *
- * Usage: validate_array(value)
- * Raises an error if the value is not an array.
+ * Usage: validate_array(value, ...)
+ * Validates that all arguments are arrays.
  * This is a legacy stdlib function.
  */
 puppet_value_t *puppet_func_validate_array(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
         puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
-            "validate_array() requires 1 argument");
+            "validate_array() requires at least 1 argument");
         return puppet_value_create_undef();
     }
 
-    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
-    bool is_array = val && val->type == PUPPET_VALUE_ARRAY;
+    bool all_valid = true;
 
-    if (val) puppet_value_destroy(val);
+    /* Validate ALL arguments */
+    for (size_t i = 0; i < args->count; i++) {
+        puppet_value_t *val = puppet_eval_expr(args->exprs[i], env);
+        bool is_array = val && val->type == PUPPET_VALUE_ARRAY;
 
-    if (!is_array) {
-        puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[0]->loc,
-            "validate_array(): value is not an array");
+        if (val) puppet_value_destroy(val);
+
+        if (!is_array) {
+            puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
+                "validate_array(): value is not an array");
+            all_valid = false;
+        }
     }
 
-    return puppet_value_create_bool(is_array);
+    return puppet_value_create_bool(all_valid);
 }
 
 /**
- * @brief Puppet validate_bool() function - validate that value is a boolean
+ * @brief Puppet validate_bool() function - validate that values are booleans
  *
- * Usage: validate_bool(value)
- * Raises an error if the value is not a boolean.
+ * Usage: validate_bool(value, ...)
+ * Validates that all arguments are booleans.
  * This is a legacy stdlib function.
  */
 puppet_value_t *puppet_func_validate_bool(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!args || args->count < 1) {
         puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
-            "validate_bool() requires 1 argument");
+            "validate_bool() requires at least 1 argument");
         return puppet_value_create_undef();
     }
 
-    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
-    bool is_bool = val && val->type == PUPPET_VALUE_BOOL;
+    bool all_valid = true;
 
-    if (val) puppet_value_destroy(val);
+    /* Validate ALL arguments */
+    for (size_t i = 0; i < args->count; i++) {
+        puppet_value_t *val = puppet_eval_expr(args->exprs[i], env);
+        bool is_bool = val && val->type == PUPPET_VALUE_BOOL;
 
-    if (!is_bool) {
-        puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[0]->loc,
-            "validate_bool(): value is not a boolean");
+        if (val) puppet_value_destroy(val);
+
+        if (!is_bool) {
+            puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
+                "validate_bool(): value is not a boolean");
+            all_valid = false;
+        }
     }
 
-    return puppet_value_create_bool(is_bool);
+    return puppet_value_create_bool(all_valid);
 }
 
 /**
