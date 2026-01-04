@@ -4446,6 +4446,22 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
     env->node_scope = puppet_scope_create(env->global_scope, "node");
     env->class_scope = NULL;
 
+    /* Copy global scope variables from source (e.g., top-level $jbossenv = 'preprod')
+     * These are needed for Hiera hierarchy path interpolation like %{::jbossenv} */
+    if (source->global_scope && source->global_scope->variables) {
+        puppet_hash_t *src_vars = source->global_scope->variables;
+        for (size_t i = 0; i < src_vars->bucket_count; i++) {
+            puppet_hash_entry_t *entry = src_vars->buckets[i];
+            while (entry) {
+                /* Copy the variable value */
+                puppet_value_t *value_copy = puppet_value_copy(entry->value);
+                puppet_hash_set(env->global_scope->variables,
+                    entry->key.data, entry->key.len, value_copy);
+                entry = entry->next;
+            }
+        }
+    }
+
     /* Share read-only data from source */
     env->loader = source->loader;  /* Shared, thread-safe */
     env->facts_db = source->facts_db;  /* Shared, read-only per thread */
