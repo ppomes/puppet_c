@@ -1258,9 +1258,18 @@ static puppet_stmt_t *convert_if(TSNode node, const char *source) {
         const char *type = ts_node_type(child);
 
         if (strcmp(type, "condition") == 0) {
-            uint32_t cond_count = ts_node_named_child_count(child);
-            if (cond_count > 0) {
-                branch->condition = convert_expression(ts_node_named_child(child, 0), source);
+            /* Check for variable + access pattern (e.g., if $hash['key']) */
+            TSNode var_child = find_child(child, "variable");
+            TSNode access_child = find_child(child, "access");
+
+            if (!ts_node_is_null(var_child) && !ts_node_is_null(access_child)) {
+                puppet_expr_t *var_expr = convert_variable(var_child, source);
+                branch->condition = build_index_expr(var_expr, access_child, source);
+            } else {
+                uint32_t cond_count = ts_node_named_child_count(child);
+                if (cond_count > 0) {
+                    branch->condition = convert_expression(ts_node_named_child(child, 0), source);
+                }
             }
         } else if (strcmp(type, "block") == 0 && branch->body.stmts == NULL) {
             branch->body = convert_block(child, source);
@@ -1275,9 +1284,18 @@ static puppet_stmt_t *convert_if(TSNode node, const char *source) {
             TSNode elsif_block = find_child(child, "block");
 
             if (!ts_node_is_null(elsif_cond)) {
-                uint32_t cond_count = ts_node_named_child_count(elsif_cond);
-                if (cond_count > 0) {
-                    branch->condition = convert_expression(ts_node_named_child(elsif_cond, 0), source);
+                /* Check for variable + access pattern */
+                TSNode var_child = find_child(elsif_cond, "variable");
+                TSNode access_child = find_child(elsif_cond, "access");
+
+                if (!ts_node_is_null(var_child) && !ts_node_is_null(access_child)) {
+                    puppet_expr_t *var_expr = convert_variable(var_child, source);
+                    branch->condition = build_index_expr(var_expr, access_child, source);
+                } else {
+                    uint32_t cond_count = ts_node_named_child_count(elsif_cond);
+                    if (cond_count > 0) {
+                        branch->condition = convert_expression(ts_node_named_child(elsif_cond, 0), source);
+                    }
                 }
             }
             if (!ts_node_is_null(elsif_block)) {
