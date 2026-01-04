@@ -99,9 +99,7 @@ make check
 
 Note: On Intel Macs, use `/usr/local/opt/` instead of `/opt/homebrew/opt/`.
 
-## Usage
-
-### Compiler (puppetc-compile)
+## Compiler Usage
 
 The main tool for local development and CI/CD validation.
 
@@ -150,6 +148,28 @@ FQDN: testnode.example.com
 
 Total: 41 resources
 ```
+
+## Docker
+
+Build and run using Docker (no dependencies needed on host).
+
+```bash
+# Build images
+docker-compose build
+
+# Start server
+docker-compose up -d server
+
+# Run agent (noop mode)
+docker-compose run --rm agent
+
+# Run agent (apply mode)
+docker-compose run --rm agent -a
+```
+
+Edit `puppetcode/manifests/site.pp` on your host - changes are reflected immediately.
+
+## Other Tools
 
 ### Facter (facter_c)
 
@@ -204,26 +224,6 @@ Basic Puppet agent for applying catalogs.
 # Specify server
 ./agent/puppetc-agent -s http://puppet:8140 -a
 ```
-
-## Docker
-
-Build and run using Docker (no dependencies needed on host).
-
-```bash
-# Build images
-docker-compose build
-
-# Start server
-docker-compose up -d server
-
-# Run agent (noop mode)
-docker-compose run --rm agent
-
-# Run agent (apply mode)
-docker-compose run --rm agent -a
-```
-
-Edit `puppetcode/manifests/site.pp` on your host - changes are reflected immediately.
 
 ## Language Support
 
