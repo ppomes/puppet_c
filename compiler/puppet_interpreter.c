@@ -1885,9 +1885,25 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         if (pre_eval_values) puppet_free(pre_eval_values);
                         if (attr_found) puppet_free(attr_found);
 
+                        // Set caller_module_name for hiera lookups (extract module from class name)
+                        char *old_caller_module_res = env->caller_module_name;
+                        const char *sep_res = strstr(class_name, "::");
+                        if (sep_res) {
+                            size_t module_len = sep_res - class_name;
+                            env->caller_module_name = puppet_malloc(module_len + 1);
+                            memcpy(env->caller_module_name, class_name, module_len);
+                            env->caller_module_name[module_len] = '\0';
+                        } else {
+                            env->caller_module_name = puppet_strdup(class_name);
+                        }
+
                         // Execute class body
                         if (puppet_verbose) fprintf(stderr, "Including class: %s\n", class_name);
                         puppet_exec_stmt_list(&class_def->data.class_def.body, env);
+
+                        // Restore caller_module_name
+                        puppet_free(env->caller_module_name);
+                        env->caller_module_name = old_caller_module_res;
 
                         // Add to catalog
                         if (env->build_catalog && env->catalog) {
@@ -2544,8 +2560,26 @@ static bool puppet_include_class_from_def(puppet_stmt_t *class_def, puppet_env_t
         puppet_scope_set_var(class_scope, param_name, param_value);
     }
 
+    /* Set caller_module_name for hiera lookups (extract module from class name) */
+    char *old_caller_module = env->caller_module_name;
+    const char *sep = strstr(class_name, "::");
+    if (sep) {
+        /* Class like "tomee::config" -> module is "tomee" */
+        size_t module_len = sep - class_name;
+        env->caller_module_name = puppet_malloc(module_len + 1);
+        memcpy(env->caller_module_name, class_name, module_len);
+        env->caller_module_name[module_len] = '\0';
+    } else {
+        /* Top-level class like "tomee" -> module is "tomee" */
+        env->caller_module_name = puppet_strdup(class_name);
+    }
+
     /* Execute the class body */
     puppet_exec_stmt_list(&class_def->data.class_def.body, env);
+
+    /* Restore caller_module_name */
+    puppet_free(env->caller_module_name);
+    env->caller_module_name = old_caller_module;
 
     /* Add class to catalog if building */
     if (env->build_catalog && env->catalog) {

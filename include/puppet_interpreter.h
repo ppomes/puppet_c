@@ -213,6 +213,9 @@ typedef struct puppet_env {
     /* Parallel node processing */
     bool parallel_nodes;                      /**< Process nodes in parallel */
     bool skip_erb;                            /**< Skip ERB template rendering (for parallel mode) */
+
+    /* Module context for hiera lookups */
+    char *caller_module_name;                 /**< Current module name for hiera $module_name */
     pthread_mutex_t *stats_mutex;             /**< Mutex for stats updates (shared between threads) */
 } puppet_env_t;
 

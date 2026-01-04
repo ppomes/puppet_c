@@ -345,19 +345,25 @@ char *puppet_hiera_interpolate(const char *template, puppet_hiera_context_t *con
 
                 /* Check environment for scope lookups */
                 if (!value && context->env) {
-                    /* Strip leading :: for lookup */
-                    const char *lookup_name = var_name;
-                    if (strncmp(lookup_name, "::", 2) == 0) {
-                        lookup_name += 2;
-                    }
-                    /* Set flag to prevent recursive hiera lookups during path interpolation */
-                    bool was_in_interpolation = context->env->in_hiera_interpolation;
-                    context->env->in_hiera_interpolation = true;
-                    puppet_value_t *looked_up = puppet_variable_lookup_chain(context->env, lookup_name);
-                    context->env->in_hiera_interpolation = was_in_interpolation;
-                    if (looked_up && looked_up->type == PUPPET_VALUE_STRING) {
-                        strncpy(value_buf, looked_up->data.string.data, sizeof(value_buf) - 1);
+                    /* Special case: module_name comes from caller_module_name */
+                    if (strcmp(var_name, "module_name") == 0 && context->env->caller_module_name) {
+                        strncpy(value_buf, context->env->caller_module_name, sizeof(value_buf) - 1);
                         value = value_buf;
+                    } else {
+                        /* Strip leading :: for lookup */
+                        const char *lookup_name = var_name;
+                        if (strncmp(lookup_name, "::", 2) == 0) {
+                            lookup_name += 2;
+                        }
+                        /* Set flag to prevent recursive hiera lookups during path interpolation */
+                        bool was_in_interpolation = context->env->in_hiera_interpolation;
+                        context->env->in_hiera_interpolation = true;
+                        puppet_value_t *looked_up = puppet_variable_lookup_chain(context->env, lookup_name);
+                        context->env->in_hiera_interpolation = was_in_interpolation;
+                        if (looked_up && looked_up->type == PUPPET_VALUE_STRING) {
+                            strncpy(value_buf, looked_up->data.string.data, sizeof(value_buf) - 1);
+                            value = value_buf;
+                        }
                     }
                 }
 
