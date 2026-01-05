@@ -183,6 +183,127 @@ static int facter_set_boolean(facter_ctx_t *ctx, const char *name, bool value) {
 }
 
 /* ============================================================================
+ * Hash Value Helpers (for nested fact structures)
+ * ============================================================================ */
+
+static facter_value_t *facter_value_hash_create(void) {
+    facter_value_t *v = puppet_calloc(1, sizeof(facter_value_t));
+    if (!v) return NULL;
+    v->type = FACTER_VALUE_HASH;
+    v->data.hash_val.keys = NULL;
+    v->data.hash_val.values = NULL;
+    v->data.hash_val.count = 0;
+    return v;
+}
+
+static int facter_hash_set_string(facter_value_t *hash, const char *key, const char *value) {
+    if (!hash || hash->type != FACTER_VALUE_HASH || !key) return -1;
+
+    /* Check if key already exists */
+    for (size_t i = 0; i < hash->data.hash_val.count; i++) {
+        if (strcmp(hash->data.hash_val.keys[i], key) == 0) {
+            facter_value_free(hash->data.hash_val.values[i]);
+            hash->data.hash_val.values[i] = facter_value_string(value);
+            return 0;
+        }
+    }
+
+    /* Add new key */
+    size_t new_count = hash->data.hash_val.count + 1;
+    hash->data.hash_val.keys = puppet_realloc(hash->data.hash_val.keys, new_count * sizeof(char*));
+    hash->data.hash_val.values = puppet_realloc(hash->data.hash_val.values, new_count * sizeof(facter_value_t*));
+
+    hash->data.hash_val.keys[hash->data.hash_val.count] = puppet_strdup(key);
+    hash->data.hash_val.values[hash->data.hash_val.count] = facter_value_string(value);
+    hash->data.hash_val.count = new_count;
+
+    return 0;
+}
+
+static int facter_hash_set_integer(facter_value_t *hash, const char *key, long value) {
+    if (!hash || hash->type != FACTER_VALUE_HASH || !key) return -1;
+
+    /* Check if key already exists */
+    for (size_t i = 0; i < hash->data.hash_val.count; i++) {
+        if (strcmp(hash->data.hash_val.keys[i], key) == 0) {
+            facter_value_free(hash->data.hash_val.values[i]);
+            hash->data.hash_val.values[i] = facter_value_integer(value);
+            return 0;
+        }
+    }
+
+    /* Add new key */
+    size_t new_count = hash->data.hash_val.count + 1;
+    hash->data.hash_val.keys = puppet_realloc(hash->data.hash_val.keys, new_count * sizeof(char*));
+    hash->data.hash_val.values = puppet_realloc(hash->data.hash_val.values, new_count * sizeof(facter_value_t*));
+
+    hash->data.hash_val.keys[hash->data.hash_val.count] = puppet_strdup(key);
+    hash->data.hash_val.values[hash->data.hash_val.count] = facter_value_integer(value);
+    hash->data.hash_val.count = new_count;
+
+    return 0;
+}
+
+static int facter_hash_set_boolean(facter_value_t *hash, const char *key, bool value) {
+    if (!hash || hash->type != FACTER_VALUE_HASH || !key) return -1;
+
+    /* Check if key already exists */
+    for (size_t i = 0; i < hash->data.hash_val.count; i++) {
+        if (strcmp(hash->data.hash_val.keys[i], key) == 0) {
+            facter_value_free(hash->data.hash_val.values[i]);
+            hash->data.hash_val.values[i] = facter_value_boolean(value);
+            return 0;
+        }
+    }
+
+    /* Add new key */
+    size_t new_count = hash->data.hash_val.count + 1;
+    hash->data.hash_val.keys = puppet_realloc(hash->data.hash_val.keys, new_count * sizeof(char*));
+    hash->data.hash_val.values = puppet_realloc(hash->data.hash_val.values, new_count * sizeof(facter_value_t*));
+
+    hash->data.hash_val.keys[hash->data.hash_val.count] = puppet_strdup(key);
+    hash->data.hash_val.values[hash->data.hash_val.count] = facter_value_boolean(value);
+    hash->data.hash_val.count = new_count;
+
+    return 0;
+}
+
+static int facter_hash_set_hash(facter_value_t *hash, const char *key, facter_value_t *value) {
+    if (!hash || hash->type != FACTER_VALUE_HASH || !key || !value) return -1;
+
+    /* Check if key already exists */
+    for (size_t i = 0; i < hash->data.hash_val.count; i++) {
+        if (strcmp(hash->data.hash_val.keys[i], key) == 0) {
+            facter_value_free(hash->data.hash_val.values[i]);
+            hash->data.hash_val.values[i] = value;
+            return 0;
+        }
+    }
+
+    /* Add new key */
+    size_t new_count = hash->data.hash_val.count + 1;
+    hash->data.hash_val.keys = puppet_realloc(hash->data.hash_val.keys, new_count * sizeof(char*));
+    hash->data.hash_val.values = puppet_realloc(hash->data.hash_val.values, new_count * sizeof(facter_value_t*));
+
+    hash->data.hash_val.keys[hash->data.hash_val.count] = puppet_strdup(key);
+    hash->data.hash_val.values[hash->data.hash_val.count] = value;
+    hash->data.hash_val.count = new_count;
+
+    return 0;
+}
+
+static facter_value_t *facter_hash_get(facter_value_t *hash, const char *key) {
+    if (!hash || hash->type != FACTER_VALUE_HASH || !key) return NULL;
+
+    for (size_t i = 0; i < hash->data.hash_val.count; i++) {
+        if (strcmp(hash->data.hash_val.keys[i], key) == 0) {
+            return hash->data.hash_val.values[i];
+        }
+    }
+    return NULL;
+}
+
+/* ============================================================================
  * Direct Fact Collectors
  * ============================================================================ */
 
@@ -831,30 +952,40 @@ static void collect_kernel_facts(facter_ctx_t *ctx) {
 }
 
 static void collect_os_facts(facter_ctx_t *ctx) {
+    /* Create nested 'os' hash for $facts['os']['family'] style access */
+    facter_value_t *os_hash = facter_value_hash_create();
+    facter_value_t *os_release_hash = facter_value_hash_create();
+
     char *os_name = facter_os_name();
     if (os_name) {
+        /* Legacy flat key */
         facter_set_string(ctx, "operatingsystem", os_name);
-        facter_set_string(ctx, "os.name", os_name);
+        /* Nested hash */
+        facter_hash_set_string(os_hash, "name", os_name);
         puppet_free(os_name);
     }
 
     char *os_family = facter_os_family();
     if (os_family) {
+        /* Legacy flat key */
         facter_set_string(ctx, "osfamily", os_family);
-        facter_set_string(ctx, "os.family", os_family);
+        /* Nested hash */
+        facter_hash_set_string(os_hash, "family", os_family);
         puppet_free(os_family);
     }
 
     char *os_release = facter_os_release();
     if (os_release) {
+        /* Legacy flat key */
         facter_set_string(ctx, "operatingsystemrelease", os_release);
-        facter_set_string(ctx, "os.release.full", os_release);
+        /* Nested release hash */
+        facter_hash_set_string(os_release_hash, "full", os_release);
 
         /* Extract major version */
         char *major = puppet_strdup(os_release);
         char *dot = strchr(major, '.');
         if (dot) *dot = '\0';
-        facter_set_string(ctx, "os.release.major", major);
+        facter_hash_set_string(os_release_hash, "major", major);
         puppet_free(major);
 
         puppet_free(os_release);
@@ -862,24 +993,36 @@ static void collect_os_facts(facter_ctx_t *ctx) {
 
     char *arch = facter_architecture();
     if (arch) {
+        /* Legacy flat keys */
         facter_set_string(ctx, "architecture", arch);
-        facter_set_string(ctx, "os.architecture", arch);
-
-        /* Hardware model */
         facter_set_string(ctx, "hardwaremodel", arch);
-
+        /* Nested hash */
+        facter_hash_set_string(os_hash, "architecture", arch);
+        facter_hash_set_string(os_hash, "hardware", arch);
         puppet_free(arch);
     }
+
+    /* Add release sub-hash to os hash */
+    facter_hash_set_hash(os_hash, "release", os_release_hash);
+
+    /* Set the nested 'os' fact */
+    facter_set(ctx, "os", os_hash);
 }
 
 static void collect_memory_facts(facter_ctx_t *ctx) {
     unsigned long total = facter_memory_total();
     unsigned long free_mem = facter_memory_free();
 
+    /* Legacy flat keys */
     facter_set_integer(ctx, "memorysize_mb", total / (1024 * 1024));
     facter_set_integer(ctx, "memoryfree_mb", free_mem / (1024 * 1024));
-    facter_set_integer(ctx, "memory.system.total_bytes", total);
-    facter_set_integer(ctx, "memory.system.available_bytes", free_mem);
+
+    /* Create nested 'memory' hash for $facts['memory']['system']['total_bytes'] */
+    facter_value_t *memory_hash = facter_value_hash_create();
+    facter_value_t *system_hash = facter_value_hash_create();
+
+    facter_hash_set_integer(system_hash, "total_bytes", total);
+    facter_hash_set_integer(system_hash, "available_bytes", free_mem);
 
     /* Human-readable format */
     char buf[32];
@@ -888,7 +1031,10 @@ static void collect_memory_facts(facter_ctx_t *ctx) {
     } else {
         snprintf(buf, sizeof(buf), "%.2f MiB", (double)total / (1024.0 * 1024));
     }
-    facter_set_string(ctx, "memory.system.total", buf);
+    facter_hash_set_string(system_hash, "total", buf);
+
+    facter_hash_set_hash(memory_hash, "system", system_hash);
+    facter_set(ctx, "memory", memory_hash);
 }
 
 static void collect_processor_facts(facter_ctx_t *ctx) {
@@ -927,17 +1073,25 @@ static void collect_processor_facts(facter_ctx_t *ctx) {
 }
 
 static void collect_network_facts(facter_ctx_t *ctx) {
+    /* Create nested 'networking' hash for $facts['networking']['ip'] */
+    facter_value_t *networking_hash = facter_value_hash_create();
+    facter_value_t *interfaces_hash = facter_value_hash_create();
+
     char *ip = facter_ipaddress();
     if (ip) {
+        /* Legacy flat key */
         facter_set_string(ctx, "ipaddress", ip);
-        facter_set_string(ctx, "networking.ip", ip);
+        /* Nested hash */
+        facter_hash_set_string(networking_hash, "ip", ip);
         puppet_free(ip);
     }
 
     char *mac = facter_macaddress();
     if (mac) {
+        /* Legacy flat key */
         facter_set_string(ctx, "macaddress", mac);
-        facter_set_string(ctx, "networking.mac", mac);
+        /* Nested hash */
+        facter_hash_set_string(networking_hash, "mac", mac);
         puppet_free(mac);
     }
 
@@ -946,25 +1100,30 @@ static void collect_network_facts(facter_ctx_t *ctx) {
     facter_interface_t *interfaces = facter_interfaces(&iface_count);
     if (interfaces) {
         for (size_t i = 0; i < iface_count; i++) {
-            char key[128];
+            facter_value_t *iface_hash = facter_value_hash_create();
 
             if (interfaces[i].ip) {
-                snprintf(key, sizeof(key), "networking.interfaces.%s.ip", interfaces[i].name);
+                facter_hash_set_string(iface_hash, "ip", interfaces[i].ip);
+                /* Also add legacy flat keys for primary interface */
+                char key[128];
+                snprintf(key, sizeof(key), "ipaddress_%s", interfaces[i].name);
                 facter_set_string(ctx, key, interfaces[i].ip);
             }
             if (interfaces[i].mac) {
-                snprintf(key, sizeof(key), "networking.interfaces.%s.mac", interfaces[i].name);
-                facter_set_string(ctx, key, interfaces[i].mac);
+                facter_hash_set_string(iface_hash, "mac", interfaces[i].mac);
             }
             if (interfaces[i].netmask) {
-                snprintf(key, sizeof(key), "networking.interfaces.%s.netmask", interfaces[i].name);
-                facter_set_string(ctx, key, interfaces[i].netmask);
+                facter_hash_set_string(iface_hash, "netmask", interfaces[i].netmask);
             }
-            snprintf(key, sizeof(key), "networking.interfaces.%s.mtu", interfaces[i].name);
-            facter_set_integer(ctx, key, interfaces[i].mtu);
+            facter_hash_set_integer(iface_hash, "mtu", interfaces[i].mtu);
+
+            facter_hash_set_hash(interfaces_hash, interfaces[i].name, iface_hash);
         }
         facter_interfaces_free(interfaces, iface_count);
     }
+
+    facter_hash_set_hash(networking_hash, "interfaces", interfaces_hash);
+    facter_set(ctx, "networking", networking_hash);
 }
 
 static void collect_virtual_facts(facter_ctx_t *ctx) {
@@ -1072,6 +1231,72 @@ const char **facter_list(facter_ctx_t *ctx, size_t *count) {
  * Output Formats
  * ============================================================================ */
 
+/* Recursive helper to output a facter_value_t as JSON */
+static void facter_value_to_json(json_buffer_t *buf, facter_value_t *value, int indent) {
+    if (!value) {
+        json_buffer_append(buf, "null");
+        return;
+    }
+
+    switch (value->type) {
+        case FACTER_VALUE_STRING:
+            json_buffer_append_string(buf, value->data.string_val);
+            break;
+        case FACTER_VALUE_INTEGER:
+            json_buffer_append_int(buf, value->data.integer_val);
+            break;
+        case FACTER_VALUE_FLOAT:
+            json_buffer_append_double(buf, value->data.float_val);
+            break;
+        case FACTER_VALUE_BOOLEAN:
+            json_buffer_append_bool(buf, value->data.boolean_val);
+            break;
+        case FACTER_VALUE_HASH:
+            json_buffer_append(buf, "{\n");
+            for (size_t i = 0; i < value->data.hash_val.count; i++) {
+                /* Indent */
+                for (int j = 0; j < indent + 1; j++) {
+                    json_buffer_append(buf, "  ");
+                }
+                json_buffer_append_string(buf, value->data.hash_val.keys[i]);
+                json_buffer_append(buf, ": ");
+                facter_value_to_json(buf, value->data.hash_val.values[i], indent + 1);
+                if (i < value->data.hash_val.count - 1) {
+                    json_buffer_append(buf, ",");
+                }
+                json_buffer_append(buf, "\n");
+            }
+            /* Closing brace indent */
+            for (int j = 0; j < indent; j++) {
+                json_buffer_append(buf, "  ");
+            }
+            json_buffer_append(buf, "}");
+            break;
+        case FACTER_VALUE_ARRAY:
+            json_buffer_append(buf, "[\n");
+            for (size_t i = 0; i < value->data.array_val.count; i++) {
+                /* Indent */
+                for (int j = 0; j < indent + 1; j++) {
+                    json_buffer_append(buf, "  ");
+                }
+                facter_value_to_json(buf, value->data.array_val.items[i], indent + 1);
+                if (i < value->data.array_val.count - 1) {
+                    json_buffer_append(buf, ",");
+                }
+                json_buffer_append(buf, "\n");
+            }
+            /* Closing bracket indent */
+            for (int j = 0; j < indent; j++) {
+                json_buffer_append(buf, "  ");
+            }
+            json_buffer_append(buf, "]");
+            break;
+        default:
+            json_buffer_append_null(buf);
+            break;
+    }
+}
+
 char *facter_to_json(facter_ctx_t *ctx) {
     if (!ctx) return NULL;
 
@@ -1087,23 +1312,7 @@ char *facter_to_json(facter_ctx_t *ctx) {
         json_buffer_append_string(buf, f->name);
         json_buffer_append(buf, ": ");
 
-        switch (f->value->type) {
-            case FACTER_VALUE_STRING:
-                json_buffer_append_string(buf, f->value->data.string_val);
-                break;
-            case FACTER_VALUE_INTEGER:
-                json_buffer_append_int(buf, f->value->data.integer_val);
-                break;
-            case FACTER_VALUE_FLOAT:
-                json_buffer_append_double(buf, f->value->data.float_val);
-                break;
-            case FACTER_VALUE_BOOLEAN:
-                json_buffer_append_bool(buf, f->value->data.boolean_val);
-                break;
-            default:
-                json_buffer_append_null(buf);
-                break;
-        }
+        facter_value_to_json(buf, f->value, 1);
 
         if (i < ctx->fact_count - 1) {
             json_buffer_append(buf, ",");

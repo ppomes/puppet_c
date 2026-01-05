@@ -1,7 +1,7 @@
 SUBDIRS = common facter compiler server agent tests
 
 # Additional files to distribute
-EXTRA_DIST = README.md
+EXTRA_DIST = README.md scripts/dump_puppetdb_facts.py
 
 # Clean up generated files
 MAINTAINERCLEANFILES = \

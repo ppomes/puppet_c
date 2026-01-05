@@ -205,6 +205,42 @@ puppetc-agent -n
 puppetc-agent -s http://puppet:8140 -a
 ```
 
+### Exporting Facts from PuppetDB
+
+To validate manifests for all your nodes, export facts from your existing PuppetDB:
+
+**Quick export (from PuppetDB server):**
+```bash
+curl -s 'http://localhost:8080/pdb/query/v4/inventory' | \
+  python3 -c 'import json,yaml,sys; d=json.load(sys.stdin); print(yaml.dump({"facts":{n["certname"]:n["facts"] for n in d}}))' \
+  > allfacts.yaml
+```
+
+**Using the included script:**
+```bash
+# Local PuppetDB (HTTP, no auth)
+./scripts/dump_puppetdb_facts.py -o allfacts.yaml
+
+# Remote PuppetDB with SSL certificates
+./scripts/dump_puppetdb_facts.py -H puppetdb.example.com -p 8081 --ssl \
+  --cert /etc/puppetlabs/puppet/ssl/certs/$(hostname -f).pem \
+  --key /etc/puppetlabs/puppet/ssl/private_keys/$(hostname -f).pem \
+  --cacert /etc/puppetlabs/puppet/ssl/certs/ca.pem \
+  -o allfacts.yaml
+
+# Filter to specific nodes (PQL query)
+./scripts/dump_puppetdb_facts.py --query '["~", "certname", "\\.prod\\."]' -o prod_facts.yaml
+```
+
+**Then validate all nodes:**
+```bash
+puppetc-compile --all-nodes -m modules/ -f allfacts.yaml manifests/site.pp
+```
+
+**Note:** PuppetDB typically listens on:
+- `localhost:8080` - HTTP (no auth, only from localhost)
+- `0.0.0.0:8081` - HTTPS (requires Puppet SSL certificates)
+
 ## Docker Development
 
 Full server/agent setup using Docker Compose.
