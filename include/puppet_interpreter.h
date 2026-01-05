@@ -177,6 +177,10 @@ typedef struct puppet_env {
     /* Resource catalog for duplicate detection */
     puppet_hash_t *resource_catalog;          /**< Track declared resources (type::title → true) */
 
+    /* Class re-execution tracking */
+    puppet_hash_t *classes_being_reexecuted;  /**< Classes currently being re-executed (to prevent loops) */
+    bool class_reexecuting;                   /**< True during class body re-execution (allows resource overwrites) */
+
     /* Virtual resources storage */
     puppet_hash_t *virtual_resources;         /**< Virtual resources awaiting realization (type::title → stmt) */
     

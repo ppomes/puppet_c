@@ -140,6 +140,21 @@ int puppet_catalog_add_resource(puppet_catalog_t *catalog,
                                 int line);
 
 /**
+ * @brief Update an existing resource's parameters in the catalog
+ * @param catalog Target catalog
+ * @param type Resource type
+ * @param title Resource title
+ * @param params New parameters (ownership transferred)
+ * @param param_count Number of parameters
+ * @return 0 on success, -1 if not found, -2 on error
+ */
+int puppet_catalog_update_resource(puppet_catalog_t *catalog,
+                                   const char *type,
+                                   const char *title,
+                                   puppet_catalog_param_t *params,
+                                   size_t param_count);
+
+/**
  * @brief Add an edge (relationship) to the catalog
  * @param catalog Target catalog
  * @param source_type Source resource type

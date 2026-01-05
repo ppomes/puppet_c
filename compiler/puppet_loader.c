@@ -399,8 +399,10 @@ bool puppet_loader_include_class(puppet_loader_t *loader,
         }
     }
 
-    /* Create a new scope for the class, parented by inherited class if any */
-    puppet_scope_t *scope_parent = parent_class_scope ? parent_class_scope : env->current_scope;
+    /* Create a new scope for the class, parented by inherited class if any.
+     * IMPORTANT: Use node_scope instead of current_scope to avoid dangling pointers
+     * when current_scope is a transient define scope that gets destroyed. */
+    puppet_scope_t *scope_parent = parent_class_scope ? parent_class_scope : env->node_scope;
     puppet_scope_t *class_scope = puppet_scope_create(scope_parent, normalized_name);
     puppet_scope_push(env, class_scope);
 

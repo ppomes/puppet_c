@@ -135,6 +135,30 @@ int puppet_catalog_add_resource(puppet_catalog_t *catalog,
     return 0;
 }
 
+int puppet_catalog_update_resource(puppet_catalog_t *catalog,
+                                   const char *type,
+                                   const char *title,
+                                   puppet_catalog_param_t *params,
+                                   size_t param_count) {
+    if (!catalog || !type || !title) return -2;
+
+    puppet_catalog_resource_t *res = puppet_catalog_find_resource(catalog, type, title);
+    if (!res) return -1;  /* Not found */
+
+    /* Free old parameters */
+    for (size_t i = 0; i < res->param_count; i++) {
+        puppet_free(res->parameters[i].name);
+        puppet_value_destroy(res->parameters[i].value);
+    }
+    puppet_free(res->parameters);
+
+    /* Set new parameters */
+    res->parameters = params;
+    res->param_count = param_count;
+
+    return 0;
+}
+
 int puppet_catalog_add_edge(puppet_catalog_t *catalog,
                             const char *source_type,
                             const char *source_title,

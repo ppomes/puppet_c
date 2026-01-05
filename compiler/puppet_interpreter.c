@@ -273,6 +273,11 @@ puppet_env_t *puppet_env_create(void) {
     env->resource_catalog->bucket_count = 64;  /* Start with reasonable size */
     env->resource_catalog->buckets = puppet_calloc(env->resource_catalog->bucket_count, sizeof(puppet_hash_entry_t*));
 
+    /* Initialize class re-execution tracking */
+    env->classes_being_reexecuted = puppet_calloc(1, sizeof(puppet_hash_t));
+    env->classes_being_reexecuted->bucket_count = 32;
+    env->classes_being_reexecuted->buckets = puppet_calloc(env->classes_being_reexecuted->bucket_count, sizeof(puppet_hash_entry_t*));
+
     /* Initialize virtual resources storage */
     env->virtual_resources = puppet_calloc(1, sizeof(puppet_hash_t));
     env->virtual_resources->bucket_count = 64;
@@ -1770,8 +1775,84 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                                         puppet_value_create_bool(true));
 
                         // Check if class was already executed via include
-                        // In Puppet, class {} after include is allowed but doesn't re-execute
-                        if (puppet_hash_get(env->class_scopes, class_name, strlen(class_name))) {
+                        // If class {} declaration provides parameters and the class was already included,
+                        // we need to re-execute the class body with the new parameters.
+                        puppet_scope_t *existing_scope = (puppet_scope_t *)puppet_hash_get(env->class_scopes, class_name, strlen(class_name));
+
+                        if (existing_scope) {
+                            // Check if we have parameters to apply
+                            if (instance->attr_count > 0) {
+                                // Check if this class is currently being re-executed (loop guard)
+                                if (puppet_hash_get(env->classes_being_reexecuted, class_name, strlen(class_name))) {
+                                    // Already re-executing this class - skip to prevent infinite loop
+                                    puppet_debug("Class %s already being re-executed, skipping", class_name);
+                                    puppet_value_destroy(title_val);
+                                    continue;
+                                }
+
+                                // Mark this class as being re-executed
+                                puppet_hash_set(env->classes_being_reexecuted, class_name, strlen(class_name),
+                                                puppet_value_create_bool(true));
+
+                                puppet_debug("Class %s already included, re-executing with parameters from class {} declaration", class_name);
+
+                                // Find the class definition
+                                puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
+                                if (!class_def && env->loader) {
+                                    class_def = puppet_loader_load_class(env->loader, class_name);
+                                }
+
+                                if (class_def) {
+                                    // Update parameters in existing scope
+                                    for (size_t ai = 0; ai < instance->attr_count; ai++) {
+                                        if (instance->attributes[ai].name.data) {
+                                            puppet_value_t *attr_val = puppet_eval_expr(instance->attributes[ai].value, env);
+                                            puppet_scope_set_var(existing_scope, instance->attributes[ai].name.data, attr_val);
+                                            puppet_debug("  Updated param %s in existing scope", instance->attributes[ai].name.data);
+                                        }
+                                    }
+
+                                    // Re-execute class body with updated parameters
+                                    puppet_scope_push(env, existing_scope);
+                                    puppet_scope_t *old_class_scope = env->class_scope;
+                                    env->class_scope = existing_scope;
+
+                                    // Set class_reexecuting flag to allow resource overwrites
+                                    bool old_reexecuting = env->class_reexecuting;
+                                    env->class_reexecuting = true;
+
+                                    // Set caller_module_name for template lookups
+                                    char *old_caller_module = env->caller_module_name;
+                                    const char *sep = strstr(class_name, "::");
+                                    if (sep) {
+                                        size_t module_len = sep - class_name;
+                                        env->caller_module_name = puppet_malloc(module_len + 1);
+                                        memcpy(env->caller_module_name, class_name, module_len);
+                                        env->caller_module_name[module_len] = '\0';
+                                    } else {
+                                        env->caller_module_name = puppet_strdup(class_name);
+                                    }
+
+                                    // Execute class body
+                                    for (size_t bi = 0; bi < class_def->data.class_def.body.count; bi++) {
+                                        puppet_exec_stmt(class_def->data.class_def.body.stmts[bi], env);
+                                    }
+
+                                    puppet_free(env->caller_module_name);
+                                    env->caller_module_name = old_caller_module;
+                                    env->class_scope = old_class_scope;
+                                    env->class_reexecuting = old_reexecuting;
+                                    puppet_scope_pop(env);
+                                }
+
+                                // Note: We leave the re-execution flag set - it prevents duplicate re-execution
+                                // of the same class if multiple class {} declarations exist
+
+                                puppet_value_destroy(title_val);
+                                continue;
+                            }
+
+                            // Class already included with no new parameters - skip
                             puppet_debug("Class %s already included, skipping re-execution", class_name);
                             puppet_value_destroy(title_val);
                             continue;
@@ -1848,8 +1929,10 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                             }
                         }
 
-                        // Now create scope for class, parented by inherited class scope if any
-                        puppet_scope_t *scope_parent = parent_class_scope ? parent_class_scope : env->current_scope;
+                        // Now create scope for class, parented by inherited class scope if any.
+                        // IMPORTANT: Use node_scope instead of current_scope to avoid dangling pointers
+                        // when current_scope is a transient define scope that gets destroyed.
+                        puppet_scope_t *scope_parent = parent_class_scope ? parent_class_scope : env->node_scope;
                         puppet_scope_t *class_scope = puppet_scope_create(scope_parent, class_name);
                         puppet_scope_push(env, class_scope);
                         puppet_scope_t *old_class_scope = env->class_scope;
@@ -2016,11 +2099,16 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         puppet_value_t *existing = puppet_hash_get(env->resource_catalog,
                                                                    resource_id, strlen(resource_id));
                         if (existing) {
-                            puppet_error_at(stmt->loc, "Duplicate declaration - %s is already declared", resource_id);
-                            puppet_env_increment_error(env);
-                            puppet_free(resource_id);
-                            puppet_value_destroy(title_val);
-                            continue;
+                            if (env->class_reexecuting) {
+                                // During class re-execution, allow resource overwrites
+                                puppet_debug("Re-executing defined type %s (overwriting)", resource_id);
+                            } else {
+                                puppet_error_at(stmt->loc, "Duplicate declaration - %s is already declared", resource_id);
+                                puppet_env_increment_error(env);
+                                puppet_free(resource_id);
+                                puppet_value_destroy(title_val);
+                                continue;
+                            }
                         }
 
                         puppet_value_t *marker = puppet_value_create_bool(true);
@@ -2085,13 +2173,21 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                                     puppet_value_destroy(attr_val);
                                 }
                             }
-                            puppet_catalog_add_resource(env->catalog,
+                            int add_result = puppet_catalog_add_resource(env->catalog,
                                                         stmt->data.resource.type.data,
                                                         title_str,
                                                         params,
                                                         param_idx,
                                                         stmt->loc.filename,
                                                         stmt->loc.line);
+                            // If duplicate and we're re-executing a class, update the resource instead
+                            if (add_result == -1 && env->class_reexecuting) {
+                                puppet_catalog_update_resource(env->catalog,
+                                                               stmt->data.resource.type.data,
+                                                               title_str,
+                                                               params,
+                                                               param_idx);
+                            }
                         }
 
                         /* Pop the define scope */
@@ -2138,11 +2234,16 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         puppet_value_t *existing = puppet_hash_get(env->resource_catalog,
                                                                    resource_id, strlen(resource_id));
                         if (existing) {
-                            puppet_error_at(stmt->loc, "Duplicate declaration - %s is already declared", resource_id);
-                            fprintf(stderr, "       Resource titles must be unique within their type\n");
-                            puppet_env_increment_error(env);
-                            puppet_free(resource_id);
-                            continue;  // Skip this duplicate resource
+                            if (env->class_reexecuting) {
+                                // During class re-execution, allow resource overwrites
+                                puppet_debug("Re-executing resource %s (overwriting)", resource_id);
+                            } else {
+                                puppet_error_at(stmt->loc, "Duplicate declaration - %s is already declared", resource_id);
+                                fprintf(stderr, "       Resource titles must be unique within their type\n");
+                                puppet_env_increment_error(env);
+                                puppet_free(resource_id);
+                                continue;  // Skip this duplicate resource
+                            }
                         }
 
                         // Add to duplicate detection catalog
@@ -2197,13 +2298,21 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
 
                         // Add to resource catalog if building
                         if (env->build_catalog && env->catalog) {
-                            puppet_catalog_add_resource(env->catalog,
+                            int add_result = puppet_catalog_add_resource(env->catalog,
                                                         stmt->data.resource.type.data,
                                                         title_str,
                                                         params,
                                                         param_idx,
                                                         stmt->loc.filename,
                                                         stmt->loc.line);  // Use actual count, not attr_count
+                            // If duplicate and we're re-executing a class, update the resource instead
+                            if (add_result == -1 && env->class_reexecuting) {
+                                puppet_catalog_update_resource(env->catalog,
+                                                               stmt->data.resource.type.data,
+                                                               title_str,
+                                                               params,
+                                                               param_idx);
+                            }
                         }
 
                         puppet_free(resource_id);
@@ -2637,8 +2746,11 @@ static bool puppet_include_class_from_def(puppet_stmt_t *class_def, puppet_env_t
         }
     }
 
-    /* Create a new scope for the class, parented by the inherited class scope if any */
-    puppet_scope_t *scope_parent = parent_class_scope ? parent_class_scope : env->current_scope;
+    /* Create a new scope for the class, parented by the inherited class scope if any.
+     * IMPORTANT: If no inherited parent, use node_scope instead of current_scope.
+     * current_scope could be a transient define scope that gets destroyed, leaving
+     * the class scope with a dangling parent pointer. Node scope is stable. */
+    puppet_scope_t *scope_parent = parent_class_scope ? parent_class_scope : env->node_scope;
     puppet_scope_t *class_scope = puppet_scope_create(scope_parent, class_name);
     puppet_scope_push(env, class_scope);
 
@@ -4574,6 +4686,8 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
     env->resource_catalog = create_hash(64);
     env->virtual_resources = create_hash(64);
     env->defined_resources = create_hash(64);
+    env->classes_being_reexecuted = create_hash(32);
+    env->class_reexecuting = false;
 
     /* Copy define_types hash (shallow copy - AST pointers are shared but hash structure is per-thread) */
     env->define_types = puppet_calloc(1, sizeof(puppet_hash_t));
@@ -4727,6 +4841,21 @@ static void puppet_env_destroy_clone(puppet_env_t *env) {
         }
         puppet_free(env->defined_resources->buckets);
         puppet_free(env->defined_resources);
+    }
+
+    if (env->classes_being_reexecuted) {
+        for (size_t i = 0; i < env->classes_being_reexecuted->bucket_count; i++) {
+            puppet_hash_entry_t *e = env->classes_being_reexecuted->buckets[i];
+            while (e) {
+                puppet_hash_entry_t *next = e->next;
+                puppet_free(e->key.data);
+                puppet_value_destroy(e->value);
+                puppet_free(e);
+                e = next;
+            }
+        }
+        puppet_free(env->classes_being_reexecuted->buckets);
+        puppet_free(env->classes_being_reexecuted);
     }
 
     if (env->current_tags) {
