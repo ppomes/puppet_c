@@ -112,10 +112,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy and install packages
 COPY --from=builder /packages/libpuppetc-common0_*.deb /tmp/
 COPY --from=builder /packages/libpuppetc0_*.deb /tmp/
+COPY --from=builder /packages/libfacter-c0_*.deb /tmp/
 COPY --from=builder /packages/puppetc_*.deb /tmp/
 
 RUN dpkg -i /tmp/libpuppetc-common0_*.deb \
             /tmp/libpuppetc0_*.deb \
+            /tmp/libfacter-c0_*.deb \
             /tmp/puppetc_*.deb && \
     rm -rf /tmp/*.deb
 
