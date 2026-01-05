@@ -1556,9 +1556,25 @@ static bool collector_matches_filter(
 
                 bool result = false;
                 if (actual) {
-                    puppet_value_t *cmp = puppet_eval_binop(PUPPET_OP_EQ, actual, expected);
-                    bool is_equal = (cmp && cmp->type == PUPPET_VALUE_BOOL && cmp->data.boolean);
-                    if (cmp) puppet_value_destroy(cmp);
+                    bool is_equal = false;
+
+                    /* Handle array attribute with 'in' semantics for equality */
+                    if (actual->type == PUPPET_VALUE_ARRAY) {
+                        /* Check if expected value is in the array */
+                        for (size_t ai = 0; ai < actual->data.array->count; ai++) {
+                            puppet_value_t *cmp = puppet_eval_binop(PUPPET_OP_EQ, actual->data.array->items[ai], expected);
+                            if (cmp && cmp->type == PUPPET_VALUE_BOOL && cmp->data.boolean) {
+                                is_equal = true;
+                                puppet_value_destroy(cmp);
+                                break;
+                            }
+                            if (cmp) puppet_value_destroy(cmp);
+                        }
+                    } else {
+                        puppet_value_t *cmp = puppet_eval_binop(PUPPET_OP_EQ, actual, expected);
+                        is_equal = (cmp && cmp->type == PUPPET_VALUE_BOOL && cmp->data.boolean);
+                        if (cmp) puppet_value_destroy(cmp);
+                    }
 
                     result = (op == PUPPET_OP_EQ) ? is_equal : !is_equal;
                     /* Don't destroy actual - it's owned by vres */
@@ -1647,20 +1663,85 @@ static void puppet_exec_collector(puppet_stmt_t *stmt, puppet_env_t *env) {
                     puppet_value_t *marker = puppet_value_create_bool(true);
                     puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);
 
-                    /* Add to catalog if building */
-                    if (env->build_catalog && env->catalog) {
-                        puppet_catalog_param_t *params = NULL;
-                        if (vres->attr_count > 0) {
-                            params = puppet_calloc(vres->attr_count, sizeof(puppet_catalog_param_t));
-                            for (size_t j = 0; j < vres->attr_count; j++) {
-                                if (vres->attrs[j].name) {
-                                    params[j].name = puppet_strdup(vres->attrs[j].name);
-                                    params[j].value = puppet_value_copy(vres->attrs[j].value);
+                    /* Check if this is a defined type - need to execute its body */
+                    puppet_value_t *define_ptr = puppet_hash_get(env->define_types,
+                        vres->type, strlen(vres->type));
+
+                    /* Try to autoload the define if not found */
+                    if (!define_ptr && env->loader && strchr(vres->type, ':')) {
+                        puppet_stmt_t *loaded_def = puppet_loader_load_define(env->loader, vres->type);
+                        if (loaded_def) {
+                            puppet_debug("Collector: autoloaded defined type: %s", vres->type);
+                            puppet_value_t *stmt_ptr = puppet_calloc(1, sizeof(puppet_value_t));
+                            stmt_ptr->type = PUPPET_VALUE_UNDEF;
+                            stmt_ptr->data.string.data = (char*)loaded_def;
+                            puppet_hash_set(env->define_types, vres->type, strlen(vres->type), stmt_ptr);
+                            define_ptr = stmt_ptr;
+                        }
+                    }
+
+                    if (define_ptr) {
+                        /* Execute the defined type body */
+                        puppet_stmt_t *define_stmt = (puppet_stmt_t *)define_ptr->data.string.data;
+
+                        puppet_debug("Collector: executing defined type %s[%s]", vres->type, vres->title);
+
+                        /* Create new scope for the define execution */
+                        puppet_scope_t *define_scope = puppet_scope_create(env->current_scope, vres->type);
+                        puppet_scope_push(env, define_scope);
+
+                        /* Bind $name and $title to the title */
+                        puppet_value_t *name_val = puppet_value_create_string(vres->title, strlen(vres->title));
+                        puppet_scope_set_var(define_scope, "name", name_val);
+                        puppet_scope_set_var(define_scope, "title", puppet_value_copy(name_val));
+
+                        /* Bind define parameters from virtual resource attributes */
+                        for (size_t p = 0; p < define_stmt->data.define.params.count; p++) {
+                            const char *param_name = define_stmt->data.define.params.params[p].name.data;
+                            puppet_value_t *param_value = NULL;
+
+                            /* Look for matching attribute in virtual resource */
+                            for (size_t a = 0; a < vres->attr_count; a++) {
+                                if (vres->attrs[a].name && strcmp(vres->attrs[a].name, param_name) == 0) {
+                                    param_value = puppet_value_copy(vres->attrs[a].value);
+                                    break;
                                 }
                             }
+
+                            /* Use default if no attribute provided */
+                            if (!param_value && define_stmt->data.define.params.params[p].default_value) {
+                                param_value = puppet_eval_expr(define_stmt->data.define.params.params[p].default_value, env);
+                            }
+
+                            if (param_value) {
+                                puppet_scope_set_var(define_scope, param_name, param_value);
+                            }
                         }
-                        puppet_catalog_add_resource(env->catalog, vres->type, vres->title,
-                                                   params, vres->attr_count, NULL, 0);
+
+                        /* Execute the define body */
+                        for (size_t bi = 0; bi < define_stmt->data.define.body.count; bi++) {
+                            puppet_exec_stmt(define_stmt->data.define.body.stmts[bi], env);
+                        }
+
+                        /* Pop the define scope */
+                        puppet_scope_t *popped = puppet_scope_pop(env);
+                        puppet_scope_destroy(popped);
+                    } else {
+                        /* Built-in resource type - just add to catalog */
+                        if (env->build_catalog && env->catalog) {
+                            puppet_catalog_param_t *params = NULL;
+                            if (vres->attr_count > 0) {
+                                params = puppet_calloc(vres->attr_count, sizeof(puppet_catalog_param_t));
+                                for (size_t j = 0; j < vres->attr_count; j++) {
+                                    if (vres->attrs[j].name) {
+                                        params[j].name = puppet_strdup(vres->attrs[j].name);
+                                        params[j].value = puppet_value_copy(vres->attrs[j].value);
+                                    }
+                                }
+                            }
+                            puppet_catalog_add_resource(env->catalog, vres->type, vres->title,
+                                                       params, vres->attr_count, NULL, 0);
+                        }
                     }
 
                     vres->realized = true;
@@ -1696,13 +1777,25 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
         case PUPPET_STMT_DEFINE:
             /* Register the defined type for later instantiation */
             if (stmt->data.define.name.data) {
-                puppet_debug("Registering defined type: %s", stmt->data.define.name.data);
+                /* Build fully qualified name (prepend class scope if inside a class) */
+                char *fq_name;
+                if (env->class_scope && env->class_scope->name.data) {
+                    size_t class_len = strlen(env->class_scope->name.data);
+                    size_t name_len = strlen(stmt->data.define.name.data);
+                    fq_name = puppet_malloc(class_len + 2 + name_len + 1);
+                    snprintf(fq_name, class_len + 2 + name_len + 1, "%s::%s",
+                             env->class_scope->name.data, stmt->data.define.name.data);
+                } else {
+                    fq_name = puppet_strdup(stmt->data.define.name.data);
+                }
+
+                puppet_debug("Registering defined type: %s", fq_name);
                 /* Store pointer to statement (don't copy - AST owns it) */
                 puppet_value_t *stmt_ptr = puppet_calloc(1, sizeof(puppet_value_t));
                 stmt_ptr->type = PUPPET_VALUE_UNDEF;
                 stmt_ptr->data.string.data = (char*)stmt;
-                puppet_hash_set(env->define_types, stmt->data.define.name.data,
-                               strlen(stmt->data.define.name.data), stmt_ptr);
+                puppet_hash_set(env->define_types, fq_name, strlen(fq_name), stmt_ptr);
+                puppet_free(fq_name);
             }
             break;
 
