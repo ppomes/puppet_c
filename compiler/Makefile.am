@@ -22,11 +22,11 @@ libpuppetc_la_SOURCES = \
 libpuppetc_la_LDFLAGS = -version-info 0:0:0
 
 # Library dependencies
-libpuppetc_la_LIBADD = $(top_builddir)/common/libpuppetc_common.la $(RUBY_LIBS) -lm -lpthread $(YAML_LIBS) $(OPENSSL_LIBS) $(TREESITTER_LIBS)
+libpuppetc_la_LIBADD = $(top_builddir)/common/libpuppetc_common.la $(top_builddir)/facter/libfacter_c.la $(RUBY_LIBS) -lm -lpthread $(YAML_LIBS) $(OPENSSL_LIBS) $(TREESITTER_LIBS)
 
 # Binary sources (just main.c, links against library)
 puppetc_compile_SOURCES = main.c
-puppetc_compile_LDADD = libpuppetc.la $(top_builddir)/common/libpuppetc_common.la
+puppetc_compile_LDADD = libpuppetc.la $(top_builddir)/common/libpuppetc_common.la $(top_builddir)/facter/libfacter_c.la
 
 # Include directories
 AM_CPPFLAGS = -I$(top_srcdir)/include -I$(top_srcdir)/tree-sitter-puppet/src

@@ -4,6 +4,7 @@
 #include "puppet_loader.h"
 #include "puppet_memory.h"
 #include "puppet_hiera.h"
+#include "facter.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -4209,6 +4210,73 @@ int puppet_facts_db_load_json(puppet_facts_db_t *facts_db, const char *certname,
 
     /* Process all facts from the JSON object */
     puppet_facts_process_object(node, NULL, facts_json);
+
+    /* Set as current node */
+    puppet_facts_db_set_current_node(facts_db, certname);
+
+    return 0;
+}
+
+/**
+ * @brief Load facts from the local host using facter
+ *
+ * Collects system facts from the local machine and adds them to the facts database
+ * under the specified certname. This is used as a fallback when no facts file is
+ * provided or the node is not found in the facts file.
+ *
+ * @param facts_db Facts database to add to
+ * @param certname Node name to register the facts under
+ * @return 0 on success, -1 on failure
+ */
+int puppet_facts_db_load_from_facter(puppet_facts_db_t *facts_db, const char *certname) {
+    if (!facts_db || !certname) return -1;
+
+    /* Create facter context and collect facts */
+    facter_ctx_t *facter = facter_create();
+    if (!facter) {
+        puppet_warn("Failed to create facter context");
+        return -1;
+    }
+
+    if (facter_collect(facter) != 0) {
+        puppet_warn("Failed to collect facts from facter");
+        facter_destroy(facter);
+        return -1;
+    }
+
+    /* Get JSON representation of facts */
+    char *json_str = facter_to_json(facter);
+    if (!json_str) {
+        puppet_warn("Failed to convert facter output to JSON");
+        facter_destroy(facter);
+        return -1;
+    }
+
+    /* Parse JSON */
+    json_value_t *json = json_parse(json_str);
+    puppet_free(json_str);
+
+    if (!json) {
+        puppet_warn("Failed to parse facter JSON output");
+        facter_destroy(facter);
+        return -1;
+    }
+
+    /* Add node to facts database */
+    if (puppet_facts_db_add_node(facts_db, certname, NULL) < 0) {
+        json_value_destroy(json);
+        facter_destroy(facter);
+        return -1;
+    }
+
+    puppet_node_facts_t *node = &facts_db->nodes[facts_db->node_count - 1];
+
+    /* Process all facts from the JSON object */
+    puppet_facts_process_object(node, NULL, json);
+
+    /* Clean up */
+    json_value_destroy(json);
+    facter_destroy(facter);
 
     /* Set as current node */
     puppet_facts_db_set_current_node(facts_db, certname);

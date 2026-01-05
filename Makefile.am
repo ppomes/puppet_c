@@ -1,4 +1,4 @@
-SUBDIRS = common compiler facter server agent tests
+SUBDIRS = common facter compiler server agent tests
 
 # Additional files to distribute
 EXTRA_DIST = README.md

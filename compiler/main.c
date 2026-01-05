@@ -388,6 +388,17 @@ int main(int argc, char *argv[]) {
                     fprintf(stderr, "Warning: Failed to load facts from %s\n", facts_file);
                     puppet_facts_db_destroy(facts_db);
                 }
+            } else if (node_name && !all_nodes) {
+                /* No facts file provided for single node - use local host facts as fallback */
+                fprintf(stderr, "Warning: No facts file provided, using local host facts for '%s'\n", node_name);
+                puppet_facts_db_t *facts_db = puppet_facts_db_create();
+                if (puppet_facts_db_load_from_facter(facts_db, node_name) == 0) {
+                    puppet_env_set_facts_db(env, facts_db);
+                    if (verbose) fprintf(stderr, "Local host facts collected successfully.\n");
+                } else {
+                    fprintf(stderr, "Warning: Failed to collect local host facts\n");
+                    puppet_facts_db_destroy(facts_db);
+                }
             }
 
             puppet_exec_program(program, env);
