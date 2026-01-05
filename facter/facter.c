@@ -539,6 +539,94 @@ char *facter_os_release(void) {
 #endif
 }
 
+/* LSB (Linux Standard Base) fact helpers */
+static char *facter_lsb_field(const char *field) {
+#ifdef __linux__
+    /* Try /etc/lsb-release first */
+    char *content = read_file_contents("/etc/lsb-release", 0);
+    if (content) {
+        char *content_copy = puppet_strdup(content);
+        char *line = strtok(content_copy, "\n");
+        while (line) {
+            size_t field_len = strlen(field);
+            if (strncmp(line, field, field_len) == 0 && line[field_len] == '=') {
+                char *value = line + field_len + 1;
+                /* Remove quotes */
+                if (*value == '"') value++;
+                char *end = value + strlen(value) - 1;
+                if (end >= value && *end == '"') *end = '\0';
+                char *result = puppet_strdup(value);
+                puppet_free(content_copy);
+                puppet_free(content);
+                return result;
+            }
+            line = strtok(NULL, "\n");
+        }
+        puppet_free(content_copy);
+        puppet_free(content);
+    }
+
+    /* Fallback: try /etc/os-release for some fields */
+    content = read_file_contents("/etc/os-release", 0);
+    if (content) {
+        char *os_field = NULL;
+        if (strcmp(field, "DISTRIB_ID") == 0) {
+            os_field = "ID=";
+        } else if (strcmp(field, "DISTRIB_RELEASE") == 0) {
+            os_field = "VERSION_ID=";
+        } else if (strcmp(field, "DISTRIB_CODENAME") == 0) {
+            os_field = "VERSION_CODENAME=";
+        } else if (strcmp(field, "DISTRIB_DESCRIPTION") == 0) {
+            os_field = "PRETTY_NAME=";
+        }
+
+        if (os_field) {
+            char *content_copy = puppet_strdup(content);
+            char *line = strtok(content_copy, "\n");
+            size_t os_field_len = strlen(os_field);
+            while (line) {
+                if (strncmp(line, os_field, os_field_len) == 0) {
+                    char *value = line + os_field_len;
+                    if (*value == '"') value++;
+                    char *end = value + strlen(value) - 1;
+                    if (end >= value && *end == '"') *end = '\0';
+                    /* For DISTRIB_ID, capitalize (Ubuntu not ubuntu) */
+                    char *result = puppet_strdup(value);
+                    if (strcmp(field, "DISTRIB_ID") == 0 && result && *result) {
+                        result[0] = toupper((unsigned char)result[0]);
+                    }
+                    puppet_free(content_copy);
+                    puppet_free(content);
+                    return result;
+                }
+                line = strtok(NULL, "\n");
+            }
+            puppet_free(content_copy);
+        }
+        puppet_free(content);
+    }
+#else
+    (void)field;
+#endif
+    return NULL;
+}
+
+char *facter_lsbdistid(void) {
+    return facter_lsb_field("DISTRIB_ID");
+}
+
+char *facter_lsbdistrelease(void) {
+    return facter_lsb_field("DISTRIB_RELEASE");
+}
+
+char *facter_lsbdistcodename(void) {
+    return facter_lsb_field("DISTRIB_CODENAME");
+}
+
+char *facter_lsbdistdescription(void) {
+    return facter_lsb_field("DISTRIB_DESCRIPTION");
+}
+
 unsigned long facter_memory_total(void) {
 #ifdef __linux__
     struct sysinfo info;
@@ -1009,6 +1097,33 @@ static void collect_os_facts(facter_ctx_t *ctx) {
     facter_set(ctx, "os", os_hash);
 }
 
+static void collect_lsb_facts(facter_ctx_t *ctx) {
+    /* LSB facts for legacy Puppet manifest compatibility */
+    char *lsbdistid = facter_lsbdistid();
+    if (lsbdistid) {
+        facter_set_string(ctx, "lsbdistid", lsbdistid);
+        puppet_free(lsbdistid);
+    }
+
+    char *lsbdistrelease = facter_lsbdistrelease();
+    if (lsbdistrelease) {
+        facter_set_string(ctx, "lsbdistrelease", lsbdistrelease);
+        puppet_free(lsbdistrelease);
+    }
+
+    char *lsbdistcodename = facter_lsbdistcodename();
+    if (lsbdistcodename) {
+        facter_set_string(ctx, "lsbdistcodename", lsbdistcodename);
+        puppet_free(lsbdistcodename);
+    }
+
+    char *lsbdistdescription = facter_lsbdistdescription();
+    if (lsbdistdescription) {
+        facter_set_string(ctx, "lsbdistdescription", lsbdistdescription);
+        puppet_free(lsbdistdescription);
+    }
+}
+
 static void collect_memory_facts(facter_ctx_t *ctx) {
     unsigned long total = facter_memory_total();
     unsigned long free_mem = facter_memory_free();
@@ -1143,6 +1258,7 @@ int facter_collect(facter_ctx_t *ctx) {
     collect_system_facts(ctx);
     collect_kernel_facts(ctx);
     collect_os_facts(ctx);
+    collect_lsb_facts(ctx);
     collect_memory_facts(ctx);
     collect_processor_facts(ctx);
     collect_network_facts(ctx);
@@ -1161,6 +1277,8 @@ int facter_collect_category(facter_ctx_t *ctx, const char *category) {
         collect_kernel_facts(ctx);
     } else if (strcmp(category, "os") == 0) {
         collect_os_facts(ctx);
+    } else if (strcmp(category, "lsb") == 0) {
+        collect_lsb_facts(ctx);
     } else if (strcmp(category, "memory") == 0) {
         collect_memory_facts(ctx);
     } else if (strcmp(category, "processor") == 0 || strcmp(category, "processors") == 0) {
