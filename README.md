@@ -284,7 +284,7 @@ Basic Puppet agent for applying catalogs.
 - **Type matching**: `=~ Type` syntax parsed but not evaluated
 - **Exported resources**: `@@resource` parsed but not sent to PuppetDB
 - **Resource chains**: `->`, `~>` have limited support
-- **Parallel mode**: ERB templates skipped (Ruby not thread-safe)
+- **All-nodes mode**: ERB templates skipped for faster CI/CD validation
 - **No pluginsync**: Custom facts/functions must be pre-installed
 
 ## Architecture

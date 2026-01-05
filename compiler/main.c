@@ -44,12 +44,12 @@ static void print_usage(const char *program_name) {
     printf("  -o, --output      Output file (default: stdout)\n");
     printf("  -m, --modules     Path to modules directory (default: ./modules)\n");
     printf("  -n, --node        Execute only the specified node\n");
-    printf("  -a, --all-nodes   Execute all nodes (default: only 'default' node)\n");
+    printf("  -a, --all-nodes   Execute all nodes (skips ERB for faster CI/CD)\n");
     printf("  -f, --facts       Load facts from JSON file (facter or PuppetDB format)\n");
     printf("  -t, --template    Display template output for file resource with specified title\n");
     printf("  -D, --hiera-data  Path to Hiera data directory (default: ./data)\n");
     printf("  -s, --summary     Print validation summary (for CI, implies -e)\n");
-    printf("  -P, --parallel    Process nodes in parallel (skips ERB templates)\n");
+    printf("  -P, --parallel    Process nodes in parallel (faster, requires --all-nodes)\n");
     printf("  -v, --verbose     Enable verbose/debug output\n");
     printf("  -h, --help        Show this help message\n");
     printf("\nWhen a directory is provided, site.pp will be loaded from manifests/\n");
