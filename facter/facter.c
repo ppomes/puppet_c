@@ -244,7 +244,7 @@ static int facter_hash_set_integer(facter_value_t *hash, const char *key, long v
     return 0;
 }
 
-static int facter_hash_set_boolean(facter_value_t *hash, const char *key, bool value) {
+static int __attribute__((unused)) facter_hash_set_boolean(facter_value_t *hash, const char *key, bool value) {
     if (!hash || hash->type != FACTER_VALUE_HASH || !key) return -1;
 
     /* Check if key already exists */
@@ -292,7 +292,7 @@ static int facter_hash_set_hash(facter_value_t *hash, const char *key, facter_va
     return 0;
 }
 
-static facter_value_t *facter_hash_get(facter_value_t *hash, const char *key) {
+static facter_value_t __attribute__((unused)) *facter_hash_get(facter_value_t *hash, const char *key) {
     if (!hash || hash->type != FACTER_VALUE_HASH || !key) return NULL;
 
     for (size_t i = 0; i < hash->data.hash_val.count; i++) {
