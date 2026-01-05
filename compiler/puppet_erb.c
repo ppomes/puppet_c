@@ -60,6 +60,10 @@ puppet_ruby_context_t *puppet_ruby_init(void) {
         ruby_init();
         ruby_init_loadpath();
 
+        // Suppress "already initialized constant" warnings from Ruby stdlib
+        // These occur when tmpdir.rb redefines TMP_RUBY_PREFIX
+        rb_eval_string("$VERBOSE = nil");
+
         // Use ruby_options() with -e "nil" to avoid stdin blocking
         char *ruby_specific_argv[] = {"puppet", "-e", "nil", NULL};
         void *node = ruby_options(3, ruby_specific_argv);
