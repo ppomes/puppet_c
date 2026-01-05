@@ -296,7 +296,12 @@ static puppet_expr_t *convert_binary(TSNode node, const char *source) {
     expr->type = PUPPET_EXPR_BINOP;
     expr->loc = node_location(node);
 
-    /* Parse children to find operands and operator */
+    /* Parse children to find operands and operator
+     * Handle the case where variable + access nodes appear together as LHS:
+     * e.g., $hash['key'] == value produces:
+     *   lhs: variable, lhs: access, rhs: value
+     * We need to combine variable + access into an index expression
+     */
     uint32_t count = ts_node_child_count(node);
     puppet_expr_t *left = NULL, *right = NULL;
     puppet_binop_t op = PUPPET_OP_ADD;
@@ -306,9 +311,18 @@ static puppet_expr_t *convert_binary(TSNode node, const char *source) {
         const char *type = ts_node_type(child);
 
         if (ts_node_is_named(child)) {
-            if (!left) {
+            /* Check if this is an access node that should combine with preceding expression */
+            if (strcmp(type, "access") == 0) {
+                if (left && !right) {
+                    /* Combine with left operand to form index expression */
+                    left = build_index_expr(left, child, source);
+                } else if (right) {
+                    /* Combine with right operand */
+                    right = build_index_expr(right, child, source);
+                }
+            } else if (!left) {
                 left = convert_expression(child, source);
-            } else {
+            } else if (!right) {
                 right = convert_expression(child, source);
             }
         } else {
