@@ -2089,7 +2089,23 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         if (!instance->title) continue;
 
                         puppet_value_t *title_val = puppet_eval_expr(instance->title, env);
-                        const char *title_str = puppet_value_to_string(title_val);
+
+                        /* Handle array titles - expand into multiple defined type instances */
+                        size_t title_count = 1;
+                        puppet_value_t **titles = NULL;
+
+                        if (title_val->type == PUPPET_VALUE_ARRAY) {
+                            title_count = title_val->data.array->count;
+                            titles = title_val->data.array->items;
+                        }
+
+                        for (size_t t = 0; t < title_count; t++) {
+                        const char *title_str;
+                        if (titles) {
+                            title_str = puppet_value_to_string(titles[t]);
+                        } else {
+                            title_str = puppet_value_to_string(title_val);
+                        }
 
                         /* Check for duplicate */
                         size_t res_id_len = strlen(stmt->data.resource.type.data) + strlen(title_str) + 3;
@@ -2195,6 +2211,8 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         puppet_scope_destroy(popped);
 
                         puppet_free(resource_id);
+                        }  /* End of array title expansion loop */
+
                         puppet_value_destroy(title_val);
                     }
                     break;  /* Defined type handled */
