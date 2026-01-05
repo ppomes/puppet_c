@@ -832,6 +832,10 @@ static puppet_attribute_t convert_attribute(TSNode node, const char *source) {
     /* First check for variable + access pattern (e.g., ensure => $hash['key']) */
     TSNode var_child = find_child(node, "variable");
     TSNode access_child = find_child(node, "access");
+    TSNode selector_child = find_child(node, "selector");
+
+    /* Check for lhs: field which indicates a selector control variable */
+    TSNode lhs_node = ts_node_child_by_field_name(node, "lhs", 3);
 
     uint32_t count = ts_node_named_child_count(node);
     for (uint32_t i = 0; i < count; i++) {
@@ -864,6 +868,18 @@ static puppet_attribute_t convert_attribute(TSNode node, const char *source) {
                 continue;
             } else if (strcmp(type, "access") == 0 && !ts_node_is_null(var_child)) {
                 /* Already handled with variable above, skip */
+                continue;
+            }
+
+            /* Handle variable + selector pattern (e.g., certpath => $var ? { ... }) */
+            if (strcmp(type, "variable") == 0 && !ts_node_is_null(selector_child)) {
+                /* This variable is the selector control, skip - handled with selector */
+                continue;
+            } else if (strcmp(type, "selector") == 0 && !ts_node_is_null(lhs_node)) {
+                /* Selector with lhs control variable */
+                puppet_expr_t *selector_expr = convert_selector(child, source);
+                selector_expr->data.selector.control = convert_expression(lhs_node, source);
+                attr.value = selector_expr;
                 continue;
             }
 
