@@ -3219,11 +3219,12 @@ void puppet_env_set_node(puppet_env_t *env, const char *node_name) {
 
 void puppet_env_set_execute_all_nodes(puppet_env_t *env, bool execute_all) {
     if (!env) return;
-    
+
     env->execute_all_nodes = execute_all;
     if (execute_all) {
         puppet_free(env->node_name);
         env->node_name = NULL;  /* Clear specific node when in all-nodes mode */
+        env->skip_erb = true;   /* Skip ERB in all-nodes mode for performance */
     }
 }
 
