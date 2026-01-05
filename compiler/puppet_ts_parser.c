@@ -184,7 +184,11 @@ static puppet_expr_t *convert_string_literal(TSNode node, const char *source) {
                     char *part = puppet_malloc(part_len + 1);
                     memcpy(part, source + string_start, part_len);
                     part[part_len] = '\0';
-                    expr->data.interpolated.parts[part_idx] = puppet_string_create(part);
+                    /* Process escape sequences for double-quoted string parts */
+                    size_t processed_len;
+                    char *processed = process_escape_sequences(part, &processed_len);
+                    expr->data.interpolated.parts[part_idx] = puppet_string_create(processed);
+                    puppet_free(processed);
                     puppet_free(part);
                 } else {
                     expr->data.interpolated.parts[part_idx] = puppet_string_create("");
@@ -218,7 +222,11 @@ static puppet_expr_t *convert_string_literal(TSNode node, const char *source) {
             char *part = puppet_malloc(part_len + 1);
             memcpy(part, source + string_start, part_len);
             part[part_len] = '\0';
-            expr->data.interpolated.parts[part_idx] = puppet_string_create(part);
+            /* Process escape sequences for double-quoted string parts */
+            size_t processed_len;
+            char *processed = process_escape_sequences(part, &processed_len);
+            expr->data.interpolated.parts[part_idx] = puppet_string_create(processed);
+            puppet_free(processed);
             puppet_free(part);
         } else {
             expr->data.interpolated.parts[part_idx] = puppet_string_create("");

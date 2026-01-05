@@ -2972,11 +2972,13 @@ puppet_value_t *puppet_func_regsubst(puppet_expr_list_t *args, puppet_env_t *env
     char *result_str = puppet_malloc(result_capacity);
     size_t result_len = 0;
 
-    regmatch_t match;
+    /* Support up to 10 capture groups (0 = whole match, 1-9 = groups) */
+    #define MAX_GROUPS 10
+    regmatch_t matches[MAX_GROUPS];
     size_t offset = 0;
 
     while (offset <= src_len) {
-        ret = regexec(&regex, src_cstr + offset, 1, &match, offset > 0 ? REG_NOTBOL : 0);
+        ret = regexec(&regex, src_cstr + offset, MAX_GROUPS, matches, offset > 0 ? REG_NOTBOL : 0);
         if (ret != 0) {
             /* No more matches - copy rest of string */
             size_t remaining = src_len - offset;
@@ -2990,7 +2992,7 @@ puppet_value_t *puppet_func_regsubst(puppet_expr_list_t *args, puppet_env_t *env
         }
 
         /* Copy text before match */
-        size_t before_len = match.rm_so;
+        size_t before_len = matches[0].rm_so;
         if (result_len + before_len >= result_capacity) {
             result_capacity = (result_capacity + before_len) * 2;
             result_str = puppet_realloc(result_str, result_capacity);
@@ -2998,17 +3000,44 @@ puppet_value_t *puppet_func_regsubst(puppet_expr_list_t *args, puppet_env_t *env
         memcpy(result_str + result_len, src + offset, before_len);
         result_len += before_len;
 
-        /* Copy replacement */
-        if (result_len + repl_len >= result_capacity) {
-            result_capacity = (result_capacity + repl_len) * 2;
-            result_str = puppet_realloc(result_str, result_capacity);
+        /* Process replacement string with backreferences */
+        for (size_t i = 0; i < repl_len; i++) {
+            /* Check for backreference \0 through \9 */
+            if (repl[i] == '\\' && i + 1 < repl_len && repl[i + 1] >= '0' && repl[i + 1] <= '9') {
+                int group = repl[i + 1] - '0';
+                i++; /* Skip the digit */
+
+                if (group < MAX_GROUPS && matches[group].rm_so >= 0) {
+                    /* Copy captured group */
+                    size_t group_len = matches[group].rm_eo - matches[group].rm_so;
+                    if (result_len + group_len >= result_capacity) {
+                        result_capacity = (result_capacity + group_len) * 2;
+                        result_str = puppet_realloc(result_str, result_capacity);
+                    }
+                    memcpy(result_str + result_len, src + offset + matches[group].rm_so, group_len);
+                    result_len += group_len;
+                }
+            } else if (repl[i] == '\\' && i + 1 < repl_len) {
+                /* Escaped character - copy the next char literally */
+                i++;
+                if (result_len + 1 >= result_capacity) {
+                    result_capacity *= 2;
+                    result_str = puppet_realloc(result_str, result_capacity);
+                }
+                result_str[result_len++] = repl[i];
+            } else {
+                /* Regular character */
+                if (result_len + 1 >= result_capacity) {
+                    result_capacity *= 2;
+                    result_str = puppet_realloc(result_str, result_capacity);
+                }
+                result_str[result_len++] = repl[i];
+            }
         }
-        memcpy(result_str + result_len, repl, repl_len);
-        result_len += repl_len;
 
         /* Move past match */
-        offset += match.rm_eo;
-        if (match.rm_eo == 0) offset++; /* Avoid infinite loop on zero-width match */
+        offset += matches[0].rm_eo;
+        if (matches[0].rm_eo == 0) offset++; /* Avoid infinite loop on zero-width match */
 
         if (!global_replace) {
             /* Copy rest of string */
@@ -3022,6 +3051,7 @@ puppet_value_t *puppet_func_regsubst(puppet_expr_list_t *args, puppet_env_t *env
             break;
         }
     }
+    #undef MAX_GROUPS
 
     result_str[result_len] = '\0';
 
