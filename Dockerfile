@@ -1,5 +1,6 @@
 # Multi-stage Dockerfile for puppet_c
 # Usage:
+#   docker build --target compiler -t puppetc-compile .
 #   docker build --target server -t puppetc-server .
 #   docker build --target agent -t puppetc-agent .
 
@@ -95,3 +96,33 @@ ENTRYPOINT ["puppetc-agent"]
 # Default: noop mode. Use -a to apply.
 # Set PUPPET_SERVER env var or use -s to specify server.
 CMD ["-n"]
+
+# =============================================================================
+# Compiler image - for local development and CI/CD
+# =============================================================================
+FROM debian:bookworm-slim AS compiler
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libtree-sitter0 \
+    libyaml-0-2 \
+    libssl3 \
+    libruby3.1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and install packages
+COPY --from=builder /packages/libpuppetc-common0_*.deb /tmp/
+COPY --from=builder /packages/libpuppetc0_*.deb /tmp/
+COPY --from=builder /packages/puppetc_*.deb /tmp/
+
+RUN dpkg -i /tmp/libpuppetc-common0_*.deb \
+            /tmp/libpuppetc0_*.deb \
+            /tmp/puppetc_*.deb && \
+    rm -rf /tmp/*.deb
+
+# Create puppet directories
+RUN mkdir -p /puppet/manifests /puppet/modules /puppet/hiera /puppet/facts
+
+WORKDIR /puppet
+
+ENTRYPOINT ["puppetc-compile"]
+CMD ["--help"]

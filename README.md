@@ -19,31 +19,41 @@ A fast, lightweight Puppet compiler written in C for local manifest development 
 - **Minimal dependencies**: Pure C with optional Ruby for ERB templates
 - **Complete toolchain**: Includes compiler, server, agent, and facter binaries
 
-## Why C?
-
-C was chosen for:
-- **Minimal runtime dependencies** - no JVM, no Go runtime, no Rust toolchain needed
-- **Native Ruby integration** - Ruby's embedding API is written in C, so integration is direct and natural
-- **Portability** - builds with standard toolchains on Linux and macOS
-
-## Related Projects
-
-Inspired by [language-puppet](https://github.com/bartavelle/language-puppet), a Haskell implementation with similar goals. Both projects provide fast, alternative implementations for validating Puppet manifests outside the Ruby toolchain.
-
 ## Quick Start
 
+### Option 1: Docker (No Installation)
+
 ```bash
-# Compile a catalog for a node (pretty output)
-./compiler/puppetc-compile -p -n mynode.example.com -m modules/ manifests/site.pp
+# Clone the repository
+git clone https://github.com/ppomes/puppet_c.git
+cd puppet_c
 
-# With facts file
-./compiler/puppetc-compile -p -n mynode -m modules/ -f facts.yaml manifests/site.pp
-
-# Validate ALL nodes in parallel (great for CI/CD)
-./compiler/puppetc-compile --all-nodes -P -m modules/ -f allfacts.yaml manifests/site.pp
+# Build and run with Docker
+docker-compose build compiler
+docker-compose run --rm compiler -p -n mynode.example.com \
+    -m /puppet/modules /puppet/manifests/site.pp
 ```
 
-## Building
+Edit `puppetcode/manifests/site.pp` on your host - changes are reflected immediately.
+
+### Option 2: Ubuntu/Debian Packages
+
+```bash
+# Build packages (requires build dependencies)
+dpkg-buildpackage -us -uc -b
+
+# Install the compiler
+sudo dpkg -i ../puppetc_*.deb ../libpuppetc0_*.deb ../libpuppetc-common0_*.deb
+
+# Run
+puppetc-compile -p -n mynode.example.com -m modules/ manifests/site.pp
+```
+
+### Option 3: Build from Source
+
+See [Installation](#installation) below.
+
+## Installation
 
 ### Prerequisites
 
@@ -98,37 +108,38 @@ make check
 
 Note: On Intel Macs, use `/usr/local/opt/` instead of `/opt/homebrew/opt/`.
 
-## Compiler Usage
+## Usage
+
+### Compiler (puppetc-compile)
 
 The main tool for local development and CI/CD validation.
 
 ```bash
 # Pretty output (human-readable, colored)
-./compiler/puppetc-compile -p -n mynode.example.com -m modules/ manifests/site.pp
+puppetc-compile -p -n mynode.example.com -m modules/ manifests/site.pp
 
-# With facts
-./compiler/puppetc-compile -p -n mynode -m modules/ -f facts.yaml manifests/site.pp
+# With facts file
+puppetc-compile -p -n mynode -m modules/ -f facts.yaml manifests/site.pp
 
 # JSON catalog output
-./compiler/puppetc-compile -c -n mynode -m modules/ manifests/site.pp
+puppetc-compile -c -n mynode -m modules/ manifests/site.pp
 
 # Validate all nodes (CI/CD)
-./compiler/puppetc-compile --all-nodes -m modules/ -f allfacts.yaml manifests/site.pp
+puppetc-compile --all-nodes -m modules/ -f allfacts.yaml manifests/site.pp
 
-# Parallel validation (much faster for many nodes)
-./compiler/puppetc-compile --all-nodes -P -m modules/ -f allfacts.yaml manifests/site.pp
+# Parallel validation (3x faster)
+puppetc-compile --all-nodes -P -m modules/ -f allfacts.yaml manifests/site.pp
 
 # Parse only (syntax check)
-./compiler/puppetc-compile manifest.pp
+puppetc-compile manifest.pp
 
-# Verbose output (show variable assignments, debug info)
-./compiler/puppetc-compile -v -p -n mynode manifests/site.pp
+# Verbose output (debug)
+puppetc-compile -v -p -n mynode manifests/site.pp
 ```
 
-Run `./compiler/puppetc-compile --help` for all options.
+Run `puppetc-compile --help` for all options.
 
-### Pretty Output Example
-
+**Example output:**
 ```
 notify/system_info:  testnode.example.com
   message => Host: testnode.example.com (192.168.1.10) - OS: Debian,
@@ -137,38 +148,8 @@ file//tmp/puppetc-demo:  testnode.example.com
   ensure => directory,
   mode => 0755,
 
-file//tmp/puppetc-demo/system-info.txt:  testnode.example.com
-  ensure => present,
-  content => # System Information
-Hostname: testnode
-FQDN: testnode.example.com
-,
-  mode => 0644,
-
 Total: 41 resources
 ```
-
-## Docker
-
-Build and run using Docker (no dependencies needed on host).
-
-```bash
-# Build images
-docker-compose build
-
-# Start server
-docker-compose up -d server
-
-# Run agent (noop mode)
-docker-compose run --rm agent
-
-# Run agent (apply mode)
-docker-compose run --rm agent -a
-```
-
-Edit `puppetcode/manifests/site.pp` on your host - changes are reflected immediately.
-
-## Other Tools
 
 ### Facter (facter_c)
 
@@ -176,13 +157,13 @@ Native fact collection, compatible with Puppet facts format.
 
 ```bash
 # Show all facts
-./facter/facter_c
+facter_c
 
 # Specific facts
-./facter/facter_c hostname ipaddress osfamily
+facter_c hostname ipaddress osfamily
 
 # JSON output
-./facter/facter_c -j
+facter_c -j
 ```
 
 ### Server (puppetc-server)
@@ -191,10 +172,10 @@ REST API server for catalog compilation, with embedded PuppetDB.
 
 ```bash
 # Start server
-./server/puppetc-server -p 8140 /etc/puppet
+puppetc-server -p 8140 /etc/puppet
 
 # With PuppetDB enabled
-./server/puppetc-server -p 8140 -P /var/lib/puppetc/puppetdb.sqlite /etc/puppet
+puppetc-server -p 8140 -P /var/lib/puppetc/puppetdb.sqlite /etc/puppet
 
 # Compile catalog via API
 curl -X POST http://localhost:8140/puppet/v4/catalog \
@@ -212,17 +193,40 @@ Basic Puppet agent for applying catalogs.
 
 ```bash
 # Run agent (connects to localhost:8140)
-./agent/puppetc-agent
+puppetc-agent
 
 # Apply catalog resources
-./agent/puppetc-agent -a
+puppetc-agent -a
 
 # No-op mode (show what would change)
-./agent/puppetc-agent -n
+puppetc-agent -n
 
 # Specify server
-./agent/puppetc-agent -s http://puppet:8140 -a
+puppetc-agent -s http://puppet:8140 -a
 ```
+
+## Docker Development
+
+Full server/agent setup using Docker Compose.
+
+```bash
+# Build all images
+docker-compose build
+
+# Start server
+docker-compose up -d server
+
+# Run agent (noop mode)
+docker-compose run --rm agent
+
+# Run agent (apply mode)
+docker-compose run --rm agent -a
+
+# View logs
+docker-compose logs -f server
+```
+
+Edit `puppetcode/manifests/site.pp` on your host - changes are reflected immediately.
 
 ## Language Support
 
@@ -290,29 +294,40 @@ Basic Puppet agent for applying catalogs.
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Libraries                              │
-├─────────────────────┬───────────────────────────────────────┤
-│  libpuppetc         │  libfacter_c                          │
-│  - Tree-sitter      │  - Native fact collection             │
-│  - AST              │  - JSON fact loading                  │
-│  - Interpreter      │  - System info                        │
-│  - Stdlib           │                                       │
-│  - Hiera            │                                       │
-│  - Catalog builder  │                                       │
-└─────────────────────┴───────────────────────────────────────┘
-           │                        │
-           ▼                        ▼
-┌─────────────────┐  ┌──────────────────┐  ┌─────────────────┐
-│ puppetc-server  │  │ puppetc-agent    │  │ puppetc-compile │
-│                 │  │                  │  │                 │
-│ - REST API      │  │ - Collect facts  │  │ - Parse/eval    │
-│ - Compile       │  │ - Request catalog│  │ - JSON output   │
-│   catalogs      │  │ - Apply catalog  │  │ - Pretty output │
-│ - PuppetDB      │  │                  │  │ - CI/CD mode    │
-│   (SQLite)      │  │                  │  │                 │
-└─────────────────┘  └──────────────────┘  └─────────────────┘
++-------------------------------------------------------------+
+|                      Libraries                              |
++---------------------+---------------------------------------+
+|  libpuppetc         |  libfacter_c                          |
+|  - Tree-sitter      |  - Native fact collection             |
+|  - AST              |  - JSON fact loading                  |
+|  - Interpreter      |  - System info                        |
+|  - Stdlib           |                                       |
+|  - Hiera            |                                       |
+|  - Catalog builder  |                                       |
++---------------------+---------------------------------------+
+           |                        |
+           v                        v
++-----------------+  +------------------+  +-----------------+
+| puppetc-server  |  | puppetc-agent    |  | puppetc-compile |
+|                 |  |                  |  |                 |
+| - REST API      |  | - Collect facts  |  | - Parse/eval    |
+| - Compile       |  | - Request catalog|  | - JSON output   |
+|   catalogs      |  | - Apply catalog  |  | - Pretty output |
+| - PuppetDB      |  |                  |  | - CI/CD mode    |
+|   (SQLite)      |  |                  |  |                 |
++-----------------+  +------------------+  +-----------------+
 ```
+
+## Why C?
+
+C was chosen for:
+- **Minimal runtime dependencies** - no JVM, no Go runtime, no Rust toolchain needed
+- **Native Ruby integration** - Ruby's embedding API is written in C, so integration is direct and natural
+- **Portability** - builds with standard toolchains on Linux and macOS
+
+## Related Projects
+
+Inspired by [language-puppet](https://github.com/bartavelle/language-puppet), a Haskell implementation with similar goals. Both projects provide fast, alternative implementations for validating Puppet manifests outside the Ruby toolchain.
 
 ## License
 

@@ -1,4 +1,16 @@
 services:
+  # Compiler - for local development and CI/CD
+  # Usage: docker-compose run --rm compiler -p -n mynode -m /puppet/modules /puppet/manifests/site.pp
+  compiler:
+    build:
+      context: .
+      target: compiler
+    image: puppetc-compile:latest
+    volumes:
+      - ./puppetcode/manifests:/puppet/manifests:ro
+      - ./puppetcode/modules:/puppet/modules:ro
+      - ./puppetcode/hiera:/puppet/hiera:ro
+
   server:
     build:
       context: .
