@@ -588,7 +588,9 @@ static puppet_expr_t *convert_funcall(TSNode node, const char *source) {
         TSNode child = ts_node_named_child(node, i);
         const char *type = ts_node_type(child);
 
-        if (strcmp(type, "name") == 0 && expr->data.funcall.name.data == NULL) {
+        if ((strcmp(type, "name") == 0 || strcmp(type, "type") == 0) &&
+            expr->data.funcall.name.data == NULL) {
+            /* Handle both regular functions (name) and type constructors (type) */
             char *name = node_text(child, source);
             expr->data.funcall.name = puppet_string_create(name);
             puppet_free(name);

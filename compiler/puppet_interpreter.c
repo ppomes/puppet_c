@@ -630,6 +630,17 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "epp") == 0) {
                 return puppet_func_epp(&expr->data.funcall.args, env);
             }
+            // stdlib::deferrable_epp - same as epp() for compile-time rendering
+            else if (strcmp(func_name, "stdlib::deferrable_epp") == 0) {
+                return puppet_func_epp(&expr->data.funcall.args, env);
+            }
+            // Sensitive() - wraps value to mark as sensitive (pass-through for compiler)
+            else if (strcmp(func_name, "Sensitive") == 0) {
+                if (expr->data.funcall.args.count >= 1) {
+                    return puppet_eval_expr(expr->data.funcall.args.exprs[0], env);
+                }
+                return puppet_value_create_undef();
+            }
             // Core logging functions
             else if (strcmp(func_name, "fail") == 0) {
                 return puppet_func_fail(&expr->data.funcall.args, env);
