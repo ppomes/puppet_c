@@ -369,6 +369,9 @@ static puppet_expr_t *convert_unary(TSNode node, const char *source) {
         TSNode child = ts_node_child(node, i);
         const char *type = ts_node_type(child);
 
+        /* Skip comment nodes */
+        if (strcmp(type, "comment") == 0) continue;
+
         if (ts_node_is_named(child)) {
             expr->data.unop.expr = convert_expression(child, source);
         } else {
@@ -396,6 +399,8 @@ static puppet_expr_t *convert_array(TSNode node, const char *source) {
     uint32_t count = ts_node_named_child_count(node);
     for (uint32_t i = 0; i < count; i++) {
         TSNode child = ts_node_named_child(node, i);
+        /* Skip comment nodes */
+        if (node_is(child, "comment")) continue;
         puppet_expr_t *elem = convert_expression(child, source);
         if (elem && elem->type == PUPPET_EXPR_VALUE) {
             puppet_array_append(expr->data.value->data.array,
@@ -563,6 +568,8 @@ static puppet_expr_t *convert_funcall(TSNode node, const char *source) {
 
             for (uint32_t j = 0; j < arg_count; j++) {
                 TSNode arg = ts_node_named_child(child, j);
+                /* Skip comment nodes in argument list */
+                if (node_is(arg, "comment")) continue;
                 puppet_expr_t *arg_expr = convert_expression(arg, source);
                 if (arg_expr) {
                     expr->data.funcall.args.exprs[expr->data.funcall.args.count++] = arg_expr;
@@ -597,6 +604,9 @@ static puppet_lambda_t *convert_lambda(TSNode node, const char *source) {
     for (uint32_t i = 0; i < count; i++) {
         TSNode child = ts_node_named_child(node, i);
         const char *type = ts_node_type(child);
+
+        /* Skip comment nodes */
+        if (strcmp(type, "comment") == 0) continue;
 
         if (strcmp(type, "parameter_list") == 0) {
             /* Parse parameters */

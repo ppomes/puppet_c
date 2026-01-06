@@ -1667,6 +1667,25 @@ static void puppet_exec_collector(puppet_stmt_t *stmt, puppet_env_t *env) {
                     puppet_value_t *define_ptr = puppet_hash_get(env->define_types,
                         vres->type, strlen(vres->type));
 
+                    /* If not found, search through class_scopes for a define with matching suffix */
+                    if (!define_ptr && !strchr(vres->type, ':') && env->class_scopes) {
+                        size_t type_len = strlen(vres->type);
+                        for (size_t ci = 0; ci < env->class_scopes->bucket_count && !define_ptr; ci++) {
+                            puppet_hash_entry_t *class_entry = env->class_scopes->buckets[ci];
+                            while (class_entry && !define_ptr) {
+                                const char *class_name = class_entry->key.data;
+                                /* Try fully qualified name: class_name::type_name */
+                                size_t class_len = strlen(class_name);
+                                size_t fq_len = class_len + 2 + type_len + 1;
+                                char *fq_type_name = puppet_malloc(fq_len);
+                                snprintf(fq_type_name, fq_len, "%s::%s", class_name, vres->type);
+                                define_ptr = puppet_hash_get(env->define_types, fq_type_name, strlen(fq_type_name));
+                                puppet_free(fq_type_name);
+                                class_entry = class_entry->next;
+                            }
+                        }
+                    }
+
                     /* Try to autoload the define if not found */
                     if (!define_ptr && env->loader && strchr(vres->type, ':')) {
                         puppet_stmt_t *loaded_def = puppet_loader_load_define(env->loader, vres->type);
