@@ -4,45 +4,69 @@ EXTRA_DIST = \
     puppet/apache_demo.pp \
     puppet/apache_simple.pp \
     puppet/apache_vhost.erb \
+    puppet/apache_vhost_template.erb \
+    puppet/array_functions2_test.pp \
+    puppet/array_functions_test.pp \
     puppet/basic.pp \
-    puppet/class_with_resource.pp \
     puppet/class.pp \
+    puppet/class_with_resource.pp \
+    puppet/collector_test.pp \
+    puppet/comment_in_expr_test.pp \
     puppet/complex.pp \
+    puppet/conditionals_test.pp \
+    puppet/core_functions_test.pp \
+    puppet/crypto_functions_test.pp \
+    puppet/duplicate_multinode_test.pp \
+    puppet/duplicate_resource_test.pp \
+    puppet/erb_template_test.pp \
     puppet/erb_test.pp \
     puppet/eval_test.pp \
+    puppet/exec_test.pp \
     puppet/expr_test.pp \
+    puppet/hash_functions_test.pp \
+    puppet/hiera_access_test.pp \
+    puppet/hiera_complex_test.pp \
+    puppet/hiera_lookup_test.pp \
+    puppet/inspection_functions_test.pp \
+    puppet/interpolation_facts_test.pp \
+    puppet/interpolation_test.pp \
+    puppet/iterator_test.pp \
+    puppet/join_test.pp \
+    puppet/lookup_functions_test.pp \
+    puppet/math_functions2_test.pp \
+    puppet/math_functions_test.pp \
+    puppet/nested_define_test.pp \
+    puppet/node_test.pp \
+    puppet/notice_statement_test.pp \
     puppet/package_management.pp \
+    puppet/path_functions_test.pp \
+    puppet/range_test.pp \
+    puppet/regex_functions_test.pp \
     puppet/resource.pp \
+    puppet/resource_title_facts.pp \
+    puppet/resource_title_interpolation.pp \
+    puppet/simple.pp \
+    puppet/simple_core_test.pp \
+    puppet/simple_erb_test.pp \
     puppet/simple_no_attrs.pp \
     puppet/simple_resource.pp \
-    puppet/simple.pp \
     puppet/single_attr.pp \
+    puppet/single_line_template_test.pp \
     puppet/site.pp \
+    puppet/split_test.pp \
+    puppet/string_functions2_test.pp \
+    puppet/string_functions_test.pp \
     puppet/system_resources.pp \
     puppet/template_test.pp \
-    puppet/interpolation_test.pp \
-    puppet/resource_title_interpolation.pp \
-    puppet/resource_title_facts.pp \
-    puppet/duplicate_resource_test.pp \
-    puppet/duplicate_multinode_test.pp \
-    puppet/single_line_template_test.pp \
-    puppet/erb_template_test.pp \
-    puppet/apache_vhost_template.erb \
+    puppet/test_example_key.pp \
+    puppet/type_checking_test.pp \
+    puppet/virtual_nested_define_test.pp \
+    puppet/virtual_test.pp \
     facts/sample_facts.json \
     facts/multi_node_facts.json \
     facts/test_facts_usage.pp \
     facts/test_single_quotes.pp \
     facts/simple_test.pp \
-    puppet/hiera_lookup_test.pp \
-    puppet/hiera_complex_test.pp \
-    puppet/hiera_access_test.pp \
-    puppet/split_test.pp \
-    puppet/join_test.pp \
-    puppet/string_functions_test.pp \
-    puppet/inspection_functions_test.pp \
-    puppet/iterator_test.pp \
-    puppet/collector_test.pp \
-    puppet/node_test.pp \
     data/common.yaml \
     test_iterators.sh \
     test_collectors.sh \
