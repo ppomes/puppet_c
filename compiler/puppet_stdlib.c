@@ -2356,6 +2356,257 @@ puppet_value_t *puppet_func_merge(puppet_expr_list_t *args, puppet_env_t *env) {
 }
 
 /**
+ * Helper function to normalize a key by replacing dashes with underscores
+ * Returns a newly allocated string that must be freed
+ */
+static char *normalize_key(const char *key, size_t len) {
+    char *normalized = puppet_malloc(len + 1);
+    for (size_t i = 0; i < len; i++) {
+        normalized[i] = (key[i] == '-') ? '_' : key[i];
+    }
+    normalized[len] = '\0';
+    return normalized;
+}
+
+/**
+ * Helper function to find a key in a hash, considering dash/underscore equivalence
+ * Returns the existing key if found (as normalized), or NULL if not found
+ */
+static const char *find_normalized_key(puppet_hash_t *hash, const char *key, size_t len) {
+    /* First try exact match */
+    if (puppet_hash_get(hash, key, len)) {
+        return key;
+    }
+
+    /* Try normalized version (convert dashes to underscores) */
+    char *normalized = normalize_key(key, len);
+    puppet_value_t *val = puppet_hash_get(hash, normalized, len);
+    puppet_free(normalized);
+
+    if (val) {
+        /* The hash has the underscore version, return that pattern */
+        return NULL;  /* Indicates we should use underscore version */
+    }
+
+    /* Try dash version if key had underscores */
+    bool has_underscore = false;
+    for (size_t i = 0; i < len; i++) {
+        if (key[i] == '_') {
+            has_underscore = true;
+            break;
+        }
+    }
+
+    if (has_underscore) {
+        char *dashed = puppet_malloc(len + 1);
+        for (size_t i = 0; i < len; i++) {
+            dashed[i] = (key[i] == '_') ? '-' : key[i];
+        }
+        dashed[len] = '\0';
+        val = puppet_hash_get(hash, dashed, len);
+        puppet_free(dashed);
+        if (val) {
+            return NULL;  /* Found dash version in hash */
+        }
+    }
+
+    return NULL;  /* Key not found */
+}
+
+/**
+ * Helper function to deep merge hash2 into hash1 (modifying hash1)
+ * Handles dash/underscore key normalization
+ */
+static void deep_merge_hash(puppet_hash_t *dest, puppet_hash_t *src) {
+    for (size_t i = 0; i < src->bucket_count; i++) {
+        puppet_hash_entry_t *entry = src->buckets[i];
+        while (entry) {
+            const char *key = entry->key.data;
+            size_t key_len = entry->key.len;
+            puppet_value_t *src_val = entry->value;
+
+            /* Look for existing key (considering normalization) */
+            puppet_value_t *dest_val = puppet_hash_get(dest, key, key_len);
+
+            /* If not found by exact key, try normalized versions */
+            if (!dest_val) {
+                /* Try with underscores */
+                char *norm_key = normalize_key(key, key_len);
+                dest_val = puppet_hash_get(dest, norm_key, key_len);
+
+                if (!dest_val) {
+                    /* Try with dashes (in case dest has dashes) */
+                    for (size_t j = 0; j < key_len; j++) {
+                        if (key[j] == '_') {
+                            norm_key[j] = '-';
+                        }
+                    }
+                    dest_val = puppet_hash_get(dest, norm_key, key_len);
+                }
+                puppet_free(norm_key);
+            }
+
+            if (dest_val && dest_val->type == PUPPET_VALUE_HASH &&
+                src_val->type == PUPPET_VALUE_HASH) {
+                /* Both are hashes - recursively merge */
+                deep_merge_hash(dest_val->data.hash, src_val->data.hash);
+            } else {
+                /* Replace or add - rightmost wins, use src key style */
+                puppet_hash_set(dest, key, key_len, puppet_value_copy(src_val));
+            }
+
+            entry = entry->next;
+        }
+    }
+}
+
+/**
+ * @brief mysql::normalise_and_deepmerge function
+ *
+ * Recursively merges two or more hashes, normalizing keys with dash/underscore
+ * equivalence. When both hashes have matching keys (considering normalization),
+ * nested hashes are recursively merged, otherwise the rightmost value wins.
+ */
+puppet_value_t *puppet_func_mysql_normalise_and_deepmerge(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "mysql::normalise_and_deepmerge() requires at least 2 arguments");
+        return puppet_value_create_hash();
+    }
+
+    puppet_value_t *result = puppet_value_create_hash();
+
+    for (size_t i = 0; i < args->count; i++) {
+        puppet_value_t *hash_val = puppet_eval_expr(args->exprs[i], env);
+
+        /* Skip undef and empty strings (Puppet convention) */
+        if (!hash_val || hash_val->type == PUPPET_VALUE_UNDEF) {
+            if (hash_val) puppet_value_destroy(hash_val);
+            continue;
+        }
+
+        if (hash_val->type == PUPPET_VALUE_STRING &&
+            hash_val->data.string.len == 0) {
+            puppet_value_destroy(hash_val);
+            continue;
+        }
+
+        if (hash_val->type != PUPPET_VALUE_HASH) {
+            puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
+                "mysql::normalise_and_deepmerge() skipping non-hash argument");
+            puppet_value_destroy(hash_val);
+            continue;
+        }
+
+        /* Deep merge this hash into result */
+        deep_merge_hash(result->data.hash, hash_val->data.hash);
+
+        puppet_value_destroy(hash_val);
+    }
+
+    return result;
+}
+
+/**
+ * @brief stdlib::shell_escape function
+ *
+ * Escapes a string for safe use in Bourne shell command line.
+ * Implements similar logic to Ruby's Shellwords.shellescape().
+ */
+puppet_value_t *puppet_func_shell_escape(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        return puppet_value_create_string("''", 2);
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    if (!val) {
+        return puppet_value_create_string("''", 2);
+    }
+
+    /* Convert to string if needed */
+    char *input = NULL;
+    size_t input_len = 0;
+
+    if (val->type == PUPPET_VALUE_STRING) {
+        input = val->data.string.data;
+        input_len = val->data.string.len;
+    } else {
+        /* Convert to string representation */
+        char *display = puppet_value_to_display_string(val);
+        input = display;
+        input_len = strlen(display);
+    }
+
+    /* Empty string becomes '' */
+    if (input_len == 0) {
+        if (val->type != PUPPET_VALUE_STRING) {
+            puppet_free(input);
+        }
+        puppet_value_destroy(val);
+        return puppet_value_create_string("''", 2);
+    }
+
+    /* Check if string needs escaping */
+    bool needs_escape = false;
+    for (size_t i = 0; i < input_len; i++) {
+        char c = input[i];
+        /* Safe chars: alphanumeric, dash, underscore, dot, forward slash, colon */
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+              c == '.' || c == '/' || c == ':')) {
+            needs_escape = true;
+            break;
+        }
+    }
+
+    if (!needs_escape) {
+        /* Return as-is */
+        puppet_value_t *result = puppet_value_create_string(input, input_len);
+        if (val->type != PUPPET_VALUE_STRING) {
+            puppet_free(input);
+        }
+        puppet_value_destroy(val);
+        return result;
+    }
+
+    /* Escape by wrapping in single quotes, escaping any single quotes */
+    /* Count single quotes to know output size */
+    size_t quote_count = 0;
+    for (size_t i = 0; i < input_len; i++) {
+        if (input[i] == '\'') quote_count++;
+    }
+
+    /* Output size: 2 (outer quotes) + input_len + quote_count * 3 (each ' becomes '\'' which is 3 extra chars) */
+    size_t output_len = 2 + input_len + quote_count * 3;
+    char *output = puppet_malloc(output_len + 1);
+    char *p = output;
+
+    *p++ = '\'';
+    for (size_t i = 0; i < input_len; i++) {
+        if (input[i] == '\'') {
+            /* Replace ' with '\'' (end quote, escaped quote, start quote) */
+            *p++ = '\'';  /* End current quote */
+            *p++ = '\\';  /* Escape */
+            *p++ = '\'';  /* The quote itself */
+            *p++ = '\'';  /* Start new quote */
+        } else {
+            *p++ = input[i];
+        }
+    }
+    *p++ = '\'';
+    *p = '\0';
+
+    puppet_value_t *result = puppet_value_create_string(output, p - output);
+    puppet_free(output);
+
+    if (val->type != PUPPET_VALUE_STRING) {
+        puppet_free(input);
+    }
+    puppet_value_destroy(val);
+    return result;
+}
+
+/**
  * @brief Puppet is_string() function - check if value is a string
  */
 puppet_value_t *puppet_func_is_string(puppet_expr_list_t *args, puppet_env_t *env) {

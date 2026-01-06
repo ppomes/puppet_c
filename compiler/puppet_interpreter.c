@@ -762,6 +762,14 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "merge") == 0) {
                 return puppet_func_merge(&expr->data.funcall.args, env);
             }
+            else if (strcmp(func_name, "mysql::normalise_and_deepmerge") == 0) {
+                return puppet_func_mysql_normalise_and_deepmerge(&expr->data.funcall.args, env);
+            }
+            // Shell/string escaping functions
+            else if (strcmp(func_name, "stdlib::shell_escape") == 0 ||
+                     strcmp(func_name, "shell_escape") == 0) {
+                return puppet_func_shell_escape(&expr->data.funcall.args, env);
+            }
             // Type checking functions
             else if (strcmp(func_name, "is_string") == 0) {
                 return puppet_func_is_string(&expr->data.funcall.args, env);
@@ -1854,6 +1862,21 @@ static void puppet_exec_collector(puppet_stmt_t *stmt, puppet_env_t *env) {
                         puppet_scope_set_var(define_scope, "name", name_val);
                         puppet_scope_set_var(define_scope, "title", puppet_value_copy(name_val));
 
+                        /* Set $module_name for the define */
+                        const char *define_sep = strstr(vres->type, "::");
+                        if (define_sep) {
+                            size_t def_module_len = define_sep - vres->type;
+                            char *def_module = puppet_malloc(def_module_len + 1);
+                            memcpy(def_module, vres->type, def_module_len);
+                            def_module[def_module_len] = '\0';
+                            puppet_scope_set_var(define_scope, "module_name",
+                                puppet_value_create_string(def_module, def_module_len));
+                            puppet_free(def_module);
+                        } else {
+                            puppet_scope_set_var(define_scope, "module_name",
+                                puppet_value_create_string(vres->type, strlen(vres->type)));
+                        }
+
                         /* Bind define parameters from virtual resource attributes */
                         for (size_t p = 0; p < define_stmt->data.define.params.count; p++) {
                             const char *param_name = define_stmt->data.define.params.params[p].name.data;
@@ -2407,6 +2430,22 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         puppet_value_t *name_val = puppet_value_create_string(title_str, strlen(title_str));
                         puppet_scope_set_var(define_scope, "name", name_val);
                         puppet_scope_set_var(define_scope, "title", puppet_value_copy(name_val));
+
+                        /* Set $module_name for the define */
+                        const char *def_type_sep = strstr(stmt->data.resource.type.data, "::");
+                        if (def_type_sep) {
+                            size_t def_type_module_len = def_type_sep - stmt->data.resource.type.data;
+                            char *def_type_module = puppet_malloc(def_type_module_len + 1);
+                            memcpy(def_type_module, stmt->data.resource.type.data, def_type_module_len);
+                            def_type_module[def_type_module_len] = '\0';
+                            puppet_scope_set_var(define_scope, "module_name",
+                                puppet_value_create_string(def_type_module, def_type_module_len));
+                            puppet_free(def_type_module);
+                        } else {
+                            puppet_scope_set_var(define_scope, "module_name",
+                                puppet_value_create_string(stmt->data.resource.type.data,
+                                                          strlen(stmt->data.resource.type.data)));
+                        }
 
                         /* Bind define parameters with defaults */
                         for (size_t p = 0; p < define_stmt->data.define.params.count; p++) {
@@ -3103,6 +3142,10 @@ static bool puppet_include_class_from_def(puppet_stmt_t *class_def, puppet_env_t
         /* Top-level class like "tomee" -> module is "tomee" */
         env->caller_module_name = puppet_strdup(class_name);
     }
+
+    /* Set $module_name variable in class scope */
+    puppet_value_t *module_name_val = puppet_value_create_string(env->caller_module_name, strlen(env->caller_module_name));
+    puppet_scope_set_var(class_scope, "module_name", module_name_val);
 
     /* Execute the class body */
     puppet_exec_stmt_list(&class_def->data.class_def.body, env);
