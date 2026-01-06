@@ -1,0 +1,5 @@
+<%- | String $name, Integer $port = 8080 | -%>
+# EPP Template Test
+# Name: <%= $name %>
+# Port: <%= $port %>
+# Hostname: <%= $hostname %>

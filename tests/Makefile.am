@@ -62,6 +62,11 @@ EXTRA_DIST = \
     puppet/type_checking_test.pp \
     puppet/virtual_nested_define_test.pp \
     puppet/virtual_test.pp \
+    puppet/epp_test.pp \
+    puppet/simple.epp \
+    puppet/merge_operations_test.pp \
+    puppet/regex_case_test.pp \
+    puppet/sensitive_test.pp \
     facts/sample_facts.json \
     facts/multi_node_facts.json \
     facts/test_facts_usage.pp \
@@ -72,10 +77,11 @@ EXTRA_DIST = \
     test_collectors.sh \
     test_virtual.sh \
     test_simple_core.sh \
-    test_erb.sh
+    test_erb.sh \
+    test_features.sh
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-features
 	@echo "All tests completed."
 
 check-parser:
@@ -423,4 +429,15 @@ check-erb:
 		exit 1; \
 	fi
 
-.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-memory check-asan
+check-features:
+	@echo "Running feature tests (EPP, merge ops, regex case, Sensitive)..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_features.sh > output/features.out 2>&1; then \
+		echo "✅ All feature tests passed!"; \
+	else \
+		echo "❌ Some feature tests failed:"; \
+		sed 's/^/  /' output/features.out; \
+		exit 1; \
+	fi
+
+.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-features check-memory check-asan
