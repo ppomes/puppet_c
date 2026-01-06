@@ -49,7 +49,7 @@ services:
       - PUPPET_SERVER=http://server:8140
     # Required for systemd in Docker
     privileged: true
-    cgroupns: host
+    cgroup: host
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
     networks:
@@ -70,7 +70,7 @@ services:
       - PUPPET_SERVER=http://server:8140
     # Required for systemd in Docker
     privileged: true
-    cgroupns: host
+    cgroup: host
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
     networks:

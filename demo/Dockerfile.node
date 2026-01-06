@@ -39,12 +39,14 @@ RUN dpkg -i /tmp/libpuppetc-common0_*.deb \
     rm -rf /tmp/*.deb
 
 # Create a systemd service that runs puppetc-agent on boot
+# Note: The service reads PUPPET_SERVER from /etc/default/puppetc-agent
 RUN echo '[Unit]\n\
 Description=Puppet-C Agent\n\
 After=network.target\n\
 \n\
 [Service]\n\
 Type=oneshot\n\
+EnvironmentFile=-/etc/default/puppetc-agent\n\
 ExecStartPre=/bin/sleep 3\n\
 ExecStart=/usr/bin/puppetc-agent -a -v\n\
 RemainAfterExit=yes\n\
@@ -53,8 +55,14 @@ RemainAfterExit=yes\n\
 WantedBy=multi-user.target\n\
 ' > /etc/systemd/system/puppetc-agent.service
 
+# Create a startup script that copies container env to systemd environment file
+RUN echo '#!/bin/bash\n\
+echo "PUPPET_SERVER=$PUPPET_SERVER" > /etc/default/puppetc-agent\n\
+exec /lib/systemd/systemd\n\
+' > /entrypoint.sh && chmod +x /entrypoint.sh
+
 # Enable the service
 RUN systemctl enable puppetc-agent.service
 
-# systemd is the init system - it will start our service which runs puppet
-# and puppet will enable/start nginx, mariadb via systemctl
+# Use our entrypoint to pass container env to systemd
+ENTRYPOINT ["/entrypoint.sh"]

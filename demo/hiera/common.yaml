@@ -1,0 +1,5 @@
+---
+# Common Hiera data for the demo
+
+# MySQL root password (via automatic parameter lookup)
+mysql::server::root_password: 'puppet_demo_password'
