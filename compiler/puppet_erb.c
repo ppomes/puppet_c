@@ -15,6 +15,7 @@
 #include "puppet_erb.h"
 #include "puppet_memory.h"
 #include "puppet_stdlib.h"
+#include "puppet_loader.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -116,8 +117,38 @@ puppet_ruby_context_t *puppet_ruby_init(void) {
         "    safe_name = name.gsub('::', '__')\n"
         "    @vars.key?(safe_name)\n"
         "  end\n"
+        "  # Support for nested template inclusion: scope.function_template(['module/template.erb'])\n"
+        "  def function_template(args)\n"
+        "    return '' unless args.is_a?(Array) && !args.empty?\n"
+        "    result = ''\n"
+        "    args.each do |template_path|\n"
+        "      # Resolve template path: module/file.erb -> modules_path/module/templates/file.erb\n"
+        "      full_path = nil\n"
+        "      if File.exist?(template_path)\n"
+        "        full_path = template_path\n"
+        "      elsif $puppet_modules_path && template_path.include?('/')\n"
+        "        parts = template_path.split('/', 2)\n"
+        "        module_name = parts[0]\n"
+        "        template_file = parts[1]\n"
+        "        candidate = File.join($puppet_modules_path, module_name, 'templates', template_file)\n"
+        "        full_path = candidate if File.exist?(candidate)\n"
+        "      end\n"
+        "      if full_path && File.exist?(full_path)\n"
+        "        content = File.read(full_path)\n"
+        "        # Render with current binding (same scope/variables)\n"
+        "        erb = ERB.new(content, trim_mode: '-')\n"
+        "        # Create a binding with 'scope' available\n"
+        "        scope = self\n"
+        "        result += erb.result(binding)\n"
+        "      else\n"
+        "        $stderr.puts \"Warning: Template not found: #{template_path}\"\n"
+        "      end\n"
+        "    end\n"
+        "    result\n"
+        "  end\n"
         "end\n"
         "$puppet_vars = {}\n"
+        "$puppet_modules_path = nil\n"
         "# Define has_variable? in main scope for templates that call it directly\n"
         "def has_variable?(name)\n"
         "  $scope.has_variable?(name) if $scope\n"
@@ -396,6 +427,14 @@ char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_
     int state = 0;
     (void)rb_eval_string_protect("$puppet_vars = {}", &state);
 
+    // Set modules path for nested template resolution (scope.function_template)
+    if (env && env->loader && env->loader->modules_path) {
+        VALUE modules_path = rb_str_new2(env->loader->modules_path);
+        rb_gv_set("$puppet_modules_path", modules_path);
+    } else {
+        rb_gv_set("$puppet_modules_path", Qnil);
+    }
+
     // Export Puppet variables to Ruby globals
     puppet_export_env_to_ruby(env, ruby_ctx);
 
@@ -484,9 +523,6 @@ int puppet_ruby_available(void) {
 const char *puppet_ruby_version(void) {
     return "Ruby 3.4.0";  // Static version string
 }
-
-// Forward declaration for loader
-#include "puppet_loader.h"
 
 /**
  * Resolve a Puppet template path to a filesystem path

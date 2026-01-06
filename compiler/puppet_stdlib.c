@@ -461,17 +461,30 @@ puppet_value_t *puppet_func_defined(puppet_expr_list_t *args, puppet_env_t *env)
                     title[title_len - 2] = '\0';
                 }
 
-                // Build catalog key (lowercase type::title)
-                char catalog_key[512];
-                snprintf(catalog_key, sizeof(catalog_key), "%s::%s", type, title);
-                // Convert type to lowercase for lookup
-                for (char *p = catalog_key; *p && *p != ':'; p++) {
-                    *p = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
-                }
+                // Special handling for Class references: Class['nginx'] checks if class is included
+                if (strcasecmp(type, "Class") == 0) {
+                    // Check if class has been included
+                    if (env->loader && puppet_loader_is_class_loaded(env->loader, title)) {
+                        is_defined = true;
+                    }
+                    // Also check class_scopes for included classes
+                    if (!is_defined && env->class_scopes) {
+                        puppet_value_t *scope_val = puppet_hash_get(env->class_scopes, title, strlen(title));
+                        if (scope_val) is_defined = true;
+                    }
+                } else {
+                    // Build catalog key (lowercase type::title)
+                    char catalog_key[512];
+                    snprintf(catalog_key, sizeof(catalog_key), "%s::%s", type, title);
+                    // Convert type to lowercase for lookup
+                    for (char *p = catalog_key; *p && *p != ':'; p++) {
+                        *p = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
+                    }
 
-                if (env->resource_catalog) {
-                    puppet_value_t *val = puppet_hash_get(env->resource_catalog, catalog_key, strlen(catalog_key));
-                    if (val) is_defined = true;
+                    if (env->resource_catalog) {
+                        puppet_value_t *val = puppet_hash_get(env->resource_catalog, catalog_key, strlen(catalog_key));
+                        if (val) is_defined = true;
+                    }
                 }
 
                 puppet_free(type);

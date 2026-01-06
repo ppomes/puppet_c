@@ -103,4 +103,4 @@ debian/autoreconf.before
 # IDE files
 .vscode/
 .idea/
-*.sublime-*
+*.sublime-*demo/modules/

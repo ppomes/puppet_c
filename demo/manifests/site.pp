@@ -1,10 +1,10 @@
 # Demo: Web + Database Infrastructure
-# Managed by puppetc
+# Managed by puppetc using official Puppet Forge modules
 
 node 'web' {
   notify { 'web_start': message => 'Configuring web server' }
 
-  # Install nginx
+  # Install nginx (simple config - full nginx module has ERB limitations)
   package { 'nginx':
     ensure => installed,
   }
@@ -64,33 +64,19 @@ server {
 }
 
 node 'db' {
-  notify { 'db_start': message => 'Configuring database server' }
+  notify { 'db_start': message => 'Configuring database server using mysql module' }
 
-  # Install MariaDB (MySQL-compatible)
-  package { 'mariadb-server':
-    ensure => installed,
+  # Use the official puppetlabs/mysql module
+  # Note: mysql::db and some features use Deferred which isn't supported yet
+  class { 'mysql::server':
+    override_options => {
+      'mysqld' => {
+        'bind-address' => '0.0.0.0',
+      },
+    },
   }
 
-  # MariaDB config
-  file { '/etc/mysql/mariadb.conf.d/99-puppet.cnf':
-    ensure  => file,
-    content => "# Managed by Puppet
-[mysqld]
-bind-address = 0.0.0.0
-max_connections = 100
-",
-    require => Package['mariadb-server'],
-    notify  => Service['mariadb'],
-  }
-
-  # Start MariaDB
-  service { 'mariadb':
-    ensure  => running,
-    enable  => true,
-    require => Package['mariadb-server'],
-  }
-
-  notify { 'db_complete': message => 'Database server configured' }
+  notify { 'db_complete': message => 'Database server configured with mysql module' }
 }
 
 node default {
