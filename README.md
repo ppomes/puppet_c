@@ -268,6 +268,8 @@ Edit `puppetcode/manifests/site.pp` on your host - changes are reflected immedia
 
 A complete demo showing puppetc managing nginx and MariaDB containers using official Puppet Forge modules.
 
+> **Note:** This demo requires **Linux** with Docker. The containers use systemd which requires cgroup support not available on macOS/Windows Docker Desktop.
+
 ```bash
 # Download required Puppet modules (stdlib, mysql)
 ./demo/download_modules.sh
