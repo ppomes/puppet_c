@@ -290,6 +290,37 @@ static puppet_expr_t *convert_undef(TSNode node, const char *source) {
     return expr;
 }
 
+/* Convert regex literal - e.g., /^foo$/ */
+static puppet_expr_t *convert_regex(TSNode node, const char *source) {
+    puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
+    expr->type = PUPPET_EXPR_VALUE;
+    expr->loc = node_location(node);
+
+    char *text = node_text(node, source);
+    size_t len = strlen(text);
+
+    /* Remove surrounding slashes from /pattern/ */
+    if (len >= 2 && text[0] == '/' && text[len-1] == '/') {
+        puppet_value_t *val = puppet_calloc(1, sizeof(puppet_value_t));
+        val->type = PUPPET_VALUE_REGEXP;
+        val->data.regexp.len = len - 2;
+        val->data.regexp.data = puppet_malloc(len - 1);
+        memcpy(val->data.regexp.data, text + 1, len - 2);
+        val->data.regexp.data[len - 2] = '\0';
+        expr->data.value = val;
+    } else {
+        /* Fallback: use as-is */
+        puppet_value_t *val = puppet_calloc(1, sizeof(puppet_value_t));
+        val->type = PUPPET_VALUE_REGEXP;
+        val->data.regexp.len = len;
+        val->data.regexp.data = puppet_strdup(text);
+        expr->data.value = val;
+    }
+
+    puppet_free(text);
+    return expr;
+}
+
 /* Convert binary expression */
 static puppet_expr_t *convert_binary(TSNode node, const char *source) {
     puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
@@ -803,6 +834,8 @@ static puppet_expr_t *convert_expression(TSNode node, const char *source) {
         return convert_boolean(node, source);
     if (strcmp(type, "undef") == 0)
         return convert_undef(node, source);
+    if (strcmp(type, "regex") == 0)
+        return convert_regex(node, source);
     if (strcmp(type, "binary") == 0)
         return convert_binary(node, source);
     if (strcmp(type, "unary") == 0)

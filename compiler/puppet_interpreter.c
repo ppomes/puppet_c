@@ -581,6 +581,14 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
                 case PUPPET_VALUE_ARRAY:
                 case PUPPET_VALUE_HASH:
                     return puppet_value_copy(expr->data.value);
+                case PUPPET_VALUE_REGEXP: {
+                    // Create a copy of the regexp value
+                    puppet_value_t *val = puppet_calloc(1, sizeof(puppet_value_t));
+                    val->type = PUPPET_VALUE_REGEXP;
+                    val->data.regexp.len = expr->data.value->data.regexp.len;
+                    val->data.regexp.data = puppet_strdup(expr->data.value->data.regexp.data);
+                    return val;
+                }
                 default:
                     return puppet_value_create_undef();
             }
@@ -607,10 +615,20 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
         case PUPPET_EXPR_FUNCALL: {
             // Handle built-in functions
             const char *func_name = expr->data.funcall.name.data;
-            
+
+            // Guard against NULL function names
+            if (!func_name) {
+                puppet_error_at(expr->loc, "Function call with NULL name");
+                return puppet_value_create_undef();
+            }
+
             // Template function
             if (strcmp(func_name, "template") == 0) {
                 return puppet_func_template(&expr->data.funcall.args, env);
+            }
+            // EPP template function
+            else if (strcmp(func_name, "epp") == 0) {
+                return puppet_func_epp(&expr->data.funcall.args, env);
             }
             // Core logging functions
             else if (strcmp(func_name, "fail") == 0) {
@@ -1231,6 +1249,67 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
         case PUPPET_OP_ADD:
             if (left->type == PUPPET_VALUE_NUMBER && right->type == PUPPET_VALUE_NUMBER) {
                 return puppet_value_create_number(left->data.number + right->data.number);
+            }
+            /* Handle undef operands */
+            if (left->type == PUPPET_VALUE_UNDEF && right->type == PUPPET_VALUE_HASH) {
+                return puppet_value_copy(right);
+            }
+            if (left->type == PUPPET_VALUE_HASH && right->type == PUPPET_VALUE_UNDEF) {
+                return puppet_value_copy(left);
+            }
+            if (left->type == PUPPET_VALUE_UNDEF && right->type == PUPPET_VALUE_ARRAY) {
+                return puppet_value_copy(right);
+            }
+            if (left->type == PUPPET_VALUE_ARRAY && right->type == PUPPET_VALUE_UNDEF) {
+                return puppet_value_copy(left);
+            }
+            /* Hash merge: {a => 1} + {b => 2} => {a => 1, b => 2} */
+            if (left->type == PUPPET_VALUE_HASH && right->type == PUPPET_VALUE_HASH) {
+                puppet_value_t *result = puppet_value_create_hash();
+                /* Copy left hash entries */
+                for (size_t i = 0; i < left->data.hash->bucket_count; i++) {
+                    puppet_hash_entry_t *entry = left->data.hash->buckets[i];
+                    while (entry) {
+                        puppet_value_t *value_copy = puppet_value_copy(entry->value);
+                        puppet_hash_set(result->data.hash, entry->key.data, entry->key.len, value_copy);
+                        entry = entry->next;
+                    }
+                }
+                /* Merge right hash entries (overwrites duplicates) */
+                for (size_t i = 0; i < right->data.hash->bucket_count; i++) {
+                    puppet_hash_entry_t *entry = right->data.hash->buckets[i];
+                    while (entry) {
+                        puppet_value_t *value_copy = puppet_value_copy(entry->value);
+                        puppet_hash_set(result->data.hash, entry->key.data, entry->key.len, value_copy);
+                        entry = entry->next;
+                    }
+                }
+                return result;
+            }
+            /* Array concatenation: [1,2] + [3,4] => [1,2,3,4] */
+            if (left->type == PUPPET_VALUE_ARRAY && right->type == PUPPET_VALUE_ARRAY) {
+                puppet_value_t *result = puppet_value_create_array();
+                /* Append left array items */
+                for (size_t i = 0; i < left->data.array->count; i++) {
+                    puppet_array_append(result->data.array, puppet_value_copy(left->data.array->items[i]));
+                }
+                /* Append right array items */
+                for (size_t i = 0; i < right->data.array->count; i++) {
+                    puppet_array_append(result->data.array, puppet_value_copy(right->data.array->items[i]));
+                }
+                return result;
+            }
+            /* String concatenation: 'foo' + 'bar' => 'foobar' */
+            if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_STRING) {
+                size_t left_len = left->data.string.len;
+                size_t right_len = right->data.string.len;
+                char *result_str = puppet_malloc(left_len + right_len + 1);
+                memcpy(result_str, left->data.string.data, left_len);
+                memcpy(result_str + left_len, right->data.string.data, right_len);
+                result_str[left_len + right_len] = '\0';
+                puppet_value_t *result = puppet_value_create_string(result_str, left_len + right_len);
+                puppet_free(result_str);
+                return result;
             }
             break;
             

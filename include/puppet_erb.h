@@ -27,6 +27,9 @@ char *puppet_simple_template_render(const char *template, puppet_env_t *env);
 // Template function for interpreter
 puppet_value_t *puppet_func_template(puppet_expr_list_t *args, puppet_env_t *env);
 
+// EPP template function for interpreter
+puppet_value_t *puppet_func_epp(puppet_expr_list_t *args, puppet_env_t *env);
+
 // Utility functions
 int puppet_ruby_available(void);
 const char *puppet_ruby_version(void);

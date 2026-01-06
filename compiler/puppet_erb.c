@@ -14,6 +14,7 @@
 
 #include "puppet_erb.h"
 #include "puppet_memory.h"
+#include "puppet_stdlib.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -643,5 +644,329 @@ puppet_value_t *puppet_func_template(puppet_expr_list_t *args, puppet_env_t *env
 
     puppet_value_t *result = puppet_value_create_string(full_output, full_len);
     puppet_free(full_output);
+    return result;
+}
+
+/**
+ * Resolve EPP template path (same logic as ERB but for .epp files)
+ */
+static char *resolve_epp_template_path(const char *template_name, puppet_env_t *env) {
+    // Format: module_name/template_file.epp
+    // Look in: <modulepath>/module_name/templates/template_file.epp
+
+    if (!template_name) return NULL;
+
+    // First, check if the path is a direct file path that exists
+    FILE *test = fopen(template_name, "r");
+    if (test) {
+        fclose(test);
+        return puppet_strdup(template_name);
+    }
+
+    // Find the separator
+    const char *slash = strchr(template_name, '/');
+    if (!slash) {
+        fprintf(stderr, "[ERROR] Invalid EPP template path: %s (expected module/template format)\n", template_name);
+        return NULL;
+    }
+
+    // Extract module name and template file
+    size_t module_len = slash - template_name;
+    char *module_name = puppet_malloc(module_len + 1);
+    strncpy(module_name, template_name, module_len);
+    module_name[module_len] = '\0';
+
+    const char *template_file = slash + 1;
+
+    // Get the modules path from loader (same as ERB)
+    const char *modules_path = NULL;
+    if (env && env->loader && env->loader->modules_path) {
+        modules_path = env->loader->modules_path;
+    }
+
+    // Build full path: modules_path/module_name/templates/template_file
+    char *full_path = NULL;
+    if (modules_path) {
+        size_t path_len = strlen(modules_path) + 1 + module_len + strlen("/templates/") + strlen(template_file) + 1;
+        full_path = puppet_malloc(path_len);
+        snprintf(full_path, path_len, "%s/%s/templates/%s", modules_path, module_name, template_file);
+
+        struct stat st;
+        if (stat(full_path, &st) == 0) {
+            puppet_free(module_name);
+            return full_path;
+        }
+        puppet_free(full_path);
+    }
+
+    fprintf(stderr, "[ERROR] EPP template not found: %s\n", template_name);
+    puppet_free(module_name);
+    return NULL;
+}
+
+/**
+ * Read file contents into a string
+ */
+static char *read_file_contents(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        return NULL;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    char *content = puppet_malloc(size + 1);
+    size_t read = fread(content, 1, size, f);
+    content[read] = '\0';
+    fclose(f);
+
+    return content;
+}
+
+/**
+ * Simple EPP renderer - handles variable substitution
+ *
+ * EPP templates use:
+ * - <%- | params | -%>  - parameter header (at start)
+ * - <%= $var %>         - output variable value
+ * - <% code %>          - execute code (no output)
+ * - <%# comment %>      - comment
+ * - <%- / -%>           - trim whitespace variants
+ */
+static char *puppet_epp_render(const char *content, puppet_hash_t *params, puppet_env_t *env) {
+    if (!content) return NULL;
+
+    // Output buffer
+    size_t out_capacity = strlen(content) * 2;
+    size_t out_len = 0;
+    char *output = puppet_malloc(out_capacity);
+    output[0] = '\0';
+
+    const char *p = content;
+
+    // Skip parameter header if present: <%- | ... | -%>
+    if (strncmp(p, "<%-", 3) == 0 || strncmp(p, "<%", 2) == 0) {
+        // Find the pipe that starts params
+        const char *pipe1 = strchr(p + 2, '|');
+        if (pipe1) {
+            // Find closing pipe and tag
+            const char *pipe2 = strchr(pipe1 + 1, '|');
+            if (pipe2) {
+                // Find -%> or %>
+                const char *end = strstr(pipe2, "-%>");
+                if (end) {
+                    p = end + 3;
+                    // Skip any leading newline after header
+                    while (*p == '\n' || *p == '\r') p++;
+                } else {
+                    end = strstr(pipe2, "%>");
+                    if (end) {
+                        p = end + 2;
+                        while (*p == '\n' || *p == '\r') p++;
+                    }
+                }
+            }
+        }
+    }
+
+    // Process the template
+    while (*p) {
+        // Check for EPP tags
+        if (strncmp(p, "<%-", 3) == 0 || strncmp(p, "<%", 2) == 0) {
+            int trim_before = (strncmp(p, "<%-", 3) == 0);
+            const char *tag_start = p + (trim_before ? 3 : 2);
+
+            // Trim trailing whitespace before tag if <%-
+            if (trim_before && out_len > 0) {
+                while (out_len > 0 && (output[out_len-1] == ' ' || output[out_len-1] == '\t')) {
+                    out_len--;
+                }
+            }
+
+            // Skip whitespace after opening tag
+            while (*tag_start == ' ' || *tag_start == '\t') tag_start++;
+
+            // Check for comment: <%# ... %>
+            if (*tag_start == '#') {
+                const char *end = strstr(tag_start, "%>");
+                if (end) {
+                    p = end + 2;
+                    if (*(end - 1) == '-') {
+                        // Trim following whitespace/newline
+                        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+                    }
+                    continue;
+                }
+            }
+
+            // Check for output tag: <%= ... %>
+            if (*tag_start == '=') {
+                tag_start++;
+                while (*tag_start == ' ' || *tag_start == '\t') tag_start++;
+
+                // Find closing tag
+                const char *end = strstr(tag_start, "%>");
+                if (!end) {
+                    // Malformed tag, output as-is
+                    goto copy_char;
+                }
+
+                int trim_after = (*(end - 1) == '-');
+                if (trim_after) end--;
+
+                // Extract expression (just variable for now)
+                size_t expr_len = end - tag_start;
+                // Trim trailing whitespace
+                while (expr_len > 0 && (tag_start[expr_len-1] == ' ' || tag_start[expr_len-1] == '\t' || tag_start[expr_len-1] == '-')) {
+                    expr_len--;
+                }
+
+                char *expr = puppet_malloc(expr_len + 1);
+                strncpy(expr, tag_start, expr_len);
+                expr[expr_len] = '\0';
+
+                // Evaluate variable
+                char *value_str = NULL;
+                if (expr[0] == '$') {
+                    const char *var_name = expr + 1;
+                    puppet_value_t *value = NULL;
+
+                    // First check params hash
+                    if (params) {
+                        value = puppet_hash_get(params, var_name, strlen(var_name));
+                    }
+
+                    // Then check environment scope
+                    if (!value && env) {
+                        value = puppet_variable_lookup_chain(env, var_name);
+                    }
+
+                    if (value) {
+                        value_str = puppet_value_to_display_string(value);
+                        // Don't destroy - we don't own it from hash/scope
+                    } else {
+                        value_str = puppet_strdup("");
+                    }
+                } else {
+                    // Just output the expression as-is (could be a literal)
+                    value_str = puppet_strdup(expr);
+                }
+
+                puppet_free(expr);
+
+                // Append value to output
+                if (value_str) {
+                    size_t value_len = strlen(value_str);
+                    while (out_len + value_len + 1 > out_capacity) {
+                        out_capacity *= 2;
+                        output = puppet_realloc(output, out_capacity);
+                    }
+                    memcpy(output + out_len, value_str, value_len);
+                    out_len += value_len;
+                    output[out_len] = '\0';
+                    puppet_free(value_str);
+                }
+
+                // Skip past closing tag
+                p = end + (trim_after ? 3 : 2);
+                if (trim_after) {
+                    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+                }
+                continue;
+            }
+
+            // Other code blocks <% ... %> - skip for now (control structures need full parser)
+            const char *end = strstr(tag_start, "%>");
+            if (end) {
+                int trim_after = (*(end - 1) == '-');
+                p = end + 2;
+                if (trim_after) {
+                    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+                }
+                continue;
+            }
+        }
+
+copy_char:
+        // Copy regular character
+        if (out_len + 2 > out_capacity) {
+            out_capacity *= 2;
+            output = puppet_realloc(output, out_capacity);
+        }
+        output[out_len++] = *p++;
+        output[out_len] = '\0';
+    }
+
+    return output;
+}
+
+/**
+ * EPP function implementation
+ * Usage:
+ *   epp('module/template.epp')
+ *   epp('module/template.epp', { 'key' => 'value', ... })
+ */
+puppet_value_t *puppet_func_epp(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        fprintf(stderr, "[ERROR] epp() requires at least 1 argument\n");
+        return puppet_value_create_undef();
+    }
+
+    // Skip EPP in parallel mode - return placeholder
+    if (env && env->skip_erb) {
+        return puppet_value_create_string("[epp template skipped in parallel mode]",
+                                          strlen("[epp template skipped in parallel mode]"));
+    }
+
+    // Get template path
+    puppet_value_t *path_value = puppet_eval_expr(args->exprs[0], env);
+    if (!path_value || path_value->type != PUPPET_VALUE_STRING) {
+        fprintf(stderr, "[ERROR] epp() first argument must be a string\n");
+        if (path_value) puppet_value_destroy(path_value);
+        return puppet_value_create_undef();
+    }
+
+    // Get parameters hash (optional)
+    puppet_hash_t *params = NULL;
+    if (args->count >= 2) {
+        puppet_value_t *params_value = puppet_eval_expr(args->exprs[1], env);
+        if (params_value && params_value->type == PUPPET_VALUE_HASH) {
+            params = params_value->data.hash;
+            // Keep reference, will clean up later
+        } else if (params_value) {
+            puppet_value_destroy(params_value);
+        }
+    }
+
+    // Resolve template path
+    char *template_path = resolve_epp_template_path(path_value->data.string.data, env);
+    puppet_value_destroy(path_value);
+
+    if (!template_path) {
+        return puppet_value_create_undef();
+    }
+
+    // Read template content
+    char *content = read_file_contents(template_path);
+    puppet_free(template_path);
+
+    if (!content) {
+        fprintf(stderr, "[ERROR] Failed to read EPP template\n");
+        return puppet_value_create_undef();
+    }
+
+    // Render the template
+    char *rendered = puppet_epp_render(content, params, env);
+    puppet_free(content);
+
+    if (!rendered) {
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *result = puppet_value_create_string(rendered, strlen(rendered));
+    puppet_free(rendered);
+
     return result;
 }
