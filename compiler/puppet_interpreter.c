@@ -2157,6 +2157,19 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                 puppet_value_t *define_ptr = puppet_hash_get(env->define_types,
                     stmt->data.resource.type.data, strlen(stmt->data.resource.type.data));
 
+                /* If not found and we're inside a class scope, try fully qualified name */
+                char *fq_lookup_name = NULL;
+                if (!define_ptr && env->class_scope && env->class_scope->name.data &&
+                    !strchr(stmt->data.resource.type.data, ':')) {
+                    /* Build fully qualified name: class_name::type_name */
+                    size_t class_len = strlen(env->class_scope->name.data);
+                    size_t type_len = strlen(stmt->data.resource.type.data);
+                    fq_lookup_name = puppet_malloc(class_len + 2 + type_len + 1);
+                    snprintf(fq_lookup_name, class_len + 2 + type_len + 1, "%s::%s",
+                             env->class_scope->name.data, stmt->data.resource.type.data);
+                    define_ptr = puppet_hash_get(env->define_types, fq_lookup_name, strlen(fq_lookup_name));
+                }
+
                 /* Try to autoload the define if not already registered */
                 if (!define_ptr && env->loader && strchr(stmt->data.resource.type.data, ':')) {
                     puppet_stmt_t *loaded_def = puppet_loader_load_define(env->loader,
@@ -2308,8 +2321,11 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
 
                         puppet_value_destroy(title_val);
                     }
+                    if (fq_lookup_name) puppet_free(fq_lookup_name);
                     break;  /* Defined type handled */
                 }
+                /* Free fq_lookup_name if we didn't find a defined type */
+                if (fq_lookup_name) puppet_free(fq_lookup_name);
             }
 
             // Normal resource execution

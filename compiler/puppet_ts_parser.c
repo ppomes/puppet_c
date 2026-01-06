@@ -310,6 +310,9 @@ static puppet_expr_t *convert_binary(TSNode node, const char *source) {
         TSNode child = ts_node_child(node, i);
         const char *type = ts_node_type(child);
 
+        /* Skip comment nodes - they can appear in multiline expressions */
+        if (strcmp(type, "comment") == 0) continue;
+
         if (ts_node_is_named(child)) {
             /* Check if this is an access node that should combine with preceding expression */
             if (strcmp(type, "access") == 0) {
