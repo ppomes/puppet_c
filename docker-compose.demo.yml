@@ -32,7 +32,7 @@ services:
       timeout: 3s
       retries: 10
 
-  # Web node - Debian with nginx managed by Puppet
+  # Web node - Debian with nginx managed by Puppet (systemd enabled)
   web:
     build:
       context: .
@@ -47,10 +47,15 @@ services:
         condition: service_healthy
     environment:
       - PUPPET_SERVER=http://server:8140
+    # Required for systemd in Docker
+    privileged: true
+    cgroupns: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
     networks:
       - puppet-demo
 
-  # Database node - Debian with MariaDB managed by Puppet
+  # Database node - Debian with MariaDB managed by Puppet (systemd enabled)
   db:
     build:
       context: .
@@ -63,6 +68,11 @@ services:
         condition: service_healthy
     environment:
       - PUPPET_SERVER=http://server:8140
+    # Required for systemd in Docker
+    privileged: true
+    cgroupns: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
     networks:
       - puppet-demo
 

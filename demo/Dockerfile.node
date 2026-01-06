@@ -1,9 +1,10 @@
-# Demo node image - Debian with puppetc-agent
+# Demo node image - Debian with puppetc-agent and systemd
 # Fetches catalog from server and applies it on startup
+# Services are managed by systemd (like real Puppet)
 
 FROM debian:bookworm-slim AS builder
 
-# Reuse the builder from main Dockerfile
+# Build puppetc packages
 RUN apt-get update && apt-get install -y \
     build-essential autoconf automake libtool gawk pkg-config \
     libtree-sitter-dev libyaml-dev libssl-dev libmicrohttpd-dev \
@@ -16,17 +17,15 @@ COPY . .
 RUN autoreconf -i && dpkg-buildpackage -us -uc -b
 RUN mkdir -p /packages && mv ../*.deb /packages/ 2>/dev/null || true
 
-# Final image
-FROM debian:bookworm-slim
+# Final image with systemd support
+FROM antmelekhin/docker-systemd:debian-12
 
-# Install runtime dependencies and common tools
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4 \
     ca-certificates \
     curl \
     procps \
-    systemd \
-    systemd-sysv \
     && rm -rf /var/lib/apt/lists/*
 
 # Install puppetc-agent packages
@@ -39,32 +38,23 @@ RUN dpkg -i /tmp/libpuppetc-common0_*.deb \
             /tmp/puppetc-agent_*.deb && \
     rm -rf /tmp/*.deb
 
-# Create startup script that starts services after Puppet runs
-# (Docker containers don't have systemd, so we start services manually)
-RUN echo '#!/bin/bash\n\
-echo "Waiting for Puppet server..."\n\
-sleep 3\n\
-echo "Applying Puppet catalog..."\n\
-puppetc-agent -a -v\n\
-echo "Puppet run complete."\n\
+# Create a systemd service that runs puppetc-agent on boot
+RUN echo '[Unit]\n\
+Description=Puppet-C Agent\n\
+After=network.target\n\
 \n\
-# Start services manually (no systemd in containers)\n\
-echo "Starting services..."\n\
-if [ -x /usr/sbin/nginx ]; then\n\
-    echo "Starting nginx..."\n\
-    nginx\n\
-    echo "nginx started on port 80"\n\
-fi\n\
-if [ -x /usr/bin/mariadbd-safe ]; then\n\
-    echo "Starting MariaDB..."\n\
-    /usr/bin/mariadbd-safe --datadir=/var/lib/mysql &\n\
-    sleep 2\n\
-    echo "MariaDB started"\n\
-fi\n\
+[Service]\n\
+Type=oneshot\n\
+ExecStartPre=/bin/sleep 3\n\
+ExecStart=/usr/bin/puppetc-agent -a -v\n\
+RemainAfterExit=yes\n\
 \n\
-echo "Container ready."\n\
-# Keep container running\n\
-exec tail -f /dev/null\n\
-' > /start.sh && chmod +x /start.sh
+[Install]\n\
+WantedBy=multi-user.target\n\
+' > /etc/systemd/system/puppetc-agent.service
 
-ENTRYPOINT ["/start.sh"]
+# Enable the service
+RUN systemctl enable puppetc-agent.service
+
+# systemd is the init system - it will start our service which runs puppet
+# and puppet will enable/start nginx, mariadb via systemctl
