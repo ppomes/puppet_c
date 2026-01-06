@@ -35,11 +35,15 @@
 - [ ] Type aliases (`type MyType = String[1]`)
 - [ ] Abstract types (`Variant`, `Optional`, `Enum`, etc.)
 - [ ] Type validation on parameters
-- [ ] Sensitive type
+- [~] Sensitive type - Basic pass-through implemented, needs:
+  - [ ] Sensitive value wrapper type (mask data in logs/output)
+  - [ ] Compiler: Redact Sensitive values in catalog JSON
+  - [ ] Server: Mask Sensitive values in stored catalogs/reports
+  - [ ] Agent: Handle Sensitive values during application
 
 ### Templates
 - [x] ERB templates
-- [ ] EPP templates (Embedded Puppet)
+- [x] EPP templates (Embedded Puppet)
 
 ### Functions
 - [x] ~80 stdlib functions implemented
