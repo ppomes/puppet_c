@@ -29,8 +29,8 @@ git clone https://github.com/ppomes/puppet_c.git
 cd puppet_c
 
 # Build and run with Docker
-docker-compose build compiler
-docker-compose run --rm compiler -p -n mynode.example.com \
+docker compose build compiler
+docker compose run --rm compiler -p -n mynode.example.com \
     -m /puppet/modules /puppet/manifests/site.pp
 ```
 
@@ -247,19 +247,19 @@ Full server/agent setup using Docker Compose.
 
 ```bash
 # Build all images
-docker-compose build
+docker compose build
 
 # Start server
-docker-compose up -d server
+docker compose up -d server
 
 # Run agent (noop mode)
-docker-compose run --rm agent
+docker compose run --rm agent
 
 # Run agent (apply mode)
-docker-compose run --rm agent -a
+docker compose run --rm agent -a
 
 # View logs
-docker-compose logs -f server
+docker compose logs -f server
 ```
 
 Edit `puppetcode/manifests/site.pp` on your host - changes are reflected immediately.
