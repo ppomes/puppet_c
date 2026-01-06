@@ -195,15 +195,22 @@ static puppet_expr_t *convert_string_literal(TSNode node, const char *source) {
                 }
 
                 /* Convert the interpolated expression */
-                /* Check for variable + access pattern (e.g., ${hash['a']}) */
+                /* Check for variable + chained access pattern (e.g., ${hash['a']['b']}) */
                 uint32_t interp_child_count = ts_node_named_child_count(child);
                 TSNode var_child = find_child(child, "variable");
-                TSNode access_child = find_child(child, "access");
 
-                if (!ts_node_is_null(var_child) && !ts_node_is_null(access_child)) {
-                    /* Variable with bracket access: ${var[key]} */
-                    puppet_expr_t *var_expr = convert_variable(var_child, source);
-                    expr->data.interpolated.exprs[part_idx] = build_index_expr(var_expr, access_child, source);
+                if (!ts_node_is_null(var_child)) {
+                    /* Start with variable expression */
+                    puppet_expr_t *result_expr = convert_variable(var_child, source);
+
+                    /* Build chained index expressions for all access nodes */
+                    for (uint32_t j = 0; j < interp_child_count; j++) {
+                        TSNode access_node = ts_node_named_child(child, j);
+                        if (strcmp(ts_node_type(access_node), "access") == 0) {
+                            result_expr = build_index_expr(result_expr, access_node, source);
+                        }
+                    }
+                    expr->data.interpolated.exprs[part_idx] = result_expr;
                 } else if (interp_child_count > 0) {
                     TSNode interp_expr = ts_node_named_child(child, 0);
                     expr->data.interpolated.exprs[part_idx] = convert_expression(interp_expr, source);
@@ -321,21 +328,59 @@ static puppet_expr_t *convert_regex(TSNode node, const char *source) {
     return expr;
 }
 
+/* Helper to get operator from string */
+static puppet_binop_t get_binop(const char *type) {
+    if (strcmp(type, "+") == 0) return PUPPET_OP_ADD;
+    else if (strcmp(type, "-") == 0) return PUPPET_OP_SUB;
+    else if (strcmp(type, "*") == 0) return PUPPET_OP_MUL;
+    else if (strcmp(type, "/") == 0) return PUPPET_OP_DIV;
+    else if (strcmp(type, "%") == 0) return PUPPET_OP_MOD;
+    else if (strcmp(type, "==") == 0) return PUPPET_OP_EQ;
+    else if (strcmp(type, "!=") == 0) return PUPPET_OP_NE;
+    else if (strcmp(type, "<") == 0) return PUPPET_OP_LT;
+    else if (strcmp(type, "<=") == 0) return PUPPET_OP_LE;
+    else if (strcmp(type, ">") == 0) return PUPPET_OP_GT;
+    else if (strcmp(type, ">=") == 0) return PUPPET_OP_GE;
+    else if (strcmp(type, "and") == 0) return PUPPET_OP_AND;
+    else if (strcmp(type, "or") == 0) return PUPPET_OP_OR;
+    else if (strcmp(type, "=~") == 0) return PUPPET_OP_MATCH;
+    else if (strcmp(type, "!~") == 0) return PUPPET_OP_NOT_MATCH;
+    else if (strcmp(type, "in") == 0) return PUPPET_OP_IN;
+    else if (strcmp(type, "<<") == 0) return PUPPET_OP_LSHIFT;
+    else if (strcmp(type, ">>") == 0) return PUPPET_OP_RSHIFT;
+    return PUPPET_OP_ADD;  /* default */
+}
+
+/* Check if operator is comparison (higher precedence than and/or) */
+static bool is_comparison_op(puppet_binop_t op) {
+    return op == PUPPET_OP_EQ || op == PUPPET_OP_NE ||
+           op == PUPPET_OP_LT || op == PUPPET_OP_LE ||
+           op == PUPPET_OP_GT || op == PUPPET_OP_GE ||
+           op == PUPPET_OP_MATCH || op == PUPPET_OP_NOT_MATCH;
+}
+
+/* Check if operator is logical (lower precedence) */
+static bool is_logical_op(puppet_binop_t op) {
+    return op == PUPPET_OP_AND || op == PUPPET_OP_OR;
+}
+
 /* Convert binary expression */
 static puppet_expr_t *convert_binary(TSNode node, const char *source) {
-    puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
-    expr->type = PUPPET_EXPR_BINOP;
-    expr->loc = node_location(node);
-
     /* Parse children to find operands and operator
      * Handle the case where variable + access nodes appear together as LHS:
      * e.g., $hash['key'] == value produces:
      *   lhs: variable, lhs: access, rhs: value
      * We need to combine variable + access into an index expression
+     *
+     * Also handle tree-sitter quirk where access nodes for a nested variable
+     * appear at the parent level instead of with the variable.
      */
     uint32_t count = ts_node_child_count(node);
-    puppet_expr_t *left = NULL, *right = NULL;
-    puppet_binop_t op = PUPPET_OP_ADD;
+    puppet_expr_t *result = NULL;
+    puppet_expr_t *pending_operand = NULL;
+    puppet_expr_t *access_accumulator = NULL;  /* For orphaned access nodes */
+    puppet_binop_t pending_op = PUPPET_OP_ADD;
+    bool have_op = false;
 
     for (uint32_t i = 0; i < count; i++) {
         TSNode child = ts_node_child(node, i);
@@ -347,45 +392,138 @@ static puppet_expr_t *convert_binary(TSNode node, const char *source) {
         if (ts_node_is_named(child)) {
             /* Check if this is an access node that should combine with preceding expression */
             if (strcmp(type, "access") == 0) {
-                if (left && !right) {
-                    /* Combine with left operand to form index expression */
-                    left = build_index_expr(left, child, source);
-                } else if (right) {
-                    /* Combine with right operand */
-                    right = build_index_expr(right, child, source);
+                if (pending_operand) {
+                    /* Combine with pending operand to form index expression */
+                    pending_operand = build_index_expr(pending_operand, child, source);
+                } else if (access_accumulator) {
+                    /* Continue building the access chain */
+                    access_accumulator = build_index_expr(access_accumulator, child, source);
+                } else if (result && !have_op) {
+                    /* Access after a complete expression - tree-sitter quirk where access
+                     * nodes for a variable are at a higher level than the variable itself.
+                     * Extract the rightmost operand and start accumulating accesses. */
+                    if (result->type == PUPPET_EXPR_BINOP && result->data.binop.right &&
+                        is_logical_op(result->data.binop.op)) {
+                        /* Extract right operand from logical expression for access accumulation */
+                        access_accumulator = build_index_expr(result->data.binop.right, child, source);
+                        result->data.binop.right = NULL;  /* Will be filled in when we see operator */
+                    } else {
+                        /* Fallback: apply to result directly */
+                        result = build_index_expr(result, child, source);
+                    }
                 }
-            } else if (!left) {
-                left = convert_expression(child, source);
-            } else if (!right) {
-                right = convert_expression(child, source);
+            } else {
+                /* New operand */
+                puppet_expr_t *new_operand = convert_expression(child, source);
+
+                if (!result) {
+                    /* First operand */
+                    result = new_operand;
+                } else if (have_op && !pending_operand) {
+                    /* Second operand for current op */
+                    pending_operand = new_operand;
+                } else if (have_op && pending_operand) {
+                    /* Third+ operand - build nested expression first */
+                    puppet_expr_t *inner = puppet_calloc(1, sizeof(puppet_expr_t));
+                    inner->type = PUPPET_EXPR_BINOP;
+                    inner->loc = node_location(node);
+                    inner->data.binop.op = pending_op;
+                    inner->data.binop.left = result;
+                    inner->data.binop.right = pending_operand;
+                    result = inner;
+                    pending_operand = new_operand;
+                    have_op = false;  /* Need a new operator */
+                }
             }
         } else {
+            /* Check if this is an actual operator token (not punctuation like parens) */
+            if (strcmp(type, "(") == 0 || strcmp(type, ")") == 0 ||
+                strcmp(type, "{") == 0 || strcmp(type, "}") == 0 ||
+                strcmp(type, "[") == 0 || strcmp(type, "]") == 0 ||
+                strcmp(type, ",") == 0 || strcmp(type, ";") == 0 ||
+                strcmp(type, ":") == 0 || strcmp(type, "=>") == 0) {
+                /* Skip punctuation */
+                continue;
+            }
+
             /* Operator token */
-            if (strcmp(type, "+") == 0) op = PUPPET_OP_ADD;
-            else if (strcmp(type, "-") == 0) op = PUPPET_OP_SUB;
-            else if (strcmp(type, "*") == 0) op = PUPPET_OP_MUL;
-            else if (strcmp(type, "/") == 0) op = PUPPET_OP_DIV;
-            else if (strcmp(type, "%") == 0) op = PUPPET_OP_MOD;
-            else if (strcmp(type, "==") == 0) op = PUPPET_OP_EQ;
-            else if (strcmp(type, "!=") == 0) op = PUPPET_OP_NE;
-            else if (strcmp(type, "<") == 0) op = PUPPET_OP_LT;
-            else if (strcmp(type, "<=") == 0) op = PUPPET_OP_LE;
-            else if (strcmp(type, ">") == 0) op = PUPPET_OP_GT;
-            else if (strcmp(type, ">=") == 0) op = PUPPET_OP_GE;
-            else if (strcmp(type, "and") == 0) op = PUPPET_OP_AND;
-            else if (strcmp(type, "or") == 0) op = PUPPET_OP_OR;
-            else if (strcmp(type, "=~") == 0) op = PUPPET_OP_MATCH;
-            else if (strcmp(type, "!~") == 0) op = PUPPET_OP_NOT_MATCH;
-            else if (strcmp(type, "in") == 0) op = PUPPET_OP_IN;
-            else if (strcmp(type, "<<") == 0) op = PUPPET_OP_LSHIFT;
-            else if (strcmp(type, ">>") == 0) op = PUPPET_OP_RSHIFT;
+            puppet_binop_t new_op = get_binop(type);
+
+            /* If we have accumulated accesses and see a comparison operator,
+             * the accesses form the left side of the comparison */
+            if (access_accumulator && is_comparison_op(new_op)) {
+                /* Start building a comparison with the accumulated expression */
+                pending_operand = NULL;  /* Will get the RHS value next */
+                pending_op = new_op;
+                have_op = true;
+                /* access_accumulator becomes the left operand of this comparison */
+                /* We'll build it when we get the right operand */
+                continue;
+            }
+
+            if (result && pending_operand) {
+                /* Complete the current binary expression */
+                puppet_expr_t *inner = puppet_calloc(1, sizeof(puppet_expr_t));
+                inner->type = PUPPET_EXPR_BINOP;
+                inner->loc = node_location(node);
+                inner->data.binop.op = pending_op;
+                inner->data.binop.left = result;
+                inner->data.binop.right = pending_operand;
+                result = inner;
+                pending_operand = NULL;
+            }
+            pending_op = new_op;
+            have_op = true;
         }
     }
 
-    expr->data.binop.op = op;
-    expr->data.binop.left = left;
-    expr->data.binop.right = right;
+    /* Handle accumulated accesses that formed a comparison */
+    if (access_accumulator && have_op && pending_operand) {
+        /* Build: (access_accumulator OP pending_operand) */
+        puppet_expr_t *comparison = puppet_calloc(1, sizeof(puppet_expr_t));
+        comparison->type = PUPPET_EXPR_BINOP;
+        comparison->loc = node_location(node);
+        comparison->data.binop.op = pending_op;
+        comparison->data.binop.left = access_accumulator;
+        comparison->data.binop.right = pending_operand;
 
+        /* If result is a logical expression missing its right operand, fill it in */
+        if (result && result->type == PUPPET_EXPR_BINOP &&
+            is_logical_op(result->data.binop.op) && !result->data.binop.right) {
+            result->data.binop.right = comparison;
+            return result;
+        }
+        /* Otherwise combine with result */
+        if (result) {
+            puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
+            expr->type = PUPPET_EXPR_BINOP;
+            expr->loc = node_location(node);
+            expr->data.binop.op = PUPPET_OP_AND;  /* Assume AND for safety */
+            expr->data.binop.left = result;
+            expr->data.binop.right = comparison;
+            return expr;
+        }
+        return comparison;
+    }
+
+    /* Build final expression */
+    if (result && pending_operand && have_op) {
+        puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
+        expr->type = PUPPET_EXPR_BINOP;
+        expr->loc = node_location(node);
+        expr->data.binop.op = pending_op;
+        expr->data.binop.left = result;
+        expr->data.binop.right = pending_operand;
+        return expr;
+    }
+
+    /* Single operand or just result */
+    if (result) return result;
+
+    /* Fallback - shouldn't happen */
+    puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
+    expr->type = PUPPET_EXPR_BINOP;
+    expr->loc = node_location(node);
     return expr;
 }
 
@@ -814,12 +952,19 @@ static puppet_expr_t *convert_expression(TSNode node, const char *source) {
             return expr;
         }
 
-        /* Handle variable with bracket access: $var[key] */
+        /* Handle variable with chained bracket access: $var[key1][key2] */
         TSNode var_child = find_child(node, "variable");
-        if (!ts_node_is_null(var_child) && !ts_node_is_null(access_child)) {
-            /* This is a variable with bracket access $var[key] */
+        if (!ts_node_is_null(var_child)) {
             puppet_expr_t *var_expr = convert_variable(var_child, source);
-            return build_index_expr(var_expr, access_child, source);
+            /* Build chained index for all access nodes */
+            uint32_t arg_count = ts_node_named_child_count(node);
+            for (uint32_t j = 0; j < arg_count; j++) {
+                TSNode arg_child = ts_node_named_child(node, j);
+                if (strcmp(ts_node_type(arg_child), "access") == 0) {
+                    var_expr = build_index_expr(var_expr, arg_child, source);
+                }
+            }
+            return var_expr;
         }
     }
 
@@ -879,13 +1024,14 @@ static puppet_attribute_t convert_attribute(TSNode node, const char *source) {
 
     /* First check for variable + access pattern (e.g., ensure => $hash['key']) */
     TSNode var_child = find_child(node, "variable");
-    TSNode access_child = find_child(node, "access");
     TSNode selector_child = find_child(node, "selector");
 
     /* Check for lhs: field which indicates a selector control variable */
     TSNode lhs_node = ts_node_child_by_field_name(node, "lhs", 3);
 
     uint32_t count = ts_node_named_child_count(node);
+    puppet_expr_t *pending_var_expr = NULL;  /* Track variable for chained access */
+
     for (uint32_t i = 0; i < count; i++) {
         TSNode child = ts_node_named_child(node, i);
         const char *type = ts_node_type(child);
@@ -908,14 +1054,13 @@ static puppet_attribute_t convert_attribute(TSNode node, const char *source) {
                 puppet_free(name);
             }
 
-            /* Handle variable + access as combined index expression */
-            if (strcmp(type, "variable") == 0 && !ts_node_is_null(access_child)) {
-                puppet_expr_t *var_expr = convert_variable(child, source);
-                attr.value = build_index_expr(var_expr, access_child, source);
-                /* Skip the access child since we handled it */
+            /* Handle variable + chained access as combined index expression */
+            if (strcmp(type, "variable") == 0) {
+                pending_var_expr = convert_variable(child, source);
                 continue;
-            } else if (strcmp(type, "access") == 0 && !ts_node_is_null(var_child)) {
-                /* Already handled with variable above, skip */
+            } else if (strcmp(type, "access") == 0 && pending_var_expr) {
+                /* Build chained index expression */
+                pending_var_expr = build_index_expr(pending_var_expr, child, source);
                 continue;
             }
 
@@ -931,8 +1076,19 @@ static puppet_attribute_t convert_attribute(TSNode node, const char *source) {
                 continue;
             }
 
-            attr.value = convert_expression(child, source);
+            /* If we have a pending variable expression (with or without access), use it */
+            if (pending_var_expr && attr.value == NULL) {
+                attr.value = pending_var_expr;
+                pending_var_expr = NULL;
+            } else {
+                attr.value = convert_expression(child, source);
+            }
         }
+    }
+
+    /* If we ended with a pending variable expression, use it as the value */
+    if (pending_var_expr && attr.value == NULL) {
+        attr.value = pending_var_expr;
     }
 
     return attr;
@@ -1344,18 +1500,22 @@ static puppet_stmt_t *convert_if(TSNode node, const char *source) {
         const char *type = ts_node_type(child);
 
         if (strcmp(type, "condition") == 0) {
-            /* Check for variable + access pattern (e.g., if $hash['key']) */
+            /* Check for variable + chained access pattern (e.g., if $hash['a']['b']) */
             TSNode var_child = find_child(child, "variable");
-            TSNode access_child = find_child(child, "access");
+            uint32_t cond_count = ts_node_named_child_count(child);
 
-            if (!ts_node_is_null(var_child) && !ts_node_is_null(access_child)) {
-                puppet_expr_t *var_expr = convert_variable(var_child, source);
-                branch->condition = build_index_expr(var_expr, access_child, source);
-            } else {
-                uint32_t cond_count = ts_node_named_child_count(child);
-                if (cond_count > 0) {
-                    branch->condition = convert_expression(ts_node_named_child(child, 0), source);
+            if (!ts_node_is_null(var_child)) {
+                puppet_expr_t *cond_expr = convert_variable(var_child, source);
+                /* Build chained index for all access nodes */
+                for (uint32_t j = 0; j < cond_count; j++) {
+                    TSNode cond_child = ts_node_named_child(child, j);
+                    if (strcmp(ts_node_type(cond_child), "access") == 0) {
+                        cond_expr = build_index_expr(cond_expr, cond_child, source);
+                    }
                 }
+                branch->condition = cond_expr;
+            } else if (cond_count > 0) {
+                branch->condition = convert_expression(ts_node_named_child(child, 0), source);
             }
         } else if (strcmp(type, "block") == 0 && branch->body.stmts == NULL) {
             branch->body = convert_block(child, source);
@@ -1370,18 +1530,22 @@ static puppet_stmt_t *convert_if(TSNode node, const char *source) {
             TSNode elsif_block = find_child(child, "block");
 
             if (!ts_node_is_null(elsif_cond)) {
-                /* Check for variable + access pattern */
+                /* Check for variable + chained access pattern */
                 TSNode var_child = find_child(elsif_cond, "variable");
-                TSNode access_child = find_child(elsif_cond, "access");
+                uint32_t cond_count = ts_node_named_child_count(elsif_cond);
 
-                if (!ts_node_is_null(var_child) && !ts_node_is_null(access_child)) {
-                    puppet_expr_t *var_expr = convert_variable(var_child, source);
-                    branch->condition = build_index_expr(var_expr, access_child, source);
-                } else {
-                    uint32_t cond_count = ts_node_named_child_count(elsif_cond);
-                    if (cond_count > 0) {
-                        branch->condition = convert_expression(ts_node_named_child(elsif_cond, 0), source);
+                if (!ts_node_is_null(var_child)) {
+                    puppet_expr_t *cond_expr = convert_variable(var_child, source);
+                    /* Build chained index for all access nodes */
+                    for (uint32_t j = 0; j < cond_count; j++) {
+                        TSNode cond_child = ts_node_named_child(elsif_cond, j);
+                        if (strcmp(ts_node_type(cond_child), "access") == 0) {
+                            cond_expr = build_index_expr(cond_expr, cond_child, source);
+                        }
                     }
+                    branch->condition = cond_expr;
+                } else if (cond_count > 0) {
+                    branch->condition = convert_expression(ts_node_named_child(elsif_cond, 0), source);
                 }
             }
             if (!ts_node_is_null(elsif_block)) {
@@ -1410,19 +1574,28 @@ static puppet_stmt_t *convert_case(TSNode node, const char *source) {
     size_t when_capacity = 8;
     stmt->data.case_stmt.whens = puppet_calloc(when_capacity, sizeof(puppet_case_when_t));
 
-    /* First pass: find the case expression (variable, possibly with access) */
-    TSNode var_child = find_child(node, "variable");
-    TSNode access_child = find_child(node, "access");
+    /* First pass: find the case expression (variable, possibly with chained access)
+     * For $facts['os']['family'], we get: variable, access, access
+     * We need to iterate and build nested index expressions */
+    puppet_expr_t *case_expr = NULL;
 
-    if (!ts_node_is_null(var_child)) {
-        puppet_expr_t *var_expr = convert_expression(var_child, source);
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(node, i);
+        const char *type = ts_node_type(child);
 
-        if (!ts_node_is_null(access_child)) {
-            /* Variable with bracket access: $var[key] */
-            stmt->data.case_stmt.expr = build_index_expr(var_expr, access_child, source);
-        } else {
-            stmt->data.case_stmt.expr = var_expr;
+        if (strcmp(type, "variable") == 0 && !case_expr) {
+            case_expr = convert_expression(child, source);
+        } else if (strcmp(type, "access") == 0 && case_expr) {
+            /* Build chained index expression: expr[access] */
+            case_expr = build_index_expr(case_expr, child, source);
+        } else if (strcmp(type, "case_entry") == 0 || strcmp(type, "case_option") == 0) {
+            /* Stop when we hit case entries - rest is the match/body */
+            break;
         }
+    }
+
+    if (case_expr) {
+        stmt->data.case_stmt.expr = case_expr;
     }
 
     for (uint32_t i = 0; i < count; i++) {
