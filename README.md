@@ -31,7 +31,7 @@ cd puppet_c
 # Build and run with Docker
 docker compose build compiler
 docker compose run --rm compiler -p -n mynode.example.com \
-    -m /puppet/modules /puppet/manifests/site.pp
+    -f /puppet/facts.yaml -m /puppet/modules /puppet/manifests/site.pp
 ```
 
 Edit `puppetcode/manifests/site.pp` on your host - changes are reflected immediately.

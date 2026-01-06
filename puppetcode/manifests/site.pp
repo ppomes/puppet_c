@@ -1,8 +1,8 @@
 # Site manifest for puppetc
 # Main entry point - includes classes from modules
 
-# Default node - catches all node names
-node default {
+# Demo node for puppetc quick start
+node 'mynode.example.com' {
   notify { 'welcome':
     message => 'Configuring node with puppetc',
   }

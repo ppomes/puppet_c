@@ -1,4 +1,30 @@
 facts:
+  "mynode.example.com":
+    hostname: mynode
+    fqdn: mynode.example.com
+    osfamily: Debian
+    operatingsystem: Ubuntu
+    operatingsystemrelease: "22.04"
+    lsbdistcodename: jammy
+    lsbdistrelease: "22.04"
+    kernel: Linux
+    os:
+      family: Debian
+      name: Ubuntu
+      release:
+        full: "22.04"
+        major: "22"
+        minor: "04"
+    networking:
+      ip: 192.168.1.100
+      hostname: mynode
+      fqdn: mynode.example.com
+    memory:
+      system:
+        total_bytes: 4294967296
+    processors:
+      count: 2
+
   "testnode.example.com":
     hostname: testnode
     fqdn: testnode.example.com
