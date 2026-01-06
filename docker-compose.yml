@@ -10,6 +10,7 @@ services:
       - ./puppetcode/manifests:/puppet/manifests:ro
       - ./puppetcode/modules:/puppet/modules:ro
       - ./puppetcode/hiera:/puppet/hiera:ro
+      - ./puppetcode/facts.yaml:/puppet/facts.yaml:ro
 
   server:
     build:
