@@ -1,5 +1,7 @@
 # Puppet-C
 
+> **Warning:** This project is experimental and under active development.
+
 A fast, lightweight Puppet compiler written in C for local manifest development and CI/CD validation.
 
 ## Why Puppet-C?
