@@ -407,17 +407,23 @@ char *facter_os_name(void) {
     return puppet_strdup("macOS");
 #elif defined(__linux__)
     /* Try /etc/os-release first (modern distros) */
+    /* Use ID= (e.g., "debian") rather than NAME= ("Debian GNU/Linux")
+     * to match Puppet's facter behavior */
     char *content = read_file_contents("/etc/os-release", 0);
     if (content) {
         char *line = strtok(content, "\n");
         while (line) {
-            if (strncmp(line, "NAME=", 5) == 0) {
-                char *name = line + 5;
-                /* Remove quotes */
-                if (*name == '"') name++;
-                char *end = name + strlen(name) - 1;
+            if (strncmp(line, "ID=", 3) == 0) {
+                char *id = line + 3;
+                /* Remove quotes if present */
+                if (*id == '"') id++;
+                char *end = id + strlen(id) - 1;
                 if (*end == '"') *end = '\0';
-                char *result = puppet_strdup(name);
+                /* Capitalize first letter (debian -> Debian) */
+                char *result = puppet_strdup(id);
+                if (result && result[0] >= 'a' && result[0] <= 'z') {
+                    result[0] = result[0] - 'a' + 'A';
+                }
                 puppet_free(content);
                 return result;
             }

@@ -57,7 +57,11 @@ static resource_state_t apt_check(const resource_t *resource, apply_context_t *c
 }
 
 static apply_result_t apt_apply(const resource_t *resource, apply_context_t *ctx) {
-    const char *package = resource->title;
+    /* Use 'name' parameter if provided, otherwise use title */
+    const char *package = resource_get_param(resource, "name");
+    if (!package || strlen(package) == 0) {
+        package = resource->title;
+    }
     const char *ensure = resource_get_param(resource, "ensure");
 
     if (!ensure) ensure = "installed";
@@ -198,7 +202,11 @@ static resource_state_t dnf_check(const resource_t *resource, apply_context_t *c
 }
 
 static apply_result_t dnf_apply(const resource_t *resource, apply_context_t *ctx) {
-    const char *package = resource->title;
+    /* Use 'name' parameter if provided, otherwise use title */
+    const char *package = resource_get_param(resource, "name");
+    if (!package || strlen(package) == 0) {
+        package = resource->title;
+    }
     const char *ensure = resource_get_param(resource, "ensure");
 
     if (!ensure) ensure = "installed";
