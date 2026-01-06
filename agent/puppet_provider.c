@@ -251,6 +251,295 @@ apply_result_t resource_apply(const resource_t *resource, apply_context_t *ctx) 
  * Catalog Parsing and Application
  * ============================================================================ */
 
+#define MAX_DEPS 64
+#define MAX_RESOURCES 1024
+
+/**
+ * @brief Resource entry with dependencies for ordering
+ */
+typedef struct {
+    resource_t *resource;
+    json_value_t *json_obj;     /* Keep reference to parse dependencies */
+    size_t deps[MAX_DEPS];      /* Indices of resources this depends on */
+    size_t dep_count;
+    size_t in_degree;           /* For topological sort */
+    bool applied;
+} resource_entry_t;
+
+/**
+ * @brief Find resource index by type and title
+ */
+static int find_resource_index(resource_entry_t *entries, size_t count,
+                               const char *type, const char *title) {
+    for (size_t i = 0; i < count; i++) {
+        if (entries[i].resource &&
+            strcasecmp(entries[i].resource->type, type) == 0 &&
+            strcmp(entries[i].resource->title, title) == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+/**
+ * @brief Add a dependency edge (from depends on to)
+ */
+static void add_dependency(resource_entry_t *entries, size_t from, size_t to) {
+    if (from == to) return;  /* No self-dependencies */
+
+    resource_entry_t *entry = &entries[from];
+    /* Check if already exists */
+    for (size_t i = 0; i < entry->dep_count; i++) {
+        if (entry->deps[i] == to) return;
+    }
+    if (entry->dep_count < MAX_DEPS) {
+        entry->deps[entry->dep_count++] = to;
+    }
+}
+
+/**
+ * @brief Parse resource reference string like "File[/etc/mysql]"
+ * @return 0 on success, -1 on failure
+ */
+static int parse_resource_ref(const char *ref, char *type_out, size_t type_size,
+                              char *title_out, size_t title_size) {
+    if (!ref) return -1;
+
+    const char *bracket = strchr(ref, '[');
+    if (!bracket) return -1;
+
+    size_t type_len = bracket - ref;
+    if (type_len >= type_size) return -1;
+
+    strncpy(type_out, ref, type_len);
+    type_out[type_len] = '\0';
+
+    /* Find closing bracket */
+    const char *end = strrchr(ref, ']');
+    if (!end || end <= bracket + 1) return -1;
+
+    size_t title_len = end - bracket - 1;
+    if (title_len >= title_size) return -1;
+
+    strncpy(title_out, bracket + 1, title_len);
+    title_out[title_len] = '\0';
+
+    return 0;
+}
+
+/**
+ * @brief Get parent directory path
+ */
+static char *get_parent_path(const char *path) {
+    if (!path || path[0] != '/') return NULL;
+
+    char *parent = puppet_strdup(path);
+    char *last_slash = strrchr(parent, '/');
+
+    if (last_slash == parent) {
+        /* Path is like "/foo", parent is "/" */
+        parent[1] = '\0';
+    } else if (last_slash) {
+        *last_slash = '\0';
+    } else {
+        puppet_free(parent);
+        return NULL;
+    }
+
+    return parent;
+}
+
+/**
+ * @brief Add auto-require dependencies for file resources
+ * File resources automatically require their parent directories if they exist in catalog
+ */
+static void add_file_autorequires(resource_entry_t *entries, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        if (!entries[i].resource) continue;
+        if (strcasecmp(entries[i].resource->type, "file") != 0) continue;
+
+        /* Get the path - either from 'path' parameter or title */
+        const char *path = resource_get_param(entries[i].resource, "path");
+        if (!path || strlen(path) == 0) {
+            path = entries[i].resource->title;
+        }
+
+        /* Skip if path doesn't look like an absolute path */
+        if (!path || path[0] != '/') continue;
+
+        /* Find parent directory in catalog */
+        char *parent = get_parent_path(path);
+        if (parent && strlen(parent) > 1) {  /* Skip "/" root */
+            int parent_idx = find_resource_index(entries, count, "file", parent);
+            if (parent_idx >= 0 && (size_t)parent_idx != i) {
+                add_dependency(entries, i, (size_t)parent_idx);
+            }
+        }
+        puppet_free(parent);
+    }
+}
+
+/**
+ * @brief Extract dependencies from resource parameters
+ */
+static void extract_dependencies(resource_entry_t *entries, size_t count, size_t idx) {
+    json_value_t *res_obj = entries[idx].json_obj;
+    if (!res_obj) return;
+
+    json_value_t *params = json_object_get(res_obj, "parameters");
+    if (!params || !json_is_object(params)) return;
+
+    char type_buf[64], title_buf[256];
+
+    /* Process 'require' - this resource requires the listed resources */
+    json_value_t *require = json_object_get(params, "require");
+    if (require) {
+        if (json_is_string(require)) {
+            if (parse_resource_ref(json_get_string(require), type_buf, sizeof(type_buf),
+                                   title_buf, sizeof(title_buf)) == 0) {
+                int dep_idx = find_resource_index(entries, count, type_buf, title_buf);
+                if (dep_idx >= 0) {
+                    add_dependency(entries, idx, (size_t)dep_idx);
+                }
+            }
+        } else if (json_is_array(require)) {
+            for (size_t j = 0; j < require->data.array.count; j++) {
+                json_value_t *elem = require->data.array.elements[j];
+                if (json_is_string(elem)) {
+                    if (parse_resource_ref(json_get_string(elem), type_buf, sizeof(type_buf),
+                                           title_buf, sizeof(title_buf)) == 0) {
+                        int dep_idx = find_resource_index(entries, count, type_buf, title_buf);
+                        if (dep_idx >= 0) {
+                            add_dependency(entries, idx, (size_t)dep_idx);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* Process 'before' - listed resources require this one */
+    json_value_t *before = json_object_get(params, "before");
+    if (before) {
+        if (json_is_string(before)) {
+            if (parse_resource_ref(json_get_string(before), type_buf, sizeof(type_buf),
+                                   title_buf, sizeof(title_buf)) == 0) {
+                int other_idx = find_resource_index(entries, count, type_buf, title_buf);
+                if (other_idx >= 0) {
+                    add_dependency(entries, (size_t)other_idx, idx);
+                }
+            }
+        } else if (json_is_array(before)) {
+            for (size_t j = 0; j < before->data.array.count; j++) {
+                json_value_t *elem = before->data.array.elements[j];
+                if (json_is_string(elem)) {
+                    if (parse_resource_ref(json_get_string(elem), type_buf, sizeof(type_buf),
+                                           title_buf, sizeof(title_buf)) == 0) {
+                        int other_idx = find_resource_index(entries, count, type_buf, title_buf);
+                        if (other_idx >= 0) {
+                            add_dependency(entries, (size_t)other_idx, idx);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* Process 'notify' - similar to before, notified resources depend on this */
+    json_value_t *notify = json_object_get(params, "notify");
+    if (notify) {
+        if (json_is_string(notify)) {
+            if (parse_resource_ref(json_get_string(notify), type_buf, sizeof(type_buf),
+                                   title_buf, sizeof(title_buf)) == 0) {
+                int other_idx = find_resource_index(entries, count, type_buf, title_buf);
+                if (other_idx >= 0) {
+                    add_dependency(entries, (size_t)other_idx, idx);
+                }
+            }
+        }
+    }
+
+    /* Process 'subscribe' - this resource subscribes to (depends on) listed resources */
+    json_value_t *subscribe = json_object_get(params, "subscribe");
+    if (subscribe) {
+        if (json_is_string(subscribe)) {
+            if (parse_resource_ref(json_get_string(subscribe), type_buf, sizeof(type_buf),
+                                   title_buf, sizeof(title_buf)) == 0) {
+                int dep_idx = find_resource_index(entries, count, type_buf, title_buf);
+                if (dep_idx >= 0) {
+                    add_dependency(entries, idx, (size_t)dep_idx);
+                }
+            }
+        }
+    }
+}
+
+/**
+ * @brief Topological sort using Kahn's algorithm
+ * @return Sorted indices array (caller must free), or NULL on cycle
+ */
+static size_t *topological_sort(resource_entry_t *entries, size_t count) {
+    size_t *result = puppet_malloc(count * sizeof(size_t));
+    size_t result_count = 0;
+
+    /* Compute in-degrees */
+    for (size_t i = 0; i < count; i++) {
+        entries[i].in_degree = 0;
+    }
+    for (size_t i = 0; i < count; i++) {
+        for (size_t j = 0; j < entries[i].dep_count; j++) {
+            /* i depends on entries[i].deps[j], so i has in-degree from deps */
+            /* Actually, we track: for each dependency d of i, i depends on d
+             * So we need reverse: d contributes to i's ability to run */
+        }
+    }
+
+    /* Build in-degree: for each resource, count how many others depend on it */
+    /* Actually, in_degree = how many resources must complete before this one */
+    for (size_t i = 0; i < count; i++) {
+        entries[i].in_degree = entries[i].dep_count;
+    }
+
+    /* Find all resources with no dependencies */
+    size_t *queue = puppet_malloc(count * sizeof(size_t));
+    size_t queue_head = 0, queue_tail = 0;
+
+    for (size_t i = 0; i < count; i++) {
+        if (entries[i].in_degree == 0) {
+            queue[queue_tail++] = i;
+        }
+    }
+
+    /* Process queue */
+    while (queue_head < queue_tail) {
+        size_t idx = queue[queue_head++];
+        result[result_count++] = idx;
+
+        /* Decrease in-degree of resources that depend on this one */
+        for (size_t i = 0; i < count; i++) {
+            for (size_t j = 0; j < entries[i].dep_count; j++) {
+                if (entries[i].deps[j] == idx) {
+                    entries[i].in_degree--;
+                    if (entries[i].in_degree == 0) {
+                        queue[queue_tail++] = i;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    puppet_free(queue);
+
+    /* Check for cycles */
+    if (result_count != count) {
+        puppet_free(result);
+        return NULL;
+    }
+
+    return result;
+}
+
 /**
  * @brief Parse a resource from a json_value_t object
  */
@@ -381,13 +670,73 @@ int catalog_apply(const char *catalog_json, apply_context_t *ctx) {
         return 0;
     }
 
-    /* Apply each resource */
-    int applied = 0;
     size_t resource_count = json_array_size(resources);
+    if (resource_count > MAX_RESOURCES) {
+        print_error("Too many resources in catalog (%zu > %d)", resource_count, MAX_RESOURCES);
+        json_value_destroy(catalog);
+        return -1;
+    }
+
+    /* Phase 1: Parse all resources */
+    resource_entry_t *entries = puppet_calloc(resource_count, sizeof(resource_entry_t));
+    if (!entries) {
+        json_value_destroy(catalog);
+        return -1;
+    }
 
     for (size_t i = 0; i < resource_count; i++) {
         json_value_t *res_obj = json_array_get(resources, i);
-        resource_t *resource = parse_resource_from_json(res_obj);
+        entries[i].json_obj = res_obj;
+        entries[i].resource = parse_resource_from_json(res_obj);
+        entries[i].dep_count = 0;
+    }
+
+    /* Phase 2: Extract explicit dependencies */
+    for (size_t i = 0; i < resource_count; i++) {
+        extract_dependencies(entries, resource_count, i);
+    }
+
+    /* Phase 3: Add auto-require dependencies (file -> parent directory) */
+    add_file_autorequires(entries, resource_count);
+
+    /* Phase 4: Topological sort */
+    size_t *sorted_order = topological_sort(entries, resource_count);
+    if (!sorted_order) {
+        print_error("Dependency cycle detected in catalog");
+        /* Fall back to original order */
+        sorted_order = puppet_malloc(resource_count * sizeof(size_t));
+        for (size_t i = 0; i < resource_count; i++) {
+            sorted_order[i] = i;
+        }
+    }
+
+    if (ctx->verbose) {
+        print_info("Resource application order (after dependency sorting):");
+        for (size_t i = 0; i < resource_count; i++) {
+            size_t idx = sorted_order[i];
+            if (entries[idx].resource) {
+                fprintf(stderr, "  %zu. %s[%s]", i + 1,
+                        entries[idx].resource->type, entries[idx].resource->title);
+                if (entries[idx].dep_count > 0) {
+                    fprintf(stderr, " (depends on: ");
+                    for (size_t j = 0; j < entries[idx].dep_count; j++) {
+                        size_t dep = entries[idx].deps[j];
+                        if (j > 0) fprintf(stderr, ", ");
+                        fprintf(stderr, "%s[%s]",
+                                entries[dep].resource->type, entries[dep].resource->title);
+                    }
+                    fprintf(stderr, ")");
+                }
+                fprintf(stderr, "\n");
+            }
+        }
+    }
+
+    /* Phase 5: Apply resources in sorted order */
+    int applied = 0;
+    for (size_t i = 0; i < resource_count; i++) {
+        size_t idx = sorted_order[i];
+        resource_t *resource = entries[idx].resource;
 
         if (resource) {
             apply_result_t result = resource_apply(resource, ctx);
@@ -412,11 +761,16 @@ int catalog_apply(const char *catalog_json, apply_context_t *ctx) {
                     break;
             }
 
-            resource_free(resource);
             applied++;
         }
     }
 
+    /* Cleanup */
+    puppet_free(sorted_order);
+    for (size_t i = 0; i < resource_count; i++) {
+        resource_free(entries[i].resource);
+    }
+    puppet_free(entries);
     json_value_destroy(catalog);
 
     /* Summary */
