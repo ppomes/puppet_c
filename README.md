@@ -266,9 +266,12 @@ Edit `puppetcode/manifests/site.pp` on your host - changes are reflected immedia
 
 ## Demo: Web + Database Infrastructure
 
-A complete demo showing puppetc managing nginx and MariaDB containers.
+A complete demo showing puppetc managing nginx and MariaDB containers using official Puppet Forge modules.
 
 ```bash
+# Download required Puppet modules (stdlib, mysql)
+./demo/download_modules.sh
+
 # Build demo images
 docker compose -f docker-compose.demo.yml build
 
@@ -284,8 +287,8 @@ curl http://localhost:8080
 
 **What happens:**
 1. `puppetc-server` starts and waits for catalog requests
-2. `web` container requests its catalog, receives nginx configuration
-3. `db` container requests its catalog, receives MariaDB configuration
+2. `web` container requests its catalog, receives nginx configuration (7 resources)
+3. `db` container requests its catalog using `puppetlabs/mysql` module (16 resources)
 4. Agents apply resources: packages, config files, services
 
 **Output:**
@@ -301,7 +304,11 @@ curl http://localhost:8080
 </html>
 ```
 
-The demo manifests are in `demo/manifests/site.pp` - edit them and restart containers to see changes.
+The demo uses:
+- **web node**: Simple nginx config (inline manifests)
+- **db node**: `puppetlabs/mysql` module with `mysql::server` class
+
+Edit `demo/manifests/site.pp` and restart containers to see changes.
 
 ```bash
 # Cleanup
@@ -365,6 +372,7 @@ docker compose -f docker-compose.demo.yml down
 
 ### Known Limitations
 
+- **Deferred functions**: `Deferred()` for runtime evaluation not supported
 - **Type matching**: `=~ Type` syntax parsed but not evaluated
 - **Exported resources**: `@@resource` parsed but not sent to PuppetDB
 - **Resource chains**: `->`, `~>` have limited support
