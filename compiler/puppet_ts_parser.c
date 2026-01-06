@@ -561,22 +561,55 @@ static puppet_expr_t *convert_unary(TSNode node, const char *source) {
 /* Convert array literal */
 static puppet_expr_t *convert_array(TSNode node, const char *source) {
     puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
-    expr->type = PUPPET_EXPR_VALUE;
     expr->loc = node_location(node);
-    expr->data.value = puppet_value_create_array();
 
+    /* Count array elements (skip comments) */
     uint32_t count = ts_node_named_child_count(node);
+    size_t elem_count = 0;
     for (uint32_t i = 0; i < count; i++) {
         TSNode child = ts_node_named_child(node, i);
-        /* Skip comment nodes */
+        if (!node_is(child, "comment")) elem_count++;
+    }
+
+    /* Convert all elements and check if they're all literals */
+    bool all_literals = true;
+    puppet_expr_t **temp_items = puppet_calloc(elem_count, sizeof(puppet_expr_t*));
+    size_t idx = 0;
+
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(node, i);
         if (node_is(child, "comment")) continue;
-        puppet_expr_t *elem = convert_expression(child, source);
-        if (elem && elem->type == PUPPET_EXPR_VALUE) {
-            puppet_array_append(expr->data.value->data.array,
-                              puppet_value_copy(elem->data.value));
-            puppet_expr_destroy(elem);
+
+        temp_items[idx] = convert_expression(child, source);
+        if (temp_items[idx] && temp_items[idx]->type != PUPPET_EXPR_VALUE) {
+            all_literals = false;
         }
-        /* TODO: handle non-literal elements */
+        idx++;
+    }
+
+    if (all_literals && elem_count > 0) {
+        /* All literals - build array value directly */
+        expr->type = PUPPET_EXPR_VALUE;
+        expr->data.value = puppet_value_create_array();
+
+        for (size_t i = 0; i < elem_count; i++) {
+            if (temp_items[i] && temp_items[i]->type == PUPPET_EXPR_VALUE) {
+                puppet_array_append(expr->data.value->data.array,
+                                   puppet_value_copy(temp_items[i]->data.value));
+            }
+            if (temp_items[i]) puppet_expr_destroy(temp_items[i]);
+        }
+        puppet_free(temp_items);
+    } else if (elem_count > 0) {
+        /* Has dynamic values - use PUPPET_EXPR_ARRAY for runtime evaluation */
+        expr->type = PUPPET_EXPR_ARRAY;
+        expr->data.array_items.items = temp_items;
+        expr->data.array_items.count = elem_count;
+    } else {
+        /* Empty array */
+        expr->type = PUPPET_EXPR_VALUE;
+        expr->data.value = puppet_value_create_array();
+        puppet_free(temp_items);
     }
 
     return expr;
@@ -1289,7 +1322,17 @@ static puppet_stmt_t *convert_resource(TSNode node, const char *source) {
         if (!ts_node_is_null(title)) {
             uint32_t title_count = ts_node_named_child_count(title);
             if (title_count > 0) {
-                inst->title = convert_expression(ts_node_named_child(title, 0), source);
+                /* Convert first child as base expression */
+                puppet_expr_t *title_expr = convert_expression(ts_node_named_child(title, 0), source);
+
+                /* Build chained index expressions for any access nodes */
+                for (uint32_t j = 1; j < title_count; j++) {
+                    TSNode access_node = ts_node_named_child(title, j);
+                    if (strcmp(ts_node_type(access_node), "access") == 0) {
+                        title_expr = build_index_expr(title_expr, access_node, source);
+                    }
+                }
+                inst->title = title_expr;
             }
         }
 

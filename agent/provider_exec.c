@@ -79,11 +79,56 @@ static resource_state_t exec_check(const resource_t *resource, apply_context_t *
     return RESOURCE_STATE_UNKNOWN;
 }
 
+/* Convert array command format "[cmd, arg1, arg2]" to "cmd arg1 arg2" */
+static char *convert_array_command(const char *cmd) {
+    if (!cmd || cmd[0] != '[') return NULL;
+
+    size_t len = strlen(cmd);
+    if (len < 2 || cmd[len-1] != ']') return NULL;
+
+    /* Allocate buffer for result (same size is safe) */
+    char *result = puppet_malloc(len + 1);
+    char *out = result;
+
+    /* Skip opening bracket and whitespace */
+    const char *p = cmd + 1;
+    while (*p == ' ') p++;
+
+    bool first = true;
+    while (*p && *p != ']') {
+        /* Skip whitespace and commas */
+        while (*p == ' ' || *p == ',') p++;
+        if (*p == ']' || *p == '\0') break;
+
+        if (!first) *out++ = ' ';
+        first = false;
+
+        /* Copy element until comma, space or end bracket */
+        while (*p && *p != ',' && *p != ']') {
+            *out++ = *p++;
+        }
+        /* Trim trailing space from element */
+        while (out > result && *(out-1) == ' ') out--;
+    }
+    *out = '\0';
+
+    return result;
+}
+
 static apply_result_t exec_apply(const resource_t *resource, apply_context_t *ctx) {
     /* Get command - either from 'command' parameter or resource title */
     const char *command = resource_get_param(resource, "command");
     if (!command || strlen(command) == 0) {
         command = resource->title;
+    }
+
+    /* Handle array format: [cmd, arg1, arg2] -> "cmd arg1 arg2" */
+    char *converted_cmd = NULL;
+    if (command && command[0] == '[') {
+        converted_cmd = convert_array_command(command);
+        if (converted_cmd) {
+            command = converted_cmd;
+        }
     }
 
     /* Get optional parameters */
@@ -106,6 +151,7 @@ static apply_result_t exec_apply(const resource_t *resource, apply_context_t *ct
         if (ctx->verbose) {
             print_info("Exec[%s]: Skipping because '%s' exists", resource->title, creates);
         }
+        if (converted_cmd) puppet_free(converted_cmd);
         return APPLY_NOOP;
     }
 
@@ -116,6 +162,7 @@ static apply_result_t exec_apply(const resource_t *resource, apply_context_t *ct
                 print_info("Exec[%s]: Skipping because 'unless' command succeeded",
                           resource->title);
             }
+            if (converted_cmd) puppet_free(converted_cmd);
             return APPLY_NOOP;
         }
     }
@@ -127,6 +174,7 @@ static apply_result_t exec_apply(const resource_t *resource, apply_context_t *ct
                 print_info("Exec[%s]: Skipping because 'onlyif' command failed",
                           resource->title);
             }
+            if (converted_cmd) puppet_free(converted_cmd);
             return APPLY_NOOP;
         }
     }
@@ -134,6 +182,7 @@ static apply_result_t exec_apply(const resource_t *resource, apply_context_t *ct
     /* Noop mode - just report what would happen */
     if (ctx->noop) {
         print_resource_noop("Exec", resource->title, "returns", "would be executed");
+        if (converted_cmd) puppet_free(converted_cmd);
         return APPLY_SKIPPED;
     }
 
@@ -151,15 +200,19 @@ static apply_result_t exec_apply(const resource_t *resource, apply_context_t *ct
     /* Note: system() returns the full status, we need WEXITSTATUS for the actual exit code */
     int exit_code = WIFEXITED(ret) ? WEXITSTATUS(ret) : -1;
 
+    apply_result_t result;
     if (exit_code == expected_return) {
         print_resource_change("Exec", resource->title, "returns",
                              "executed successfully (exit code %d)", exit_code);
-        return APPLY_CHANGED;
+        result = APPLY_CHANGED;
     } else {
         apply_context_set_error(ctx, "Command returned %d, expected %d",
                                exit_code, expected_return);
-        return APPLY_FAILED;
+        result = APPLY_FAILED;
     }
+
+    if (converted_cmd) puppet_free(converted_cmd);
+    return result;
 }
 
 /* ============================================================================

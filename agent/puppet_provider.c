@@ -296,6 +296,49 @@ static resource_t *parse_resource_from_json(json_value_t *res_obj) {
                 value_str = puppet_strdup(buf);
             } else if (json_is_null(val)) {
                 value_str = puppet_strdup("");
+            } else if (json_is_array(val)) {
+                /* Convert array to bracketed string: ["a", "b"] -> "[a, b]" */
+                size_t buf_size = 256;
+                char *buf = puppet_malloc(buf_size);
+                size_t pos = 0;
+                buf[pos++] = '[';
+
+                for (size_t j = 0; j < val->data.array.count; j++) {
+                    if (j > 0) {
+                        buf[pos++] = ',';
+                        buf[pos++] = ' ';
+                    }
+                    json_value_t *elem = val->data.array.elements[j];
+                    const char *elem_str = NULL;
+                    char num_buf[64];
+
+                    if (json_is_string(elem)) {
+                        elem_str = json_get_string(elem);
+                    } else if (json_is_number(elem)) {
+                        double num = json_get_number(elem);
+                        if (num == (long)num) {
+                            snprintf(num_buf, sizeof(num_buf), "%ld", (long)num);
+                        } else {
+                            snprintf(num_buf, sizeof(num_buf), "%g", num);
+                        }
+                        elem_str = num_buf;
+                    } else if (json_is_bool(elem)) {
+                        elem_str = json_get_bool(elem) ? "true" : "false";
+                    }
+
+                    if (elem_str) {
+                        size_t elem_len = strlen(elem_str);
+                        while (pos + elem_len + 10 >= buf_size) {
+                            buf_size *= 2;
+                            buf = puppet_realloc(buf, buf_size);
+                        }
+                        strcpy(buf + pos, elem_str);
+                        pos += elem_len;
+                    }
+                }
+                buf[pos++] = ']';
+                buf[pos] = '\0';
+                value_str = buf;
             }
 
             if (value_str) {
