@@ -264,6 +264,50 @@ docker compose logs -f server
 
 Edit `puppetcode/manifests/site.pp` on your host - changes are reflected immediately.
 
+## Demo: Web + Database Infrastructure
+
+A complete demo showing puppetc managing nginx and MariaDB containers.
+
+```bash
+# Build demo images
+docker compose -f docker-compose.demo.yml build
+
+# Start the infrastructure
+docker compose -f docker-compose.demo.yml up -d
+
+# Watch the logs (catalogs being compiled and applied)
+docker compose -f docker-compose.demo.yml logs -f
+
+# Test the web server
+curl http://localhost:8080
+```
+
+**What happens:**
+1. `puppetc-server` starts and waits for catalog requests
+2. `web` container requests its catalog, receives nginx configuration
+3. `db` container requests its catalog, receives MariaDB configuration
+4. Agents apply resources: packages, config files, services
+
+**Output:**
+```html
+<!DOCTYPE html>
+<html>
+<head><title>Puppet-C Demo</title></head>
+<body>
+<h1>Hello from Puppet-C!</h1>
+<p>This page was deployed by puppetc-agent.</p>
+<p>Server: web</p>
+</body>
+</html>
+```
+
+The demo manifests are in `demo/manifests/site.pp` - edit them and restart containers to see changes.
+
+```bash
+# Cleanup
+docker compose -f docker-compose.demo.yml down
+```
+
 ## Language Support
 
 ### What Works

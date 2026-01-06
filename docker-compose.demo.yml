@@ -1,0 +1,71 @@
+# Docker Compose Demo: Web + Database managed by Puppet-C
+#
+# This demo shows puppetc managing nginx (web) and mariadb (db) containers.
+# The puppetc-agent runs inside each container and applies the catalog from the server.
+#
+# Usage:
+#   1. Build:     docker-compose -f docker-compose.demo.yml build
+#   2. Start:     docker-compose -f docker-compose.demo.yml up -d
+#   3. Check:     docker-compose -f docker-compose.demo.yml logs -f
+#   4. Test web:  curl http://localhost:8080
+#   5. Cleanup:   docker-compose -f docker-compose.demo.yml down
+
+services:
+  # Puppet-C Server - compiles and serves catalogs
+  server:
+    build:
+      context: .
+      target: server
+    image: puppetc-server:latest
+    container_name: puppetc-demo-server
+    ports:
+      - "8140:8140"
+    volumes:
+      - ./demo/manifests:/etc/puppet/manifests:ro
+      - ./demo/modules:/etc/puppet/modules:ro
+      - ./demo/hiera:/etc/puppet/hiera:ro
+    networks:
+      - puppet-demo
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8140/status"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Web node - Debian with nginx managed by Puppet
+  web:
+    build:
+      context: .
+      dockerfile: demo/Dockerfile.node
+    image: puppetc-demo-node:latest
+    container_name: puppetc-demo-web
+    hostname: web
+    ports:
+      - "8080:80"
+    depends_on:
+      server:
+        condition: service_healthy
+    environment:
+      - PUPPET_SERVER=http://server:8140
+    networks:
+      - puppet-demo
+
+  # Database node - Debian with MariaDB managed by Puppet
+  db:
+    build:
+      context: .
+      dockerfile: demo/Dockerfile.node
+    image: puppetc-demo-node:latest
+    container_name: puppetc-demo-db
+    hostname: db
+    depends_on:
+      server:
+        condition: service_healthy
+    environment:
+      - PUPPET_SERVER=http://server:8140
+    networks:
+      - puppet-demo
+
+networks:
+  puppet-demo:
+    driver: bridge

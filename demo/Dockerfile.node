@@ -1,0 +1,53 @@
+# Demo node image - Debian with puppetc-agent
+# Fetches catalog from server and applies it on startup
+
+FROM debian:bookworm-slim AS builder
+
+# Reuse the builder from main Dockerfile
+RUN apt-get update && apt-get install -y \
+    build-essential autoconf automake libtool gawk pkg-config \
+    libtree-sitter-dev libyaml-dev libssl-dev libmicrohttpd-dev \
+    libcurl4-openssl-dev libsqlite3-dev ruby-dev debhelper devscripts \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY . .
+
+RUN autoreconf -i && dpkg-buildpackage -us -uc -b
+RUN mkdir -p /packages && mv ../*.deb /packages/ 2>/dev/null || true
+
+# Final image
+FROM debian:bookworm-slim
+
+# Install runtime dependencies and common tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcurl4 \
+    ca-certificates \
+    curl \
+    procps \
+    systemd \
+    systemd-sysv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install puppetc-agent packages
+COPY --from=builder /packages/libpuppetc-common0_*.deb /tmp/
+COPY --from=builder /packages/libfacter-c0_*.deb /tmp/
+COPY --from=builder /packages/puppetc-agent_*.deb /tmp/
+
+RUN dpkg -i /tmp/libpuppetc-common0_*.deb \
+            /tmp/libfacter-c0_*.deb \
+            /tmp/puppetc-agent_*.deb && \
+    rm -rf /tmp/*.deb
+
+# Create startup script
+RUN echo '#!/bin/bash\n\
+echo "Waiting for Puppet server..."\n\
+sleep 3\n\
+echo "Applying Puppet catalog..."\n\
+puppetc-agent -a -v\n\
+echo "Puppet run complete."\n\
+# Keep container running\n\
+exec tail -f /dev/null\n\
+' > /start.sh && chmod +x /start.sh
+
+ENTRYPOINT ["/start.sh"]

@@ -882,7 +882,8 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "create_resources") == 0) {
                 return puppet_func_create_resources(&expr->data.funcall.args, env);
             }
-            else if (strcmp(func_name, "ensure_packages") == 0) {
+            else if (strcmp(func_name, "ensure_packages") == 0 ||
+                     strcmp(func_name, "stdlib::ensure_packages") == 0) {
                 return puppet_func_ensure_packages(&expr->data.funcall.args, env);
             }
 
