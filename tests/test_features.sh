@@ -128,6 +128,24 @@ run_test "sensitive_basic" "$SCRIPT_DIR/puppet/sensitive_test.pp" "Sensitive tes
 run_test "sensitive_wrap" "$SCRIPT_DIR/puppet/sensitive_test.pp" "Password wrapped:"
 
 echo ""
+echo "=== Chained Bracket Access Tests ==="
+run_catalog_test "chain_two_level" "$SCRIPT_DIR/puppet/chained_access_test.pp" "Family: Debian"
+run_catalog_test "chain_three_level" "$SCRIPT_DIR/puppet/chained_access_test.pp" "Major: 22.04"
+run_catalog_test "chain_case" "$SCRIPT_DIR/puppet/chained_access_test.pp" "Matched Debian in case"
+run_catalog_test "chain_if" "$SCRIPT_DIR/puppet/chained_access_test.pp" "Matched Ubuntu in if"
+run_catalog_test "chain_interpolation" "$SCRIPT_DIR/puppet/chained_access_test.pp" "OS: Ubuntu, Family: Debian"
+
+echo ""
+echo "=== Complex Binary Expression Tests ==="
+run_catalog_test "binary_simple_and" "$SCRIPT_DIR/puppet/binary_expr_test.pp" "false and true and true = false"
+run_catalog_test "binary_triple_cmp" "$SCRIPT_DIR/puppet/binary_expr_test.pp" "RedHat check (should be false): false"
+run_catalog_test "binary_shortcircuit" "$SCRIPT_DIR/puppet/binary_expr_test.pp" "Short-circuit evaluation works"
+run_catalog_test "binary_all_true" "$SCRIPT_DIR/puppet/binary_expr_test.pp" "All conditions true: true"
+run_catalog_test "binary_parens" "$SCRIPT_DIR/puppet/binary_expr_test.pp" "(false) and (true) = false"
+run_catalog_test "binary_nested_parens" "$SCRIPT_DIR/puppet/binary_expr_test.pp" "(false and true) and (true) = false"
+run_catalog_test "binary_or" "$SCRIPT_DIR/puppet/binary_expr_test.pp" "false or true or false = true"
+
+echo ""
 echo "=========================================="
 echo -e "Feature Test Results: ${passed_tests}/${total_tests} tests passed"
 

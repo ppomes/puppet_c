@@ -68,6 +68,8 @@ EXTRA_DIST = \
     puppet/regex_case_test.pp \
     puppet/sensitive_test.pp \
     puppet/splat_test.pp \
+    puppet/chained_access_test.pp \
+    puppet/binary_expr_test.pp \
     facts/sample_facts.json \
     facts/multi_node_facts.json \
     facts/test_facts_usage.pp \
