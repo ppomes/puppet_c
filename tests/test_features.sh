@@ -57,6 +57,37 @@ run_test() {
     fi
 }
 
+# Run test with catalog output (-p mode)
+run_catalog_test() {
+    local test_name="$1"
+    local manifest="$2"
+    local expected_pattern="$3"
+
+    echo -n "Testing $test_name... "
+    total_tests=$((total_tests + 1))
+
+    pushd "$PROJECT_DIR" > /dev/null
+    output=$("$PUPPETC" -p "$manifest" 2>&1)
+    local result=$?
+    popd > /dev/null
+
+    if [ $result -eq 0 ]; then
+        if echo "$output" | grep -qF "$expected_pattern"; then
+            echo -e "${GREEN}PASS${NC}"
+            passed_tests=$((passed_tests + 1))
+            echo "$output" > "$OUTPUT_DIR/${test_name}.out"
+        else
+            echo -e "${RED}FAIL${NC} - Expected pattern not found"
+            echo "Expected: $expected_pattern"
+            echo "Got:"
+            echo "$output" | head -10
+        fi
+    else
+        echo -e "${RED}FAIL${NC} - Command failed"
+        echo "$output" | head -5
+    fi
+}
+
 echo ""
 echo "=== EPP Template Tests ==="
 run_test "epp_basic" "$SCRIPT_DIR/puppet/epp_test.pp" "EPP tests completed"
@@ -78,6 +109,18 @@ run_test "regex_case_absent" "$SCRIPT_DIR/puppet/regex_case_test.pp" "Regex case
 run_test "regex_case_default" "$SCRIPT_DIR/puppet/regex_case_test.pp" "Regex case 3: unknown"
 run_test "regex_case_os" "$SCRIPT_DIR/puppet/regex_case_test.pp" "OS package manager: apt"
 run_test "regex_case_file" "$SCRIPT_DIR/puppet/regex_case_test.pp" "File type: puppet"
+
+echo ""
+echo "=== Hash/Array Subtraction Tests ==="
+run_test "hash_sub_single" "$SCRIPT_DIR/puppet/merge_operations_test.pp" "Hash minus 'b': {a => 1, c => 3}"
+run_test "hash_sub_chain" "$SCRIPT_DIR/puppet/merge_operations_test.pp" "Hash minus 'a' and 'c': {b => 2}"
+run_test "array_diff" "$SCRIPT_DIR/puppet/merge_operations_test.pp" "Array difference: [1, 3, 5]"
+
+echo ""
+echo "=== Splat Operator Tests ==="
+run_test "splat_basic" "$SCRIPT_DIR/puppet/splat_test.pp" "Splat tests completed"
+run_catalog_test "splat_attrs" "$SCRIPT_DIR/puppet/splat_test.pp" "mode => 0644"
+run_catalog_test "splat_filtered" "$SCRIPT_DIR/puppet/splat_test.pp" "content => Overridden content"
 
 echo ""
 echo "=== Sensitive Type Tests ==="

@@ -1328,6 +1328,56 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
             if (left->type == PUPPET_VALUE_NUMBER && right->type == PUPPET_VALUE_NUMBER) {
                 return puppet_value_create_number(left->data.number - right->data.number);
             }
+            // Hash - String: remove key from hash
+            if (left->type == PUPPET_VALUE_HASH && right->type == PUPPET_VALUE_STRING) {
+                puppet_value_t *result = puppet_value_create_hash();
+                puppet_hash_t *src = left->data.hash;
+                const char *key_to_remove = right->data.string.data;
+                size_t key_len = right->data.string.len;
+                for (size_t i = 0; i < src->bucket_count; i++) {
+                    for (puppet_hash_entry_t *e = src->buckets[i]; e; e = e->next) {
+                        if (e->key.len != key_len || strcmp(e->key.data, key_to_remove) != 0) {
+                            puppet_hash_set(result->data.hash, e->key.data, e->key.len,
+                                           puppet_value_copy(e->value));
+                        }
+                    }
+                }
+                return result;
+            }
+            // Array - Array: remove elements (set difference)
+            if (left->type == PUPPET_VALUE_ARRAY && right->type == PUPPET_VALUE_ARRAY) {
+                puppet_value_t *result = puppet_value_create_array();
+                puppet_array_t *src = left->data.array;
+                puppet_array_t *remove = right->data.array;
+                for (size_t i = 0; i < src->count; i++) {
+                    bool found = false;
+                    puppet_value_t *item = src->items[i];
+                    for (size_t j = 0; j < remove->count && !found; j++) {
+                        puppet_value_t *rem = remove->items[j];
+                        // Simple equality check for common types
+                        if (item->type == rem->type) {
+                            switch (item->type) {
+                                case PUPPET_VALUE_STRING:
+                                    found = (item->data.string.len == rem->data.string.len &&
+                                            strcmp(item->data.string.data, rem->data.string.data) == 0);
+                                    break;
+                                case PUPPET_VALUE_NUMBER:
+                                    found = (item->data.number == rem->data.number);
+                                    break;
+                                case PUPPET_VALUE_BOOL:
+                                    found = (item->data.boolean == rem->data.boolean);
+                                    break;
+                                default:
+                                    break;
+                            }
+                        }
+                    }
+                    if (!found) {
+                        puppet_array_append(result->data.array, puppet_value_copy(src->items[i]));
+                    }
+                }
+                return result;
+            }
             break;
             
         case PUPPET_OP_MUL:
@@ -2493,19 +2543,44 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                                                    strcmp(title_str, env->template_output_target) == 0 &&
                                                    strcmp(stmt->data.resource.type.data, "file") == 0);
 
-                        // Collect parameters for catalog
+                        // Collect parameters for catalog (dynamic allocation to handle splat)
                         puppet_catalog_param_t *params = NULL;
-                        size_t param_count = instance->attr_count;
-                        if (env->build_catalog && param_count > 0) {
-                            params = puppet_calloc(param_count, sizeof(puppet_catalog_param_t));
+                        size_t param_capacity = instance->attr_count + 16;  // Extra space for splat expansion
+                        size_t param_idx = 0;
+                        if (env->build_catalog) {
+                            params = puppet_calloc(param_capacity, sizeof(puppet_catalog_param_t));
                         }
 
+                        // Helper to add a parameter (grows array if needed)
+                        #define ADD_PARAM(name_str, val) do { \
+                            if (env->build_catalog && params) { \
+                                if (param_idx >= param_capacity) { \
+                                    param_capacity *= 2; \
+                                    params = puppet_realloc(params, param_capacity * sizeof(puppet_catalog_param_t)); \
+                                } \
+                                params[param_idx].name = puppet_strdup(name_str); \
+                                params[param_idx].value = puppet_value_copy(val); \
+                                param_idx++; \
+                            } \
+                        } while(0)
+
                         // Show attributes for this instance
-                        size_t param_idx = 0;  // Separate index for params array
                         for (size_t j = 0; j < instance->attr_count; j++) {
-                            // Skip attributes with NULL names (parser bug workaround)
+                            // Handle splat operator (* => hash) - NULL name means splat
                             if (!instance->attributes[j].name.data) {
-                                puppet_debug("    [WARN] Skipping attribute with NULL name");
+                                puppet_value_t *splat_val = puppet_eval_expr(instance->attributes[j].value, env);
+                                if (splat_val && splat_val->type == PUPPET_VALUE_HASH) {
+                                    // Expand hash entries as individual attributes
+                                    puppet_hash_t *hash = splat_val->data.hash;
+                                    for (size_t b = 0; b < hash->bucket_count; b++) {
+                                        for (puppet_hash_entry_t *e = hash->buckets[b]; e; e = e->next) {
+                                            const char *attr_str = puppet_value_to_string(e->value);
+                                            puppet_debug("    %s => %s (from splat)", e->key.data, attr_str);
+                                            ADD_PARAM(e->key.data, e->value);
+                                        }
+                                    }
+                                }
+                                if (splat_val) puppet_value_destroy(splat_val);
                                 continue;
                             }
 
@@ -2522,15 +2597,12 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                                 }
                             }
 
-                            // Store in catalog params if building catalog
-                            if (env->build_catalog && params) {
-                                params[param_idx].name = puppet_strdup(instance->attributes[j].name.data);
-                                params[param_idx].value = puppet_value_copy(attr_val);
-                                param_idx++;  // Increment only when we add a parameter
-                            }
+                            // Store in catalog params
+                            ADD_PARAM(instance->attributes[j].name.data, attr_val);
 
                             puppet_value_destroy(attr_val);
                         }
+                        #undef ADD_PARAM
 
                         // Add to resource catalog if building
                         if (env->build_catalog && env->catalog) {

@@ -43,4 +43,18 @@ $num2 = 25
 $sum = $num1 + $num2
 notice("Number add: ${sum}")
 
+# Hash subtraction tests
+$hash5 = { 'a' => 1, 'b' => 2, 'c' => 3 }
+$minus_b = $hash5 - 'b'
+notice("Hash minus 'b': ${minus_b}")
+
+$minus_ac = $hash5 - 'a' - 'c'
+notice("Hash minus 'a' and 'c': ${minus_ac}")
+
+# Array subtraction tests
+$arr5 = [1, 2, 3, 4, 5]
+$arr6 = [2, 4]
+$diff_arr = $arr5 - $arr6
+notice("Array difference: ${diff_arr}")
+
 notice('Merge operations tests completed')

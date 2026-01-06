@@ -67,6 +67,7 @@ EXTRA_DIST = \
     puppet/merge_operations_test.pp \
     puppet/regex_case_test.pp \
     puppet/sensitive_test.pp \
+    puppet/splat_test.pp \
     facts/sample_facts.json \
     facts/multi_node_facts.json \
     facts/test_facts_usage.pp \
