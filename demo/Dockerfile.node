@@ -39,13 +39,30 @@ RUN dpkg -i /tmp/libpuppetc-common0_*.deb \
             /tmp/puppetc-agent_*.deb && \
     rm -rf /tmp/*.deb
 
-# Create startup script
+# Create startup script that starts services after Puppet runs
+# (Docker containers don't have systemd, so we start services manually)
 RUN echo '#!/bin/bash\n\
 echo "Waiting for Puppet server..."\n\
 sleep 3\n\
 echo "Applying Puppet catalog..."\n\
 puppetc-agent -a -v\n\
 echo "Puppet run complete."\n\
+\n\
+# Start services manually (no systemd in containers)\n\
+echo "Starting services..."\n\
+if [ -x /usr/sbin/nginx ]; then\n\
+    echo "Starting nginx..."\n\
+    nginx\n\
+    echo "nginx started on port 80"\n\
+fi\n\
+if [ -x /usr/bin/mariadbd-safe ]; then\n\
+    echo "Starting MariaDB..."\n\
+    /usr/bin/mariadbd-safe --datadir=/var/lib/mysql &\n\
+    sleep 2\n\
+    echo "MariaDB started"\n\
+fi\n\
+\n\
+echo "Container ready."\n\
 # Keep container running\n\
 exec tail -f /dev/null\n\
 ' > /start.sh && chmod +x /start.sh
