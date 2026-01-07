@@ -1035,6 +1035,40 @@ static puppet_expr_t *convert_expression(TSNode node, const char *source) {
     if (strcmp(type, "name") == 0)
         return convert_name_to_value(node, source);
 
+    /* Handle resource references: Type[title] appearing as statement node
+     * Parse tree looks like:
+     *   statement: 'Type[title]'
+     *     type: 'Type'
+     *     access: '[title]'
+     */
+    if (strcmp(type, "statement") == 0) {
+        TSNode type_child = find_child(node, "type");
+        TSNode access_child = find_child(node, "access");
+
+        if (!ts_node_is_null(type_child) && !ts_node_is_null(access_child)) {
+            /* This is a resource reference Type[title] */
+            puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
+            expr->type = PUPPET_EXPR_RESOURCE_REF;
+            expr->loc = node_location(node);
+
+            /* Get the type name */
+            char *type_str = node_text(type_child, source);
+            expr->data.resource_ref.type = puppet_string_create(type_str);
+            puppet_free(type_str);
+
+            /* Get the title from the first access_element */
+            TSNode access_elem = find_child(access_child, "access_element");
+            if (!ts_node_is_null(access_elem)) {
+                TSNode value_node = ts_node_named_child(access_elem, 0);
+                expr->data.resource_ref.title = convert_expression(value_node, source);
+            } else {
+                expr->data.resource_ref.title = convert_expression(access_child, source);
+            }
+
+            return expr;
+        }
+    }
+
     /* For wrapper nodes, recurse into first child */
     uint32_t count = ts_node_named_child_count(node);
     if (count > 0) {
@@ -1059,11 +1093,16 @@ static puppet_attribute_t convert_attribute(TSNode node, const char *source) {
     TSNode var_child = find_child(node, "variable");
     TSNode selector_child = find_child(node, "selector");
 
+    /* Check for type + access pattern (resource reference, e.g., notify => Service['name']) */
+    TSNode type_child = find_child(node, "type");
+    TSNode access_child = find_child(node, "access");
+
     /* Check for lhs: field which indicates a selector control variable */
     TSNode lhs_node = ts_node_child_by_field_name(node, "lhs", 3);
 
     uint32_t count = ts_node_named_child_count(node);
     puppet_expr_t *pending_var_expr = NULL;  /* Track variable for chained access */
+    puppet_expr_t *pending_type_expr = NULL; /* Track type for resource reference */
 
     for (uint32_t i = 0; i < count; i++) {
         TSNode child = ts_node_named_child(node, i);
@@ -1094,6 +1133,30 @@ static puppet_attribute_t convert_attribute(TSNode node, const char *source) {
             } else if (strcmp(type, "access") == 0 && pending_var_expr) {
                 /* Build chained index expression */
                 pending_var_expr = build_index_expr(pending_var_expr, child, source);
+                continue;
+            }
+
+            /* Handle type + access pattern for resource references (e.g., Service['name']) */
+            if (strcmp(type, "type") == 0 && !ts_node_is_null(access_child)) {
+                /* Store type string for building resource reference */
+                char *type_str = node_text(child, source);
+                pending_type_expr = puppet_calloc(1, sizeof(puppet_expr_t));
+                pending_type_expr->type = PUPPET_EXPR_RESOURCE_REF;
+                pending_type_expr->loc = node_location(child);
+                pending_type_expr->data.resource_ref.type = puppet_string_create(type_str);
+                puppet_free(type_str);
+                continue;
+            } else if (strcmp(type, "access") == 0 && pending_type_expr) {
+                /* Complete the resource reference with the title */
+                TSNode access_elem = find_child(child, "access_element");
+                if (!ts_node_is_null(access_elem)) {
+                    TSNode value_node = ts_node_named_child(access_elem, 0);
+                    pending_type_expr->data.resource_ref.title = convert_expression(value_node, source);
+                } else {
+                    pending_type_expr->data.resource_ref.title = convert_expression(child, source);
+                }
+                attr.value = pending_type_expr;
+                pending_type_expr = NULL;
                 continue;
             }
 

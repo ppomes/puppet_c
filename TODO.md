@@ -28,8 +28,9 @@
 ### Resource Relationships
 - [x] `require` metaparameter (ordering only)
 - [x] `before` metaparameter (ordering only)
-- [ ] `notify` metaparameter (trigger refresh)
-- [ ] `subscribe` metaparameter (trigger refresh)
+- [x] `notify` metaparameter (ordering only, refresh pending)
+- [x] `subscribe` metaparameter (ordering only, refresh pending)
+- [ ] Refresh triggers (restart service when file changes)
 
 ### Type System
 - [ ] Type aliases (`type MyType = String[1]`)
