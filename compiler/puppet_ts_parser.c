@@ -858,7 +858,9 @@ static puppet_lambda_t *convert_lambda(TSNode node, const char *source) {
                             strcmp(inner_type, "variable") == 0 ||
                             strcmp(inner_type, "number") == 0 ||
                             strcmp(inner_type, "function_call") == 0 ||
-                            strcmp(inner_type, "unary") == 0) {
+                            strcmp(inner_type, "unary") == 0 ||
+                            strcmp(inner_type, "array") == 0 ||
+                            strcmp(inner_type, "hash") == 0) {
                             lambda->expr_body = convert_expression(inner, source);
                             continue;
                         }
