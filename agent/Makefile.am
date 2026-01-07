@@ -16,8 +16,8 @@ puppetc_agent_SOURCES = \
 	provider_sysctl.c \
 	provider_mount.c
 
-# Link against libfacter_c, libpuppetc_common, and libcurl
-puppetc_agent_LDADD = $(top_builddir)/facter/libfacter_c.la $(top_builddir)/common/libpuppetc_common.la $(CURL_LIBS)
+# Link against libfacter_c, libpuppetc_common, libcurl, and OpenSSL
+puppetc_agent_LDADD = $(top_builddir)/facter/libfacter_c.la $(top_builddir)/common/libpuppetc_common.la $(CURL_LIBS) $(OPENSSL_LIBS)
 
 # Include directories
 AM_CPPFLAGS = -I$(top_srcdir)/include $(CURL_CFLAGS)

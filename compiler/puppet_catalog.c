@@ -319,6 +319,22 @@ static void json_write_value(FILE *out, puppet_value_t *value) {
             }
             fputc('}', out);
             break;
+        case PUPPET_VALUE_DEFERRED:
+            if (value->data.deferred) {
+                fputs("{\"__ptype\": \"Deferred\", \"name\": ", out);
+                json_escape_string(out, value->data.deferred->function_name);
+                fputs(", \"arguments\": [", out);
+                if (value->data.deferred->arguments) {
+                    for (size_t i = 0; i < value->data.deferred->arguments->count; i++) {
+                        if (i > 0) fputs(", ", out);
+                        json_write_value(out, value->data.deferred->arguments->items[i]);
+                    }
+                }
+                fputs("]}", out);
+            } else {
+                fputs("null", out);
+            }
+            break;
         default:
             fputs("null", out);
     }

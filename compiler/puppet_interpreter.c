@@ -641,6 +641,42 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
                 }
                 return puppet_value_create_undef();
             }
+            // Deferred() - creates a deferred function call for agent-side evaluation
+            else if (strcmp(func_name, "Deferred") == 0) {
+                if (expr->data.funcall.args.count < 1) {
+                    puppet_error_at(expr->loc, "Deferred() requires at least 1 argument (function name)");
+                    return puppet_value_create_undef();
+                }
+                /* First argument is the function name */
+                puppet_value_t *name_val = puppet_eval_expr(expr->data.funcall.args.exprs[0], env);
+                if (name_val->type != PUPPET_VALUE_STRING) {
+                    puppet_error_at(expr->loc, "Deferred() first argument must be a string");
+                    puppet_value_destroy(name_val);
+                    return puppet_value_create_undef();
+                }
+                const char *deferred_func_name = name_val->data.string.data;
+
+                /* Second argument (optional) is an array of arguments */
+                puppet_array_t *args = NULL;
+                if (expr->data.funcall.args.count >= 2) {
+                    puppet_value_t *args_val = puppet_eval_expr(expr->data.funcall.args.exprs[1], env);
+                    if (args_val->type == PUPPET_VALUE_ARRAY) {
+                        /* Copy the array for the deferred value */
+                        args = puppet_calloc(1, sizeof(puppet_array_t));
+                        args->capacity = args_val->data.array->count;
+                        args->count = args_val->data.array->count;
+                        args->items = puppet_calloc(args->count, sizeof(puppet_value_t *));
+                        for (size_t i = 0; i < args->count; i++) {
+                            args->items[i] = puppet_value_copy(args_val->data.array->items[i]);
+                        }
+                    }
+                    puppet_value_destroy(args_val);
+                }
+
+                puppet_value_t *result = puppet_value_create_deferred(deferred_func_name, args);
+                puppet_value_destroy(name_val);
+                return result;
+            }
             // Core logging functions
             else if (strcmp(func_name, "fail") == 0) {
                 return puppet_func_fail(&expr->data.funcall.args, env);
@@ -764,6 +800,9 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             }
             else if (strcmp(func_name, "mysql::normalise_and_deepmerge") == 0) {
                 return puppet_func_mysql_normalise_and_deepmerge(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "mysql::password") == 0) {
+                return puppet_func_mysql_password(&expr->data.funcall.args, env);
             }
             // Shell/string escaping functions
             else if (strcmp(func_name, "stdlib::shell_escape") == 0 ||

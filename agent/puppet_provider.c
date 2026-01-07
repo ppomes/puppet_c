@@ -13,8 +13,12 @@
 #include <stdarg.h>
 
 #include "puppet_provider.h"
+#include <openssl/sha.h>
 
 #define MAX_PROVIDERS 64
+
+/* Forward declaration for Deferred evaluation */
+static char *evaluate_deferred(json_value_t *deferred_obj);
 
 /* Provider registry */
 static const provider_t *providers[MAX_PROVIDERS];
@@ -48,6 +52,92 @@ const char *os_family_to_string(os_family_t family) {
         case OS_FAMILY_ALPINE: return "Alpine";
         default: return "Unknown";
     }
+}
+
+/* ============================================================================
+ * Deferred Evaluation
+ * ============================================================================ */
+
+/**
+ * @brief Evaluate a Deferred function call
+ *
+ * Handles Deferred values in catalog parameters by evaluating the
+ * function at apply time. Currently supports mysql::password.
+ *
+ * @param deferred_obj JSON object with __ptype: "Deferred"
+ * @return Evaluated result as string, or NULL on error
+ */
+static char *evaluate_deferred(json_value_t *deferred_obj) {
+    if (!deferred_obj || !json_is_object(deferred_obj)) return NULL;
+
+    /* Check for __ptype: "Deferred" */
+    json_value_t *ptype = json_object_get(deferred_obj, "__ptype");
+    if (!ptype || !json_is_string(ptype)) return NULL;
+    if (strcmp(json_get_string(ptype), "Deferred") != 0) return NULL;
+
+    /* Get function name */
+    json_value_t *name_val = json_object_get(deferred_obj, "name");
+    if (!name_val || !json_is_string(name_val)) return NULL;
+    const char *func_name = json_get_string(name_val);
+
+    /* Get arguments array */
+    json_value_t *args = json_object_get(deferred_obj, "arguments");
+
+    /* Handle mysql::password function */
+    if (strcmp(func_name, "mysql::password") == 0) {
+        if (!args || !json_is_array(args) || args->data.array.count < 1) {
+            return puppet_strdup("");
+        }
+
+        json_value_t *password_val = args->data.array.elements[0];
+        if (!password_val || !json_is_string(password_val)) {
+            return puppet_strdup("");
+        }
+
+        const char *password = json_get_string(password_val);
+        size_t password_len = strlen(password);
+
+        /* Empty password returns empty string */
+        if (password_len == 0) {
+            return puppet_strdup("");
+        }
+
+        /* Check if already hashed: *[A-F0-9]{40} */
+        if (password_len == 41 && password[0] == '*') {
+            bool is_hex = true;
+            for (size_t i = 1; i < 41 && is_hex; i++) {
+                char c = password[i];
+                if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))) {
+                    is_hex = false;
+                }
+            }
+            if (is_hex) {
+                return puppet_strdup(password);
+            }
+        }
+
+        /* Compute MySQL password hash: *SHA1(SHA1(password)) */
+        unsigned char sha1_first[SHA_DIGEST_LENGTH];
+        unsigned char sha1_second[SHA_DIGEST_LENGTH];
+
+        SHA1((unsigned char *)password, password_len, sha1_first);
+        SHA1(sha1_first, SHA_DIGEST_LENGTH, sha1_second);
+
+        /* Format as *HEX uppercase */
+        char *result = puppet_malloc(42);
+        result[0] = '*';
+        for (int i = 0; i < SHA_DIGEST_LENGTH; i++) {
+            sprintf(&result[1 + i * 2], "%02X", sha1_second[i]);
+        }
+        result[41] = '\0';
+
+        return result;
+    }
+
+    /* Unknown Deferred function - return placeholder */
+    char buf[256];
+    snprintf(buf, sizeof(buf), "<Deferred:%s>", func_name);
+    return puppet_strdup(buf);
 }
 
 /* ============================================================================
@@ -628,6 +718,13 @@ static resource_t *parse_resource_from_json(json_value_t *res_obj) {
                 buf[pos++] = ']';
                 buf[pos] = '\0';
                 value_str = buf;
+            } else if (json_is_object(val)) {
+                /* Check for Deferred object */
+                value_str = evaluate_deferred(val);
+                if (!value_str) {
+                    /* Not a Deferred, just use empty string for unknown objects */
+                    value_str = puppet_strdup("{}");
+                }
             }
 
             if (value_str) {

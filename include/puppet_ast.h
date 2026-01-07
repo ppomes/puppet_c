@@ -76,12 +76,26 @@ typedef enum {
     PUPPET_VALUE_ARRAY,     /**< Ordered collection of values */
     PUPPET_VALUE_HASH,      /**< Key-value mapping */
     PUPPET_VALUE_REGEXP,    /**< Regular expression pattern */
-    PUPPET_VALUE_TYPE       /**< Type reference (for type checking) */
+    PUPPET_VALUE_TYPE,      /**< Type reference (for type checking) */
+    PUPPET_VALUE_DEFERRED   /**< Deferred function call (evaluated at apply time) */
 } puppet_value_type_t;
 
 typedef struct puppet_value puppet_value_t;
 typedef struct puppet_array puppet_array_t;
 typedef struct puppet_hash puppet_hash_t;
+typedef struct puppet_deferred puppet_deferred_t;
+
+/**
+ * @brief Deferred function call (evaluated at catalog apply time)
+ *
+ * Stores a function name and arguments to be evaluated on the agent
+ * rather than during catalog compilation. Used for sensitive data
+ * and agent-side-only operations.
+ */
+struct puppet_deferred {
+    char *function_name;        /**< Name of function to call */
+    puppet_array_t *arguments;  /**< Arguments to pass to function */
+};
 
 /**
  * @brief Dynamic array implementation for Puppet arrays
@@ -146,6 +160,7 @@ struct puppet_value {
         puppet_hash_t *hash;        /**< Pointer to hash table */
         puppet_string_t regexp;     /**< Regular expression pattern */
         void *type_ref;            /**< Type system reference */
+        puppet_deferred_t *deferred; /**< Deferred function call */
     } data;
 };
 
@@ -515,6 +530,7 @@ puppet_value_t *puppet_value_create_string(const char *str, size_t len);
 puppet_value_t *puppet_value_create_number(double value);
 puppet_value_t *puppet_value_create_array(void);
 puppet_value_t *puppet_value_create_hash(void);
+puppet_value_t *puppet_value_create_deferred(const char *function_name, puppet_array_t *arguments);
 puppet_value_t *puppet_value_copy(puppet_value_t *value);
 void puppet_value_destroy(puppet_value_t *value);
 

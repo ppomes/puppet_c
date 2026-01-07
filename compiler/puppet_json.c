@@ -337,7 +337,28 @@ void puppet_value_to_json(json_buffer_t *buf, puppet_value_t *value, int indent)
             json_buffer_append_escaped_string(buf, value->data.regexp.data);
             json_buffer_append(buf, "}");
             break;
-            
+
+        case PUPPET_VALUE_DEFERRED:
+            if (value->data.deferred) {
+                json_buffer_append(buf, "{\"__ptype\":\"Deferred\",\"name\":");
+                json_buffer_append_escaped_string(buf, value->data.deferred->function_name);
+                json_buffer_append(buf, ",\"arguments\":");
+                if (value->data.deferred->arguments && value->data.deferred->arguments->count > 0) {
+                    json_buffer_append(buf, "[");
+                    for (size_t i = 0; i < value->data.deferred->arguments->count; i++) {
+                        if (i > 0) json_buffer_append(buf, ",");
+                        puppet_value_to_json(buf, value->data.deferred->arguments->items[i], 0);
+                    }
+                    json_buffer_append(buf, "]");
+                } else {
+                    json_buffer_append(buf, "[]");
+                }
+                json_buffer_append(buf, "}");
+            } else {
+                json_buffer_append(buf, "null");
+            }
+            break;
+
         default:
             json_buffer_append(buf, "null");
             break;

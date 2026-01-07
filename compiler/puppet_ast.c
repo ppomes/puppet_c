@@ -94,6 +94,15 @@ puppet_value_t *puppet_value_create_hash(void) {
     return value;
 }
 
+puppet_value_t *puppet_value_create_deferred(const char *function_name, puppet_array_t *arguments) {
+    puppet_value_t *value = puppet_calloc(1, sizeof(puppet_value_t));
+    value->type = PUPPET_VALUE_DEFERRED;
+    value->data.deferred = puppet_calloc(1, sizeof(puppet_deferred_t));
+    value->data.deferred->function_name = puppet_strdup(function_name);
+    value->data.deferred->arguments = arguments;
+    return value;
+}
+
 void puppet_array_append(puppet_array_t *array, puppet_value_t *value) {
     if (array->count >= array->capacity) {
         array->capacity *= 2;
@@ -190,11 +199,25 @@ void puppet_value_destroy(puppet_value_t *value) {
             
         case PUPPET_VALUE_TYPE:
             break;
-            
+
+        case PUPPET_VALUE_DEFERRED:
+            if (value->data.deferred) {
+                puppet_free(value->data.deferred->function_name);
+                if (value->data.deferred->arguments) {
+                    for (size_t i = 0; i < value->data.deferred->arguments->count; i++) {
+                        puppet_value_destroy(value->data.deferred->arguments->items[i]);
+                    }
+                    puppet_free(value->data.deferred->arguments->items);
+                    puppet_free(value->data.deferred->arguments);
+                }
+                puppet_free(value->data.deferred);
+            }
+            break;
+
         default:
             break;
     }
-    
+
     puppet_free(value);
 }
 
@@ -237,7 +260,27 @@ puppet_value_t *puppet_value_copy(puppet_value_t *value) {
             }
             return new_hash;
         }
-            
+
+        case PUPPET_VALUE_DEFERRED: {
+            if (!value->data.deferred) return puppet_value_create_undef();
+            puppet_value_t *new_deferred = puppet_value_create_deferred(
+                value->data.deferred->function_name,
+                NULL  /* arguments copied below */
+            );
+            if (value->data.deferred->arguments) {
+                new_deferred->data.deferred->arguments = puppet_calloc(1, sizeof(puppet_array_t));
+                new_deferred->data.deferred->arguments->capacity = value->data.deferred->arguments->count;
+                new_deferred->data.deferred->arguments->count = value->data.deferred->arguments->count;
+                new_deferred->data.deferred->arguments->items = puppet_calloc(
+                    value->data.deferred->arguments->count, sizeof(puppet_value_t *));
+                for (size_t i = 0; i < value->data.deferred->arguments->count; i++) {
+                    new_deferred->data.deferred->arguments->items[i] =
+                        puppet_value_copy(value->data.deferred->arguments->items[i]);
+                }
+            }
+            return new_deferred;
+        }
+
         default:
             return NULL;
     }
