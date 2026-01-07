@@ -81,10 +81,17 @@ EXTRA_DIST = \
     test_virtual.sh \
     test_simple_core.sh \
     test_erb.sh \
-    test_features.sh
+    test_epp.sh \
+    test_features.sh \
+    modules/epp_test/templates/trim_basic.epp \
+    modules/epp_test/templates/trim_newlines.epp \
+    modules/epp_test/templates/if_elsif_else.epp \
+    modules/epp_test/templates/conditional_each.epp \
+    modules/epp_test/templates/comments.epp \
+    modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-features
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features
 	@echo "All tests completed."
 
 check-parser:
@@ -432,6 +439,17 @@ check-erb:
 		exit 1; \
 	fi
 
+check-epp:
+	@echo "Running EPP template tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_epp.sh > output/epp.out 2>&1; then \
+		echo "✅ All EPP tests passed!"; \
+	else \
+		echo "❌ Some EPP tests failed:"; \
+		sed 's/^/  /' output/epp.out; \
+		exit 1; \
+	fi
+
 check-features:
 	@echo "Running feature tests (EPP, merge ops, regex case, Sensitive)..."
 	@$(MKDIR_P) output
@@ -443,4 +461,4 @@ check-features:
 		exit 1; \
 	fi
 
-.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-features check-memory check-asan
+.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-memory check-asan
