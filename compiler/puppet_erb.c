@@ -931,10 +931,11 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                 memcpy(code, tag_start, code_len);
                 code[code_len] = '\0';
 
-                /* Check for 'each' iterator: EXPR.each |VAR| { or each(EXPR) |VAR| { */
+                /* Check for 'each' or 'map' iterator: EXPR.each |VAR| { or EXPR.map |VAR| { */
                 char *each_pos = strstr(code, ".each");
+                char *map_pos = strstr(code, ".map");
                 char *each_func = strstr(code, "each(");
-                if (each_pos || (each_func && each_func == code)) {
+                if (each_pos || map_pos || (each_func && each_func == code)) {
                     /* Parse the full expression as a statement to get AST with lambda */
                     /* The code ends with '{', wrap as: $_epp_iter = (code without {) { } */
                     size_t clean_len = code_len;
@@ -979,12 +980,38 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                             if (*inner_start == '-') inner_start++;
                             while (inner_start < end && (*inner_start == ' ' || *inner_start == '\t')) inner_start++;
 
+                            /* Find the closing %> to know where the tag ends */
+                            const char *tag_close = strstr(inner_start, "%>");
+                            if (!tag_close) tag_close = end;
+
+                            /* Count closing braces */
                             if (*inner_start == '}') {
                                 brace_depth--;
-                                if (brace_depth == 0) break;
-                            } else if (strchr(inner_start, '{')) {
-                                brace_depth++;
                             }
+
+                            /* Check if tag ends with { (iterator/block open)
+                             * Only count as opening brace if { is at the END of the code,
+                             * not a { inside a lambda expression in the middle
+                             * This handles both standalone { and } elsif/else { patterns */
+                            const char *last_brace = NULL;
+                            for (const char *p = inner_start; p < tag_close; p++) {
+                                if (*p == '{') last_brace = p;
+                            }
+                            if (last_brace) {
+                                /* Check if there's only whitespace/trim markers between { and %> */
+                                const char *after_brace = last_brace + 1;
+                                while (after_brace < tag_close && (*after_brace == ' ' || *after_brace == '\t' || *after_brace == '-')) {
+                                    after_brace++;
+                                }
+                                if (after_brace >= tag_close || *after_brace == '%') {
+                                    /* The { is at the end of the tag - this is a block/iterator open */
+                                    brace_depth++;
+                                }
+                                /* Otherwise, { is in the middle (lambda body) - don't count */
+                            }
+
+                            /* Exit if we've closed all braces */
+                            if (brace_depth == 0) break;
                         }
                         body_end++;
                     }
@@ -1070,65 +1097,188 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                     p = close_tag ? close_tag + 2 : end;
                     while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
                 }
-                /* Check for 'if' conditional: if EXPR { */
+                /* Check for 'if' conditional: if EXPR { with elsif/else support */
                 else if (strncmp(code, "if ", 3) == 0 || strncmp(code, "if(", 3) == 0) {
-                    /* Extract condition */
+                    /* Parse entire if/elsif/else chain
+                     * Structure: if COND { BODY } elsif COND { BODY } else { BODY }
+                     * Each branch: condition (NULL for else), body_start, body_end
+                     */
+                    #define MAX_IF_BRANCHES 32
+                    struct {
+                        const char *cond_start;
+                        size_t cond_len;
+                        const char *body_start;
+                        const char *body_end;
+                        int is_else;  /* 1 for else branch (no condition) */
+                    } branches[MAX_IF_BRANCHES];
+                    memset(branches, 0, sizeof(branches));
+                    int branch_count = 0;
+
+                    /* First branch: the 'if' itself */
                     const char *cond_start = code + 2;
                     while (*cond_start == ' ') cond_start++;
                     const char *cond_end = strstr(cond_start, "{");
                     if (!cond_end) cond_end = code + code_len;
                     while (cond_end > cond_start && (*(cond_end-1) == ' ' || *(cond_end-1) == '{')) cond_end--;
 
-                    size_t cond_len = cond_end - cond_start;
-                    puppet_expr_t *cond_expr = puppet_ts_parse_expression(cond_start, cond_len);
-                    puppet_value_t *cond_val = NULL;
-                    if (cond_expr && env) {
-                        cond_val = puppet_eval_expr(cond_expr, env);
-                        puppet_expr_destroy(cond_expr);
-                    }
-
-                    /* Find body and closing <% } %> */
-                    const char *body_start = tag_end + 2;
+                    branches[0].cond_start = cond_start;
+                    branches[0].cond_len = cond_end - cond_start;
+                    branches[0].is_else = 0;
+                    branches[0].body_start = tag_end + 2;
                     if (trim_after) {
-                        while (body_start < end && (*body_start == ' ' || *body_start == '\t' || *body_start == '\n' || *body_start == '\r')) body_start++;
+                        while (branches[0].body_start < end &&
+                               (*branches[0].body_start == ' ' || *branches[0].body_start == '\t' ||
+                                *branches[0].body_start == '\n' || *branches[0].body_start == '\r'))
+                            branches[0].body_start++;
                     }
+                    branch_count = 1;
 
+                    /* Scan for elsif/else branches and final closing brace */
                     int brace_depth = 1;
-                    const char *body_end = body_start;
-                    while (body_end < end && brace_depth > 0) {
-                        if (body_end + 1 < end && body_end[0] == '<' && body_end[1] == '%') {
-                            const char *inner_start = body_end + 2;
+                    const char *scan = branches[0].body_start;
+                    const char *chain_end = NULL;
+
+                    while (scan < end && brace_depth > 0) {
+                        if (scan + 1 < end && scan[0] == '<' && scan[1] == '%') {
+                            const char *inner_start = scan + 2;
                             if (*inner_start == '-') inner_start++;
                             while (inner_start < end && (*inner_start == ' ' || *inner_start == '\t')) inner_start++;
 
+                            /* Find the closing %> */
+                            const char *tag_close = strstr(inner_start, "%>");
+                            if (!tag_close) tag_close = end;
+
+                            /* Count closing braces */
                             if (*inner_start == '}') {
-                                brace_depth--;
-                                if (brace_depth == 0) break;
-                            } else if (strchr(inner_start, '{')) {
-                                brace_depth++;
+                                /* Check what follows the closing brace */
+                                const char *after_brace = inner_start + 1;
+                                while (after_brace < tag_close && (*after_brace == ' ' || *after_brace == '\t')) after_brace++;
+
+                                if (brace_depth == 1) {
+                                    /* At depth 1, check for elsif/else */
+                                    if (strncmp(after_brace, "elsif ", 6) == 0 || strncmp(after_brace, "elsif(", 6) == 0) {
+                                        /* End current branch body here */
+                                        branches[branch_count - 1].body_end = scan;
+
+                                        /* Start new elsif branch */
+                                        if (branch_count < MAX_IF_BRANCHES) {
+                                            const char *elsif_cond = after_brace + 5;
+                                            while (*elsif_cond == ' ') elsif_cond++;
+                                            const char *elsif_cond_end = strstr(elsif_cond, "{");
+                                            if (!elsif_cond_end) elsif_cond_end = tag_close;
+                                            while (elsif_cond_end > elsif_cond &&
+                                                   (*(elsif_cond_end-1) == ' ' || *(elsif_cond_end-1) == '{'))
+                                                elsif_cond_end--;
+
+                                            branches[branch_count].cond_start = elsif_cond;
+                                            branches[branch_count].cond_len = elsif_cond_end - elsif_cond;
+                                            branches[branch_count].is_else = 0;
+                                            branches[branch_count].body_start = tag_close + 2;
+                                            /* Check for trim marker before %> */
+                                            if (tag_close > inner_start && *(tag_close - 1) == '-') {
+                                                while (branches[branch_count].body_start < end &&
+                                                       (*branches[branch_count].body_start == ' ' ||
+                                                        *branches[branch_count].body_start == '\t' ||
+                                                        *branches[branch_count].body_start == '\n' ||
+                                                        *branches[branch_count].body_start == '\r'))
+                                                    branches[branch_count].body_start++;
+                                            }
+                                            branch_count++;
+                                        }
+                                        /* brace_depth stays at 1 (} followed by {) */
+                                        scan = tag_close + 2;
+                                        continue;
+                                    } else if (strncmp(after_brace, "else", 4) == 0 &&
+                                               (after_brace[4] == ' ' || after_brace[4] == '{')) {
+                                        /* End current branch body here */
+                                        branches[branch_count - 1].body_end = scan;
+
+                                        /* Start else branch */
+                                        if (branch_count < MAX_IF_BRANCHES) {
+                                            branches[branch_count].cond_start = NULL;
+                                            branches[branch_count].cond_len = 0;
+                                            branches[branch_count].is_else = 1;
+                                            branches[branch_count].body_start = tag_close + 2;
+                                            if (tag_close > inner_start && *(tag_close - 1) == '-') {
+                                                while (branches[branch_count].body_start < end &&
+                                                       (*branches[branch_count].body_start == ' ' ||
+                                                        *branches[branch_count].body_start == '\t' ||
+                                                        *branches[branch_count].body_start == '\n' ||
+                                                        *branches[branch_count].body_start == '\r'))
+                                                    branches[branch_count].body_start++;
+                                            }
+                                            branch_count++;
+                                        }
+                                        scan = tag_close + 2;
+                                        continue;
+                                    } else {
+                                        /* Plain closing brace - end of if chain */
+                                        branches[branch_count - 1].body_end = scan;
+                                        chain_end = tag_close + 2;
+                                        brace_depth = 0;
+                                        break;
+                                    }
+                                } else {
+                                    /* Nested brace at depth > 1 - decrement */
+                                    brace_depth--;
+                                }
+                            }
+
+                            /* Check if tag ends with { (block open)
+                             * This handles both standalone { and } elsif/else { patterns at depth > 1 */
+                            const char *last_brace = NULL;
+                            for (const char *bp = inner_start; bp < tag_close; bp++) {
+                                if (*bp == '{') last_brace = bp;
+                            }
+                            if (last_brace) {
+                                const char *after_last = last_brace + 1;
+                                while (after_last < tag_close &&
+                                       (*after_last == ' ' || *after_last == '\t' || *after_last == '-'))
+                                    after_last++;
+                                if (after_last >= tag_close || *after_last == '%') {
+                                    brace_depth++;
+                                }
+                            }
+
+                            /* Exit if we've closed all braces */
+                            if (brace_depth == 0) break;
+                        }
+                        scan++;
+                    }
+
+                    /* Evaluate branches in order, execute first matching */
+                    int executed = 0;
+                    for (int i = 0; i < branch_count && !executed; i++) {
+                        int should_execute = 0;
+
+                        if (branches[i].is_else) {
+                            should_execute = 1;  /* else always executes if reached */
+                        } else if (branches[i].cond_start && branches[i].cond_len > 0) {
+                            puppet_expr_t *cond_expr = puppet_ts_parse_expression(
+                                branches[i].cond_start, branches[i].cond_len);
+                            if (cond_expr && env) {
+                                puppet_value_t *cond_val = puppet_eval_expr(cond_expr, env);
+                                if (cond_val) {
+                                    should_execute = puppet_value_is_truthy(cond_val);
+                                    puppet_value_destroy(cond_val);
+                                }
+                                puppet_expr_destroy(cond_expr);
                             }
                         }
-                        body_end++;
-                    }
 
-                    /* Evaluate condition and render body if true */
-                    int is_true = 0;
-                    if (cond_val) {
-                        is_true = puppet_value_is_truthy(cond_val);
-                        puppet_value_destroy(cond_val);
-                    }
-
-                    if (is_true) {
-                        char *body_output = puppet_epp_render_range(body_start, body_end, params, env);
-                        if (body_output) {
-                            epp_append(&output, &out_len, &out_capacity, body_output, strlen(body_output));
-                            puppet_free(body_output);
+                        if (should_execute) {
+                            char *body_output = puppet_epp_render_range(
+                                branches[i].body_start, branches[i].body_end, params, env);
+                            if (body_output) {
+                                epp_append(&output, &out_len, &out_capacity, body_output, strlen(body_output));
+                                puppet_free(body_output);
+                            }
+                            executed = 1;
                         }
                     }
 
-                    /* Skip past closing <% } %> */
-                    const char *close_tag = strstr(body_end, "%>");
-                    p = close_tag ? close_tag + 2 : end;
+                    /* Skip past the entire if/elsif/else chain */
+                    p = chain_end ? chain_end : end;
                     while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
                 }
                 /* Plain closing brace - skip */
