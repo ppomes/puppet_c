@@ -141,6 +141,15 @@ int provider_register(const provider_t *provider);
  */
 const provider_t *provider_get(const char *resource_type);
 
+/* Forward declaration for Ruby context */
+struct agent_ruby_context;
+
+/**
+ * @brief Set Ruby context for provider fallback
+ * @param ctx Ruby context from agent (or NULL to disable)
+ */
+void provider_set_ruby_context(struct agent_ruby_context *ctx);
+
 /**
  * @brief Detect OS family from string
  * @param os_family_str OS family string from facter

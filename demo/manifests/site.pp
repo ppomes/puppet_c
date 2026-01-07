@@ -83,6 +83,20 @@ node 'db' {
     },
   }
 
+  # Test Ruby providers - mysql_database and mysql_user
+  mysql_database { 'puppetc_demo':
+    ensure  => present,
+    charset => 'utf8mb4',
+    collate => 'utf8mb4_general_ci',
+    require => Class['mysql::server'],
+  }
+
+  mysql_user { 'demo_user@localhost':
+    ensure        => present,
+    password_hash => '*2470C0C06DEE42FD1618BB99005ADCA2EC9D1E19',  # 'password'
+    require       => Mysql_database['puppetc_demo'],
+  }
+
   notify { 'db_complete': message => 'Database server configured with mysql module' }
 }
 

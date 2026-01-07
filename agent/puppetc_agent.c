@@ -19,8 +19,11 @@
 
 #include "facter.h"
 #include "puppet_provider.h"
+#include "puppet_agent_ruby.h"
+#include "puppet_pluginsync.h"
 
 #define DEFAULT_SERVER "http://localhost:8140"
+#define DEFAULT_LIBDIR "/var/lib/puppetc/lib"
 #define DEFAULT_ENVIRONMENT "production"
 #define DEFAULT_CONFIG_FILE "/etc/puppetc/puppet.conf"
 #define AGENT_VERSION "0.1.0"
@@ -37,11 +40,14 @@ typedef struct {
     char *certname;
     const char *environment;
     const char *catalog_file;  /* Local catalog file to apply (for testing) */
+    const char *libdir;        /* Plugin library directory */
     bool verbose;
     bool noop;           /* No-op mode - don't apply changes */
     bool apply_catalog;  /* Actually apply resources */
     bool show_facts;     /* Just show facts, don't request catalog */
     bool show_catalog;   /* Show catalog JSON */
+    bool use_ruby;       /* Enable Ruby support */
+    bool pluginsync;     /* Enable pluginsync */
 } agent_config_t;
 
 /* ============================================================================
@@ -311,6 +317,7 @@ static void list_catalog_resources(const char *catalog_json) {
 
 static int run_agent(agent_config_t *config) {
     int result = 1;
+    agent_ruby_context_t *ruby_ctx = NULL;
 
     /* Initialize color output */
     color_init();
@@ -320,6 +327,41 @@ static int run_agent(agent_config_t *config) {
 
     /* Set server URL in environment for providers (e.g., file provider) */
     setenv("PUPPET_SERVER", config->server_url, 1);
+
+    /* Initialize Ruby if enabled */
+    if (config->use_ruby) {
+        print_info("Initializing Ruby (%s)...", agent_ruby_version());
+        ruby_ctx = agent_ruby_init(config->libdir);
+        if (!ruby_ctx) {
+            print_warning("Ruby initialization failed, continuing without Ruby support");
+        } else {
+            print_info("Ruby initialized");
+            /* Make Ruby available for providers */
+            provider_set_ruby_context(ruby_ctx);
+        }
+    }
+
+    /* Run pluginsync before fact collection */
+    if (config->pluginsync && !config->catalog_file) {
+        print_info("Running pluginsync...");
+        pluginsync_config_t ps_config = {
+            .server_url = config->server_url,
+            .libdir = config->libdir,
+            .environment = config->environment,
+            .verbose = config->verbose
+        };
+        pluginsync_result_t ps_result = {0};
+        if (pluginsync_run(&ps_config, &ps_result) == 0) {
+            print_info("Pluginsync complete: %d files synced", ps_result.files_downloaded);
+        } else {
+            print_warning("Pluginsync failed (continuing without plugins)");
+        }
+
+        /* Add libdir to Ruby load path if Ruby is active */
+        if (ruby_ctx) {
+            agent_ruby_add_loadpath(ruby_ctx, config->libdir);
+        }
+    }
 
     /* Collect facts */
     print_info("Collecting facts...");
@@ -333,7 +375,16 @@ static int run_agent(agent_config_t *config) {
     if (facter_collect(facts) != 0) {
         print_error("Failed to collect facts");
         facter_destroy(facts);
+        if (ruby_ctx) agent_ruby_cleanup(ruby_ctx);
         return 1;
+    }
+
+    /* Run custom Ruby facts if available */
+    if (ruby_ctx) {
+        int custom_facts = agent_ruby_run_custom_facts(ruby_ctx, facts);
+        if (custom_facts > 0) {
+            print_info("Custom Ruby facts: %d", custom_facts);
+        }
     }
 
     /* Get certname from facts if not specified */
@@ -486,6 +537,12 @@ static int run_agent(agent_config_t *config) {
     puppet_free(catalog_json);
     facter_destroy(facts);
 
+    /* Cleanup Ruby */
+    if (ruby_ctx) {
+        provider_set_ruby_context(NULL);  /* Clear provider fallback */
+        agent_ruby_cleanup(ruby_ctx);
+    }
+
     return result;
 }
 
@@ -502,10 +559,15 @@ static void print_usage(const char *prog) {
     printf("      --certname NAME   Node certificate name (default: hostname)\n");
     printf("  -e, --environment ENV Environment (default: %s)\n", DEFAULT_ENVIRONMENT);
     printf("  -F, --catalog-file FILE  Apply a local catalog JSON file\n");
+    printf("  -L, --libdir PATH     Plugin library directory (default: %s)\n", DEFAULT_LIBDIR);
     printf("  -a, --apply           Apply catalog resources (requires root for some)\n");
     printf("  -n, --noop            No-op mode - simulate but don't apply\n");
     printf("  -f, --facts           Just show collected facts\n");
     printf("  -C, --catalog         Show full catalog JSON\n");
+    printf("      --ruby            Enable Ruby support for custom types/facts\n");
+    printf("      --no-ruby         Disable Ruby support (default)\n");
+    printf("      --pluginsync      Enable pluginsync to fetch modules' lib/ files\n");
+    printf("      --no-pluginsync   Disable pluginsync (default)\n");
     printf("  -v, --verbose         Verbose output\n");
     printf("  -h, --help            Show this help\n");
     printf("\nConfig file sections:\n");
@@ -530,23 +592,40 @@ int main(int argc, char *argv[]) {
         .certname = NULL,
         .environment = NULL,
         .catalog_file = NULL,
+        .libdir = DEFAULT_LIBDIR,
         .verbose = false,
         .noop = false,
         .apply_catalog = false,
         .show_facts = false,
-        .show_catalog = false
+        .show_catalog = false,
+        .use_ruby = false,
+        .pluginsync = false
+    };
+
+    /* Long option IDs for options without short form */
+    enum {
+        OPT_CERTNAME = 256,
+        OPT_RUBY,
+        OPT_NO_RUBY,
+        OPT_PLUGINSYNC,
+        OPT_NO_PLUGINSYNC
     };
 
     static struct option long_options[] = {
         {"config", required_argument, 0, 'c'},
         {"server", required_argument, 0, 's'},
-        {"certname", required_argument, 0, 'N'},
+        {"certname", required_argument, 0, OPT_CERTNAME},
         {"environment", required_argument, 0, 'e'},
         {"catalog-file", required_argument, 0, 'F'},
+        {"libdir", required_argument, 0, 'L'},
         {"apply", no_argument, 0, 'a'},
         {"noop", no_argument, 0, 'n'},
         {"facts", no_argument, 0, 'f'},
         {"catalog", no_argument, 0, 'C'},
+        {"ruby", no_argument, 0, OPT_RUBY},
+        {"no-ruby", no_argument, 0, OPT_NO_RUBY},
+        {"pluginsync", no_argument, 0, OPT_PLUGINSYNC},
+        {"no-pluginsync", no_argument, 0, OPT_NO_PLUGINSYNC},
         {"verbose", no_argument, 0, 'v'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
@@ -555,7 +634,7 @@ int main(int argc, char *argv[]) {
     /* First pass: find config file option */
     int opt;
     optind = 1;
-    while ((opt = getopt_long(argc, argv, "c:s:N:e:F:anfCvh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:s:e:F:L:anfCvh", long_options, NULL)) != -1) {
         if (opt == 'c') {
             config_file = optarg;
             break;
@@ -594,8 +673,14 @@ int main(int argc, char *argv[]) {
         if (!val) val = config_get_string(file_config, "main", "environment", NULL);
         if (val) config.environment = val;
 
+        val = config_get_string(file_config, "agent", "libdir", NULL);
+        if (!val) val = config_get_string(file_config, "main", "libdir", NULL);
+        if (val) config.libdir = val;
+
         config.noop = config_get_bool(file_config, "agent", "noop", false);
         config.verbose = config_get_bool(file_config, "agent", "verbose", false);
+        config.use_ruby = config_get_bool(file_config, "agent", "ruby", false);
+        config.pluginsync = config_get_bool(file_config, "agent", "pluginsync", false);
     }
 
     /* Apply environment variables (medium priority) */
@@ -610,7 +695,7 @@ int main(int argc, char *argv[]) {
 
     /* Second pass: command-line options (highest priority) */
     optind = 1;
-    while ((opt = getopt_long(argc, argv, "c:s:N:e:F:anfCvh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:s:e:F:L:anfCvh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'c':
                 /* Already handled */
@@ -618,7 +703,7 @@ int main(int argc, char *argv[]) {
             case 's':
                 config.server_url = optarg;
                 break;
-            case 'N':
+            case OPT_CERTNAME:
                 if (config.certname) puppet_free(config.certname);
                 config.certname = puppet_strdup(optarg);
                 break;
@@ -627,6 +712,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'F':
                 config.catalog_file = optarg;
+                break;
+            case 'L':
+                config.libdir = optarg;
                 break;
             case 'a':
                 config.apply_catalog = true;
@@ -639,6 +727,18 @@ int main(int argc, char *argv[]) {
                 break;
             case 'C':
                 config.show_catalog = true;
+                break;
+            case OPT_RUBY:
+                config.use_ruby = true;
+                break;
+            case OPT_NO_RUBY:
+                config.use_ruby = false;
+                break;
+            case OPT_PLUGINSYNC:
+                config.pluginsync = true;
+                break;
+            case OPT_NO_PLUGINSYNC:
+                config.pluginsync = false;
                 break;
             case 'v':
                 config.verbose = true;

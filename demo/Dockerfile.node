@@ -20,12 +20,14 @@ RUN mkdir -p /packages && mv ../*.deb /packages/ 2>/dev/null || true
 # Final image with systemd support
 FROM antmelekhin/docker-systemd:debian-12
 
-# Install runtime dependencies
+# Install runtime dependencies (including Ruby for custom types/providers)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4 \
     ca-certificates \
     curl \
     procps \
+    ruby \
+    libruby \
     && rm -rf /var/lib/apt/lists/*
 
 # Install puppetc-agent packages
@@ -38,6 +40,10 @@ RUN dpkg -i /tmp/libpuppetc-common0_*.deb \
             /tmp/puppetc-agent_*.deb && \
     rm -rf /tmp/*.deb
 
+# Copy mysql module lib files for Ruby providers
+COPY demo/modules/mysql/lib /var/lib/puppetc/lib/
+COPY demo/modules/stdlib/lib /var/lib/puppetc/lib/
+
 # Create a systemd service that runs puppetc-agent on boot
 # Note: The service reads PUPPET_SERVER from /etc/default/puppetc-agent
 RUN echo '[Unit]\n\
@@ -48,7 +54,7 @@ After=network.target\n\
 Type=oneshot\n\
 EnvironmentFile=-/etc/default/puppetc-agent\n\
 ExecStartPre=/bin/sleep 3\n\
-ExecStart=/usr/bin/puppetc-agent -a -v\n\
+ExecStart=/usr/bin/puppetc-agent -a -v --ruby --libdir /var/lib/puppetc/lib\n\
 RemainAfterExit=yes\n\
 \n\
 [Install]\n\

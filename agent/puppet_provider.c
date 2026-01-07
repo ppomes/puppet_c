@@ -13,6 +13,7 @@
 #include <stdarg.h>
 
 #include "puppet_provider.h"
+#include "puppet_agent_ruby.h"
 
 #define MAX_PROVIDERS 64
 
@@ -23,6 +24,16 @@ static char *evaluate_deferred(json_value_t *deferred_obj);
 static const provider_t *providers[MAX_PROVIDERS];
 static size_t provider_count = 0;
 static os_family_t current_os_family = OS_FAMILY_UNKNOWN;
+
+/* Global Ruby context for provider fallback (set by agent) */
+static agent_ruby_context_t *ruby_provider_ctx = NULL;
+
+/**
+ * @brief Set the Ruby context for provider fallback
+ */
+void provider_set_ruby_context(agent_ruby_context_t *ctx) {
+    ruby_provider_ctx = ctx;
+}
 
 /* ============================================================================
  * OS Family Functions
@@ -258,51 +269,124 @@ apply_result_t resource_apply(const resource_t *resource, apply_context_t *ctx) 
     if (!resource || !ctx) return APPLY_FAILED;
 
     const provider_t *provider = provider_get(resource->type);
-    if (!provider) {
-        apply_context_set_error(ctx, "No provider for resource type: %s", resource->type);
-        return APPLY_FAILED;
+
+    /* Try C provider first */
+    if (provider) {
+        if (ctx->verbose) {
+            fprintf(stderr, "[APPLY] %s[%s] using C provider '%s'\n",
+                    resource->type, resource->title, provider->name);
+        }
+
+        apply_result_t result = provider->apply(resource, ctx);
+
+        switch (result) {
+            case APPLY_CHANGED:
+                ctx->changes_made++;
+                break;
+            case APPLY_FAILED:
+                ctx->failures++;
+                break;
+            default:
+                break;
+        }
+
+        return result;
     }
 
-    if (ctx->verbose) {
-        fprintf(stderr, "[APPLY] %s[%s] using provider '%s'\n",
-                resource->type, resource->title, provider->name);
+    /* Fallback to Ruby provider if available */
+    if (ruby_provider_ctx && agent_ruby_has_type(ruby_provider_ctx, resource->type)) {
+        if (ctx->verbose) {
+            fprintf(stderr, "[APPLY] %s[%s] using Ruby provider\n",
+                    resource->type, resource->title);
+        }
+
+        /* Determine action based on ensure parameter */
+        const char *ensure = resource_get_param(resource, "ensure");
+        const char *action = "create";
+        if (ensure && (strcmp(ensure, "absent") == 0 || strcmp(ensure, "purged") == 0)) {
+            action = "destroy";
+        }
+
+        ruby_apply_result_t ruby_result = agent_ruby_call_provider(
+            ruby_provider_ctx,
+            resource->type,
+            NULL,  /* Use default provider */
+            action,
+            resource,
+            ctx
+        );
+
+        apply_result_t result;
+        switch (ruby_result) {
+            case RUBY_APPLY_SUCCESS:
+                result = APPLY_SUCCESS;
+                break;
+            case RUBY_APPLY_CHANGED:
+                result = APPLY_CHANGED;
+                ctx->changes_made++;
+                break;
+            case RUBY_APPLY_SKIPPED:
+            case RUBY_APPLY_NOOP:
+                result = APPLY_NOOP;
+                break;
+            case RUBY_APPLY_FAILED:
+            default:
+                result = APPLY_FAILED;
+                ctx->failures++;
+                break;
+        }
+
+        return result;
     }
 
-    apply_result_t result = provider->apply(resource, ctx);
-
-    switch (result) {
-        case APPLY_CHANGED:
-            ctx->changes_made++;
-            break;
-        case APPLY_FAILED:
-            ctx->failures++;
-            break;
-        default:
-            break;
-    }
-
-    return result;
+    /* No provider available */
+    apply_context_set_error(ctx, "No provider for resource type: %s", resource->type);
+    return APPLY_FAILED;
 }
 
 apply_result_t resource_refresh(const resource_t *resource, apply_context_t *ctx) {
     if (!resource || !ctx) return APPLY_FAILED;
 
     const provider_t *provider = provider_get(resource->type);
-    if (!provider) {
-        apply_context_set_error(ctx, "No provider for type: %s", resource->type);
-        return APPLY_FAILED;
-    }
 
-    /* If provider has no refresh function, it doesn't support refresh */
-    if (!provider->refresh) {
-        if (ctx->verbose) {
-            print_info("%s[%s]: No refresh action (provider doesn't support refresh)",
-                      resource->type, resource->title);
+    /* Try C provider first */
+    if (provider) {
+        /* If provider has no refresh function, it doesn't support refresh */
+        if (!provider->refresh) {
+            if (ctx->verbose) {
+                print_info("%s[%s]: No refresh action (C provider doesn't support refresh)",
+                          resource->type, resource->title);
+            }
+            return APPLY_NOOP;
         }
-        return APPLY_NOOP;
+        return provider->refresh(resource, ctx);
     }
 
-    return provider->refresh(resource, ctx);
+    /* Fallback to Ruby provider */
+    if (ruby_provider_ctx && agent_ruby_has_type(ruby_provider_ctx, resource->type)) {
+        ruby_apply_result_t ruby_result = agent_ruby_call_provider(
+            ruby_provider_ctx,
+            resource->type,
+            NULL,
+            "refresh",
+            resource,
+            ctx
+        );
+
+        switch (ruby_result) {
+            case RUBY_APPLY_SUCCESS:
+            case RUBY_APPLY_CHANGED:
+                return APPLY_CHANGED;
+            case RUBY_APPLY_SKIPPED:
+            case RUBY_APPLY_NOOP:
+                return APPLY_NOOP;
+            default:
+                return APPLY_FAILED;
+        }
+    }
+
+    apply_context_set_error(ctx, "No provider for type: %s", resource->type);
+    return APPLY_FAILED;
 }
 
 /* ============================================================================
