@@ -801,9 +801,6 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "mysql::normalise_and_deepmerge") == 0) {
                 return puppet_func_mysql_normalise_and_deepmerge(&expr->data.funcall.args, env);
             }
-            else if (strcmp(func_name, "mysql::password") == 0) {
-                return puppet_func_mysql_password(&expr->data.funcall.args, env);
-            }
             // Shell/string escaping functions
             else if (strcmp(func_name, "stdlib::shell_escape") == 0 ||
                      strcmp(func_name, "shell_escape") == 0) {

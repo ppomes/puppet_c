@@ -13,7 +13,6 @@
 #include <stdarg.h>
 
 #include "puppet_provider.h"
-#include <openssl/sha.h>
 
 #define MAX_PROVIDERS 64
 
@@ -62,7 +61,8 @@ const char *os_family_to_string(os_family_t family) {
  * @brief Evaluate a Deferred function call
  *
  * Handles Deferred values in catalog parameters by evaluating the
- * function at apply time. Currently supports mysql::password.
+ * function at apply time. Currently returns a placeholder until
+ * Ruby support is added to the agent.
  *
  * @param deferred_obj JSON object with __ptype: "Deferred"
  * @return Evaluated result as string, or NULL on error
@@ -80,61 +80,8 @@ static char *evaluate_deferred(json_value_t *deferred_obj) {
     if (!name_val || !json_is_string(name_val)) return NULL;
     const char *func_name = json_get_string(name_val);
 
-    /* Get arguments array */
-    json_value_t *args = json_object_get(deferred_obj, "arguments");
-
-    /* Handle mysql::password function */
-    if (strcmp(func_name, "mysql::password") == 0) {
-        if (!args || !json_is_array(args) || args->data.array.count < 1) {
-            return puppet_strdup("");
-        }
-
-        json_value_t *password_val = args->data.array.elements[0];
-        if (!password_val || !json_is_string(password_val)) {
-            return puppet_strdup("");
-        }
-
-        const char *password = json_get_string(password_val);
-        size_t password_len = strlen(password);
-
-        /* Empty password returns empty string */
-        if (password_len == 0) {
-            return puppet_strdup("");
-        }
-
-        /* Check if already hashed: *[A-F0-9]{40} */
-        if (password_len == 41 && password[0] == '*') {
-            bool is_hex = true;
-            for (size_t i = 1; i < 41 && is_hex; i++) {
-                char c = password[i];
-                if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))) {
-                    is_hex = false;
-                }
-            }
-            if (is_hex) {
-                return puppet_strdup(password);
-            }
-        }
-
-        /* Compute MySQL password hash: *SHA1(SHA1(password)) */
-        unsigned char sha1_first[SHA_DIGEST_LENGTH];
-        unsigned char sha1_second[SHA_DIGEST_LENGTH];
-
-        SHA1((unsigned char *)password, password_len, sha1_first);
-        SHA1(sha1_first, SHA_DIGEST_LENGTH, sha1_second);
-
-        /* Format as *HEX uppercase */
-        char *result = puppet_malloc(42);
-        result[0] = '*';
-        for (int i = 0; i < SHA_DIGEST_LENGTH; i++) {
-            sprintf(&result[1 + i * 2], "%02X", sha1_second[i]);
-        }
-        result[41] = '\0';
-
-        return result;
-    }
-
-    /* Unknown Deferred function - return placeholder */
+    /* TODO: Once Ruby support is added to the agent, call the actual
+     * Ruby function here. For now, return a placeholder. */
     char buf[256];
     snprintf(buf, sizeof(buf), "<Deferred:%s>", func_name);
     return puppet_strdup(buf);
