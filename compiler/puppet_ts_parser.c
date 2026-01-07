@@ -379,6 +379,7 @@ static puppet_expr_t *convert_binary(TSNode node, const char *source) {
     puppet_expr_t *result = NULL;
     puppet_expr_t *pending_operand = NULL;
     puppet_expr_t *access_accumulator = NULL;  /* For orphaned access nodes */
+    puppet_expr_t *pending_type_ref = NULL;    /* For type + access pattern */
     puppet_binop_t pending_op = PUPPET_OP_ADD;
     bool have_op = false;
 
@@ -390,9 +391,36 @@ static puppet_expr_t *convert_binary(TSNode node, const char *source) {
         if (strcmp(type, "comment") == 0) continue;
 
         if (ts_node_is_named(child)) {
+            /* Check for type node - start of Type[X] reference */
+            if (strcmp(type, "type") == 0) {
+                char *type_str = node_text(child, source);
+                pending_type_ref = puppet_calloc(1, sizeof(puppet_expr_t));
+                pending_type_ref->type = PUPPET_EXPR_RESOURCE_REF;
+                pending_type_ref->loc = node_location(child);
+                pending_type_ref->data.resource_ref.type = puppet_string_create(type_str);
+                puppet_free(type_str);
+                continue;
+            }
+
             /* Check if this is an access node that should combine with preceding expression */
             if (strcmp(type, "access") == 0) {
-                if (pending_operand) {
+                if (pending_type_ref) {
+                    /* Complete Type[X] resource reference */
+                    TSNode access_elem = find_child(child, "access_element");
+                    if (!ts_node_is_null(access_elem)) {
+                        TSNode value_node = ts_node_named_child(access_elem, 0);
+                        pending_type_ref->data.resource_ref.title = convert_expression(value_node, source);
+                    } else {
+                        pending_type_ref->data.resource_ref.title = convert_expression(child, source);
+                    }
+                    /* Use the completed reference as the operand */
+                    if (have_op && !pending_operand) {
+                        pending_operand = pending_type_ref;
+                    } else if (!result) {
+                        result = pending_type_ref;
+                    }
+                    pending_type_ref = NULL;
+                } else if (pending_operand) {
                     /* Combine with pending operand to form index expression */
                     pending_operand = build_index_expr(pending_operand, child, source);
                 } else if (access_accumulator) {
@@ -753,19 +781,27 @@ static puppet_expr_t *convert_funcall(TSNode node, const char *source) {
     expr->type = PUPPET_EXPR_FUNCALL;
     expr->loc = node_location(node);
 
-    /* Find function name and arguments */
+    /* First check all children (including anonymous) for function name
+     * This handles the 'type' keyword which is anonymous in the grammar */
+    uint32_t total = ts_node_child_count(node);
+    for (uint32_t i = 0; i < total && expr->data.funcall.name.data == NULL; i++) {
+        TSNode child = ts_node_child(node, i);
+        const char *type = ts_node_type(child);
+        /* Check for 'type' keyword (anonymous node) or named 'name'/'type' nodes */
+        if (strcmp(type, "type") == 0 || strcmp(type, "name") == 0) {
+            char *name = node_text(child, source);
+            expr->data.funcall.name = puppet_string_create(name);
+            puppet_free(name);
+        }
+    }
+
+    /* Find arguments and lambda from named children */
     uint32_t count = ts_node_named_child_count(node);
     for (uint32_t i = 0; i < count; i++) {
         TSNode child = ts_node_named_child(node, i);
         const char *type = ts_node_type(child);
 
-        if ((strcmp(type, "name") == 0 || strcmp(type, "type") == 0) &&
-            expr->data.funcall.name.data == NULL) {
-            /* Handle both regular functions (name) and type constructors (type) */
-            char *name = node_text(child, source);
-            expr->data.funcall.name = puppet_string_create(name);
-            puppet_free(name);
-        } else if (strcmp(type, "argument_list") == 0) {
+        if (strcmp(type, "argument_list") == 0) {
             uint32_t arg_count = ts_node_named_child_count(child);
             expr->data.funcall.args.exprs = puppet_calloc(arg_count, sizeof(puppet_expr_t*));
             expr->data.funcall.args.count = 0;
@@ -846,10 +882,11 @@ static puppet_lambda_t *convert_lambda(TSNode node, const char *source) {
             uint32_t block_children = ts_node_named_child_count(child);
             if (block_children == 1) {
                 TSNode stmt_node = ts_node_named_child(child, 0);
-                /* Check if the statement is just an expression (binary, variable, etc.) */
                 const char *stmt_type = ts_node_type(stmt_node);
                 if (strcmp(stmt_type, "statement") == 0) {
                     uint32_t stmt_children = ts_node_named_child_count(stmt_node);
+
+                    /* Single child: check if it's a simple expression type */
                     if (stmt_children == 1) {
                         TSNode inner = ts_node_named_child(stmt_node, 0);
                         const char *inner_type = ts_node_type(inner);
@@ -860,8 +897,29 @@ static puppet_lambda_t *convert_lambda(TSNode node, const char *source) {
                             strcmp(inner_type, "function_call") == 0 ||
                             strcmp(inner_type, "unary") == 0 ||
                             strcmp(inner_type, "array") == 0 ||
-                            strcmp(inner_type, "hash") == 0) {
+                            strcmp(inner_type, "hash") == 0 ||
+                            strcmp(inner_type, "double_quoted_string") == 0 ||
+                            strcmp(inner_type, "single_quoted_string") == 0) {
                             lambda->expr_body = convert_expression(inner, source);
+                            continue;
+                        }
+                    }
+
+                    /* Multiple children: check for variable + access pattern ($v[0]) */
+                    if (stmt_children >= 2) {
+                        TSNode first = ts_node_named_child(stmt_node, 0);
+                        TSNode second = ts_node_named_child(stmt_node, 1);
+                        if (node_is(first, "variable") && node_is(second, "access")) {
+                            /* Build index expression from variable and access */
+                            puppet_expr_t *var_expr = convert_variable(first, source);
+                            /* Chain all access nodes */
+                            for (uint32_t j = 1; j < stmt_children; j++) {
+                                TSNode acc = ts_node_named_child(stmt_node, j);
+                                if (node_is(acc, "access")) {
+                                    var_expr = build_index_expr(var_expr, acc, source);
+                                }
+                            }
+                            lambda->expr_body = var_expr;
                             continue;
                         }
                     }
@@ -1293,6 +1351,7 @@ static puppet_stmt_t *convert_assignment(TSNode node, const char *source) {
 
     bool lhs_set = false;
     puppet_expr_t *rhs_expr = NULL;
+    puppet_expr_t *pending_type_ref = NULL;  /* For type + access pattern */
 
     uint32_t count = ts_node_named_child_count(node);
     for (uint32_t i = 0; i < count; i++) {
@@ -1313,15 +1372,47 @@ static puppet_stmt_t *convert_assignment(TSNode node, const char *source) {
                 /* Subsequent variable is part of the RHS expression */
                 rhs_expr = convert_expression(child, source);
             }
+        } else if (strcmp(type, "type") == 0 && !rhs_expr) {
+            /* Type node - could be resource reference like Type[title] */
+            char *type_str = node_text(child, source);
+            pending_type_ref = puppet_calloc(1, sizeof(puppet_expr_t));
+            pending_type_ref->type = PUPPET_EXPR_RESOURCE_REF;
+            pending_type_ref->loc = node_location(child);
+            pending_type_ref->data.resource_ref.type = puppet_string_create(type_str);
+            puppet_free(type_str);
         } else if (strcmp(type, "access") == 0) {
-            /* Build index expression: rhs_expr[access] */
-            if (rhs_expr) {
+            if (pending_type_ref) {
+                /* Complete the resource reference: Type[title] */
+                TSNode access_elem = find_child(child, "access_element");
+                if (!ts_node_is_null(access_elem)) {
+                    TSNode value_node = ts_node_named_child(access_elem, 0);
+                    pending_type_ref->data.resource_ref.title = convert_expression(value_node, source);
+                } else {
+                    pending_type_ref->data.resource_ref.title = convert_expression(child, source);
+                }
+                rhs_expr = pending_type_ref;
+                pending_type_ref = NULL;
+            } else if (rhs_expr) {
+                /* Build index expression: rhs_expr[access] */
                 rhs_expr = build_index_expr(rhs_expr, child, source);
             }
         } else {
             /* Other expression types */
             rhs_expr = convert_expression(child, source);
         }
+    }
+
+    /* Clean up if we had a pending type ref without access */
+    if (pending_type_ref && !rhs_expr) {
+        /* Just a bare type name - convert to string value */
+        puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
+        expr->type = PUPPET_EXPR_VALUE;
+        expr->loc = pending_type_ref->loc;
+        expr->data.value = puppet_value_create_string(
+            pending_type_ref->data.resource_ref.type.data,
+            pending_type_ref->data.resource_ref.type.len);
+        puppet_free(pending_type_ref);
+        rhs_expr = expr;
     }
 
     stmt->data.assignment.value = rhs_expr;

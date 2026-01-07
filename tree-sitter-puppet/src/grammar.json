@@ -1581,6 +1581,10 @@
               {
                 "type": "SYMBOL",
                 "name": "type"
+              },
+              {
+                "type": "STRING",
+                "value": "type"
               }
             ]
           },

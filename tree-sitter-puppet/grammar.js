@@ -296,7 +296,7 @@ module.exports = grammar({
     // Call Function
 
     function_call: $ => prec.right(PREC.LOW, seq(
-      choice($.name, $.type),
+      choice($.name, $.type, 'type'),  // 'type' is reserved but valid as function
       '(',
       optional(alias($.argument_list_comma, $.argument_list)),
       ')',

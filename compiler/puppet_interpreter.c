@@ -1666,8 +1666,23 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
             break;
 
         case PUPPET_OP_MATCH:
-            /* Regex match =~ */
+            /* Regex match =~ or type match */
             if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_STRING) {
+                const char *rhs = right->data.string.data;
+                /* Check for type comparison: type($x) =~ Type[Hash]
+                 * Left side is type name like "Hash", right is "Type[Hash]" */
+                if (strncmp(rhs, "Type[", 5) == 0 && rhs[strlen(rhs) - 1] == ']') {
+                    /* Extract the type name from Type[X] */
+                    size_t type_name_len = strlen(rhs) - 6;  /* -5 for "Type[" and -1 for "]" */
+                    const char *type_name = rhs + 5;
+                    /* Compare left side with extracted type name */
+                    if (strncmp(left->data.string.data, type_name, type_name_len) == 0 &&
+                        left->data.string.data[type_name_len] == '\0') {
+                        return puppet_value_create_bool(true);
+                    }
+                    return puppet_value_create_bool(false);
+                }
+                /* Regular regex match */
                 regex_t regex;
                 int ret = regcomp(&regex, right->data.string.data, REG_EXTENDED | REG_NOSUB);
                 if (ret == 0) {
@@ -1679,8 +1694,20 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
             return puppet_value_create_bool(false);
 
         case PUPPET_OP_NOT_MATCH:
-            /* Regex non-match !~ */
+            /* Regex non-match !~ or type non-match */
             if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_STRING) {
+                const char *rhs = right->data.string.data;
+                /* Check for type comparison: type($x) !~ Type[Hash] */
+                if (strncmp(rhs, "Type[", 5) == 0 && rhs[strlen(rhs) - 1] == ']') {
+                    size_t type_name_len = strlen(rhs) - 6;
+                    const char *type_name = rhs + 5;
+                    if (strncmp(left->data.string.data, type_name, type_name_len) == 0 &&
+                        left->data.string.data[type_name_len] == '\0') {
+                        return puppet_value_create_bool(false);
+                    }
+                    return puppet_value_create_bool(true);
+                }
+                /* Regular regex non-match */
                 regex_t regex;
                 int ret = regcomp(&regex, right->data.string.data, REG_EXTENDED | REG_NOSUB);
                 if (ret == 0) {
