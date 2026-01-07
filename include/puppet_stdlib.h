@@ -72,6 +72,7 @@ puppet_value_t *puppet_func_notice(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_info(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_warning(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_err(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_crit(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_debug(puppet_expr_list_t *args, puppet_env_t *env);
 
 // Resource functions

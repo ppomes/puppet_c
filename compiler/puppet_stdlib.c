@@ -384,6 +384,18 @@ puppet_value_t *puppet_func_err(puppet_expr_list_t *args, puppet_env_t *env) {
 }
 
 /**
+ * crit() - Log a critical message (but continue compilation)
+ *
+ * Usage: crit("Critical configuration error")
+ */
+puppet_value_t *puppet_func_crit(puppet_expr_list_t *args, puppet_env_t *env) {
+    char *message = concat_args_to_message(args, env);
+    puppet_log_loc(PUPPET_LOG_CRITICAL, get_args_location(args), "%s", message);
+    puppet_free(message);
+    return puppet_value_create_undef();
+}
+
+/**
  * debug() - Log a debug message
  * 
  * Usage: debug("Variable value: ", $myvar)

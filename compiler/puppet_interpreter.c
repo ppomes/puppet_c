@@ -693,6 +693,9 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "err") == 0) {
                 return puppet_func_err(&expr->data.funcall.args, env);
             }
+            else if (strcmp(func_name, "crit") == 0) {
+                return puppet_func_crit(&expr->data.funcall.args, env);
+            }
             else if (strcmp(func_name, "debug") == 0) {
                 return puppet_func_debug(&expr->data.funcall.args, env);
             }
