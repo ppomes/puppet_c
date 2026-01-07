@@ -229,4 +229,7 @@ puppet_value_t *puppet_func_inline_template(puppet_expr_list_t *args, puppet_env
 // Utility function to convert values to strings for logging
 char *puppet_value_to_display_string(puppet_value_t *value);
 
+// Value truthiness check (for conditionals)
+bool puppet_value_is_truthy(puppet_value_t *value);
+
 #endif

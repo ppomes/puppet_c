@@ -771,168 +771,345 @@ static char *read_file_contents(const char *path) {
  * - <%# comment %>      - comment
  * - <%- / -%>           - trim whitespace variants
  */
+/* Forward declarations for EPP tree-sitter support */
+#include "puppet_ts_parser.h"
+#include "puppet_interpreter.h"
+
+/* Helper: append string to EPP output buffer */
+static void epp_append(char **output, size_t *out_len, size_t *out_capacity,
+                       const char *str, size_t len) {
+    while (*out_len + len + 1 > *out_capacity) {
+        *out_capacity *= 2;
+        *output = puppet_realloc(*output, *out_capacity);
+    }
+    memcpy(*output + *out_len, str, len);
+    *out_len += len;
+    (*output)[*out_len] = '\0';
+}
+
+/* Helper: trim trailing whitespace from output */
+static void epp_trim_trailing(char *output, size_t *out_len) {
+    while (*out_len > 0 && (output[*out_len - 1] == ' ' || output[*out_len - 1] == '\t')) {
+        (*out_len)--;
+    }
+    output[*out_len] = '\0';
+}
+
+/* Forward declaration for recursive EPP rendering */
+static char *puppet_epp_render_range(const char *start, const char *end,
+                                     puppet_hash_t *params, puppet_env_t *env);
+
+/**
+ * Render EPP template with full tree-sitter support
+ *
+ * Handles:
+ * - <%= expr %> : Output expression result
+ * - <% code %>  : Execute Puppet code (if, each, etc.)
+ * - <%# comment %> : Comments (ignored)
+ * - <%- / -%> : Whitespace trimming variants
+ */
 static char *puppet_epp_render(const char *content, puppet_hash_t *params, puppet_env_t *env) {
     if (!content) return NULL;
 
-    // Output buffer
-    size_t out_capacity = strlen(content) * 2;
+    /* Params are already set up in env scope by puppet_func_epp */
+    return puppet_epp_render_range(content, content + strlen(content), params, env);
+}
+
+static char *puppet_epp_render_range(const char *start, const char *end,
+                                     puppet_hash_t *params, puppet_env_t *env) {
+    size_t out_capacity = (end - start) * 2 + 1;
     size_t out_len = 0;
     char *output = puppet_malloc(out_capacity);
     output[0] = '\0';
 
-    const char *p = content;
+    const char *p = start;
 
-    // Skip parameter header if present: <%- | ... | -%>
-    if (strncmp(p, "<%-", 3) == 0 || strncmp(p, "<%", 2) == 0) {
-        // Find the pipe that starts params
-        const char *pipe1 = strchr(p + 2, '|');
-        if (pipe1) {
-            // Find closing pipe and tag
-            const char *pipe2 = strchr(pipe1 + 1, '|');
+    /* Skip parameter header if present: <%- | ... | -%> or <% | ... | %>
+     * The | must appear at the start (after optional whitespace), not after code */
+    if (p < end && (strncmp(p, "<%-", 3) == 0 || strncmp(p, "<%", 2) == 0)) {
+        const char *s = p + (p[2] == '-' ? 3 : 2);
+        /* Skip whitespace */
+        while (s < end && (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r')) s++;
+        /* Parameter header starts with | */
+        if (s < end && *s == '|') {
+            const char *pipe1 = s;
+            const char *pipe2 = NULL;
+            for (s = pipe1 + 1; s < end && *s != '%'; s++) {
+                if (*s == '|') { pipe2 = s; break; }
+            }
             if (pipe2) {
-                // Find -%> or %>
-                const char *end = strstr(pipe2, "-%>");
-                if (end) {
-                    p = end + 3;
-                    // Skip any leading newline after header
-                    while (*p == '\n' || *p == '\r') p++;
+                const char *tag_end = strstr(pipe2, "-%>");
+                if (tag_end && tag_end < end) {
+                    p = tag_end + 3;
+                    while (p < end && (*p == '\n' || *p == '\r')) p++;
                 } else {
-                    end = strstr(pipe2, "%>");
-                    if (end) {
-                        p = end + 2;
-                        while (*p == '\n' || *p == '\r') p++;
+                    tag_end = strstr(pipe2, "%>");
+                    if (tag_end && tag_end < end) {
+                        p = tag_end + 2;
+                        while (p < end && (*p == '\n' || *p == '\r')) p++;
                     }
                 }
             }
         }
     }
 
-    // Process the template
-    while (*p) {
-        // Check for EPP tags
-        if (strncmp(p, "<%-", 3) == 0 || strncmp(p, "<%", 2) == 0) {
-            int trim_before = (strncmp(p, "<%-", 3) == 0);
+    while (p < end) {
+        /* Check for EPP tags */
+        if (p + 1 < end && p[0] == '<' && p[1] == '%') {
+            int trim_before = (p + 2 < end && p[2] == '-');
             const char *tag_start = p + (trim_before ? 3 : 2);
 
-            // Trim trailing whitespace before tag if <%-
-            if (trim_before && out_len > 0) {
-                while (out_len > 0 && (output[out_len-1] == ' ' || output[out_len-1] == '\t')) {
-                    out_len--;
-                }
+            if (trim_before) {
+                epp_trim_trailing(output, &out_len);
             }
 
-            // Skip whitespace after opening tag
-            while (*tag_start == ' ' || *tag_start == '\t') tag_start++;
+            while (tag_start < end && (*tag_start == ' ' || *tag_start == '\t')) tag_start++;
 
-            // Check for comment: <%# ... %>
+            /* Find closing tag */
+            const char *tag_end = strstr(tag_start, "%>");
+            if (!tag_end || tag_end >= end) {
+                /* Malformed - copy as-is */
+                epp_append(&output, &out_len, &out_capacity, p, 1);
+                p++;
+                continue;
+            }
+
+            int trim_after = (tag_end > tag_start && *(tag_end - 1) == '-');
+            const char *code_end = trim_after ? tag_end - 1 : tag_end;
+
+            /* Comment: <%# ... %> */
             if (*tag_start == '#') {
-                const char *end = strstr(tag_start, "%>");
-                if (end) {
-                    p = end + 2;
-                    if (*(end - 1) == '-') {
-                        // Trim following whitespace/newline
-                        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
-                    }
-                    continue;
+                p = tag_end + 2;
+                if (trim_after) {
+                    while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
                 }
+                continue;
             }
 
-            // Check for output tag: <%= ... %>
+            /* Output expression: <%= ... %> */
             if (*tag_start == '=') {
                 tag_start++;
-                while (*tag_start == ' ' || *tag_start == '\t') tag_start++;
+                while (tag_start < code_end && (*tag_start == ' ' || *tag_start == '\t')) tag_start++;
 
-                // Find closing tag
-                const char *end = strstr(tag_start, "%>");
-                if (!end) {
-                    // Malformed tag, output as-is
-                    goto copy_char;
+                /* Trim trailing whitespace from expression */
+                while (code_end > tag_start && (*(code_end-1) == ' ' || *(code_end-1) == '\t')) code_end--;
+
+                size_t expr_len = code_end - tag_start;
+                if (expr_len > 0) {
+                    /* Parse and evaluate expression using tree-sitter */
+                    puppet_expr_t *expr = puppet_ts_parse_expression(tag_start, expr_len);
+                    if (expr && env) {
+                        puppet_value_t *value = puppet_eval_expr(expr, env);
+                        if (value) {
+                            char *value_str = puppet_value_to_display_string(value);
+                            if (value_str) {
+                                epp_append(&output, &out_len, &out_capacity, value_str, strlen(value_str));
+                                puppet_free(value_str);
+                            }
+                            puppet_value_destroy(value);
+                        }
+                        puppet_expr_destroy(expr);
+                    } else if (expr) {
+                        puppet_expr_destroy(expr);
+                    }
                 }
 
-                int trim_after = (*(end - 1) == '-');
-                if (trim_after) end--;
-
-                // Extract expression (just variable for now)
-                size_t expr_len = end - tag_start;
-                // Trim trailing whitespace
-                while (expr_len > 0 && (tag_start[expr_len-1] == ' ' || tag_start[expr_len-1] == '\t' || tag_start[expr_len-1] == '-')) {
-                    expr_len--;
-                }
-
-                char *expr = puppet_malloc(expr_len + 1);
-                strncpy(expr, tag_start, expr_len);
-                expr[expr_len] = '\0';
-
-                // Evaluate variable
-                char *value_str = NULL;
-                if (expr[0] == '$') {
-                    const char *var_name = expr + 1;
-                    puppet_value_t *value = NULL;
-
-                    // First check params hash
-                    if (params) {
-                        value = puppet_hash_get(params, var_name, strlen(var_name));
-                    }
-
-                    // Then check environment scope
-                    if (!value && env) {
-                        value = puppet_variable_lookup_chain(env, var_name);
-                    }
-
-                    if (value) {
-                        value_str = puppet_value_to_display_string(value);
-                        // Don't destroy - we don't own it from hash/scope
-                    } else {
-                        value_str = puppet_strdup("");
-                    }
-                } else {
-                    // Just output the expression as-is (could be a literal)
-                    value_str = puppet_strdup(expr);
-                }
-
-                puppet_free(expr);
-
-                // Append value to output
-                if (value_str) {
-                    size_t value_len = strlen(value_str);
-                    while (out_len + value_len + 1 > out_capacity) {
-                        out_capacity *= 2;
-                        output = puppet_realloc(output, out_capacity);
-                    }
-                    memcpy(output + out_len, value_str, value_len);
-                    out_len += value_len;
-                    output[out_len] = '\0';
-                    puppet_free(value_str);
-                }
-
-                // Skip past closing tag
-                p = end + (trim_after ? 3 : 2);
+                p = tag_end + 2;
                 if (trim_after) {
-                    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+                    while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
                 }
                 continue;
             }
 
-            // Other code blocks <% ... %> - skip for now (control structures need full parser)
-            const char *end = strstr(tag_start, "%>");
-            if (end) {
-                int trim_after = (*(end - 1) == '-');
-                p = end + 2;
-                if (trim_after) {
-                    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+            /* Code block: <% ... %> */
+            /* Trim trailing whitespace from code */
+            while (code_end > tag_start && (*(code_end-1) == ' ' || *(code_end-1) == '\t')) code_end--;
+
+            size_t code_len = code_end - tag_start;
+            if (code_len > 0) {
+                char *code = puppet_malloc(code_len + 1);
+                memcpy(code, tag_start, code_len);
+                code[code_len] = '\0';
+
+                /* Check for 'each' iterator: EXPR.each |VAR| { */
+                char *each_pos = strstr(code, ".each");
+                if (each_pos) {
+                    /* Extract array expression */
+                    size_t arr_len = each_pos - code;
+                    char *arr_code = puppet_malloc(arr_len + 1);
+                    memcpy(arr_code, code, arr_len);
+                    arr_code[arr_len] = '\0';
+
+                    /* Find lambda parameter: |$var| or |$var, $idx| */
+                    char *pipe1 = strchr(each_pos, '|');
+                    char *pipe2 = pipe1 ? strchr(pipe1 + 1, '|') : NULL;
+                    char *var_name = NULL;
+                    if (pipe1 && pipe2) {
+                        pipe1++;
+                        while (*pipe1 == ' ' || *pipe1 == '$') pipe1++;
+                        size_t var_len = 0;
+                        while (pipe1[var_len] && pipe1[var_len] != '|' && pipe1[var_len] != ',' && pipe1[var_len] != ' ') var_len++;
+                        var_name = puppet_malloc(var_len + 1);
+                        memcpy(var_name, pipe1, var_len);
+                        var_name[var_len] = '\0';
+                    }
+
+                    /* Find matching closing brace - it's in a later tag: <% } %> */
+                    const char *body_start = tag_end + 2;
+                    if (trim_after) {
+                        while (body_start < end && (*body_start == ' ' || *body_start == '\t' || *body_start == '\n' || *body_start == '\r')) body_start++;
+                    }
+
+                    /* Find <% } %> that closes this each */
+                    int brace_depth = 1;
+                    const char *body_end = body_start;
+                    while (body_end < end && brace_depth > 0) {
+                        if (body_end + 1 < end && body_end[0] == '<' && body_end[1] == '%') {
+                            const char *inner_start = body_end + 2;
+                            if (*inner_start == '-') inner_start++;
+                            while (inner_start < end && (*inner_start == ' ' || *inner_start == '\t')) inner_start++;
+
+                            if (*inner_start == '}') {
+                                brace_depth--;
+                                if (brace_depth == 0) break;
+                            } else if (strchr(inner_start, '{')) {
+                                brace_depth++;
+                            }
+                        }
+                        body_end++;
+                    }
+
+                    /* Evaluate array expression */
+                    puppet_expr_t *arr_expr = puppet_ts_parse_expression(arr_code, strlen(arr_code));
+                    puppet_value_t *arr_val = NULL;
+                    if (arr_expr && env) {
+                        arr_val = puppet_eval_expr(arr_expr, env);
+                        puppet_expr_destroy(arr_expr);
+                    }
+                    puppet_free(arr_code);
+
+                    /* Iterate */
+                    if (arr_val && arr_val->type == PUPPET_VALUE_ARRAY && var_name) {
+                        for (size_t i = 0; i < arr_val->data.array->count; i++) {
+                            /* Set iteration variable */
+                            puppet_env_set_var(env, var_name, puppet_value_copy(arr_val->data.array->items[i]));
+
+                            /* Render body */
+                            char *body_output = puppet_epp_render_range(body_start, body_end, params, env);
+                            if (body_output) {
+                                epp_append(&output, &out_len, &out_capacity, body_output, strlen(body_output));
+                                puppet_free(body_output);
+                            }
+                        }
+                    }
+
+                    if (arr_val) puppet_value_destroy(arr_val);
+                    if (var_name) puppet_free(var_name);
+
+                    /* Skip past closing <% } %> */
+                    const char *close_tag = strstr(body_end, "%>");
+                    p = close_tag ? close_tag + 2 : end;
+                    while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
                 }
+                /* Check for 'if' conditional: if EXPR { */
+                else if (strncmp(code, "if ", 3) == 0 || strncmp(code, "if(", 3) == 0) {
+                    /* Extract condition */
+                    const char *cond_start = code + 2;
+                    while (*cond_start == ' ') cond_start++;
+                    const char *cond_end = strstr(cond_start, "{");
+                    if (!cond_end) cond_end = code + code_len;
+                    while (cond_end > cond_start && (*(cond_end-1) == ' ' || *(cond_end-1) == '{')) cond_end--;
+
+                    size_t cond_len = cond_end - cond_start;
+                    puppet_expr_t *cond_expr = puppet_ts_parse_expression(cond_start, cond_len);
+                    puppet_value_t *cond_val = NULL;
+                    if (cond_expr && env) {
+                        cond_val = puppet_eval_expr(cond_expr, env);
+                        puppet_expr_destroy(cond_expr);
+                    }
+
+                    /* Find body and closing <% } %> */
+                    const char *body_start = tag_end + 2;
+                    if (trim_after) {
+                        while (body_start < end && (*body_start == ' ' || *body_start == '\t' || *body_start == '\n' || *body_start == '\r')) body_start++;
+                    }
+
+                    int brace_depth = 1;
+                    const char *body_end = body_start;
+                    while (body_end < end && brace_depth > 0) {
+                        if (body_end + 1 < end && body_end[0] == '<' && body_end[1] == '%') {
+                            const char *inner_start = body_end + 2;
+                            if (*inner_start == '-') inner_start++;
+                            while (inner_start < end && (*inner_start == ' ' || *inner_start == '\t')) inner_start++;
+
+                            if (*inner_start == '}') {
+                                brace_depth--;
+                                if (brace_depth == 0) break;
+                            } else if (strchr(inner_start, '{')) {
+                                brace_depth++;
+                            }
+                        }
+                        body_end++;
+                    }
+
+                    /* Evaluate condition and render body if true */
+                    int is_true = 0;
+                    if (cond_val) {
+                        is_true = puppet_value_is_truthy(cond_val);
+                        puppet_value_destroy(cond_val);
+                    }
+
+                    if (is_true) {
+                        char *body_output = puppet_epp_render_range(body_start, body_end, params, env);
+                        if (body_output) {
+                            epp_append(&output, &out_len, &out_capacity, body_output, strlen(body_output));
+                            puppet_free(body_output);
+                        }
+                    }
+
+                    /* Skip past closing <% } %> */
+                    const char *close_tag = strstr(body_end, "%>");
+                    p = close_tag ? close_tag + 2 : end;
+                    while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+                }
+                /* Plain closing brace - skip */
+                else if (code[0] == '}') {
+                    p = tag_end + 2;
+                    if (trim_after) {
+                        while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+                    }
+                }
+                /* Other code - try to execute as statements */
+                else {
+                    puppet_stmt_list_t *stmts = puppet_ts_parse_string(code, code_len);
+                    if (stmts && env) {
+                        puppet_exec_stmt_list(stmts, env);
+                        for (size_t i = 0; i < stmts->count; i++) {
+                            puppet_stmt_destroy(stmts->stmts[i]);
+                        }
+                        puppet_free(stmts->stmts);
+                        puppet_free(stmts);
+                    }
+                    p = tag_end + 2;
+                    if (trim_after) {
+                        while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+                    }
+                }
+
+                puppet_free(code);
                 continue;
             }
+
+            p = tag_end + 2;
+            if (trim_after) {
+                while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+            }
+            continue;
         }
 
-copy_char:
-        // Copy regular character
-        if (out_len + 2 > out_capacity) {
-            out_capacity *= 2;
-            output = puppet_realloc(output, out_capacity);
-        }
-        output[out_len++] = *p++;
-        output[out_len] = '\0';
+        /* Copy regular character */
+        epp_append(&output, &out_len, &out_capacity, p, 1);
+        p++;
     }
 
     return output;
@@ -991,6 +1168,17 @@ puppet_value_t *puppet_func_epp(puppet_expr_list_t *args, puppet_env_t *env) {
     if (!content) {
         fprintf(stderr, "[ERROR] Failed to read EPP template\n");
         return puppet_value_create_undef();
+    }
+
+    // Set params in environment scope for EPP access
+    if (params && env) {
+        for (size_t i = 0; i < params->bucket_count; i++) {
+            puppet_hash_entry_t *e = params->buckets[i];
+            while (e) {
+                puppet_env_set_var(env, e->key.data, e->value);
+                e = e->next;
+            }
+        }
     }
 
     // Render the template

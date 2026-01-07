@@ -29,4 +29,13 @@ puppet_stmt_list_t *puppet_ts_parse_file(const char *filename);
  */
 puppet_stmt_list_t *puppet_ts_parse_string(const char *source, size_t length);
 
+/**
+ * Parse a single Puppet expression using tree-sitter
+ *
+ * @param source The Puppet expression (e.g., "$foo", "$hash['key']")
+ * @param length Length of the source
+ * @return Parsed expression, or NULL on error
+ */
+puppet_expr_t *puppet_ts_parse_expression(const char *source, size_t length);
+
 #endif /* PUPPET_TS_PARSER_H */

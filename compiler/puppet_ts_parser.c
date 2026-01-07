@@ -2137,3 +2137,47 @@ puppet_stmt_list_t *puppet_ts_parse_file(const char *filename) {
 
     return result;
 }
+
+/**
+ * Parse a Puppet expression string
+ *
+ * Wraps the expression in a temporary assignment to make it a valid statement,
+ * then extracts and returns just the expression.
+ *
+ * @param source The Puppet expression (e.g., "$foo", "$hash['key']", "1 + 2")
+ * @param length Length of the source
+ * @return Parsed expression, or NULL on error
+ */
+puppet_expr_t *puppet_ts_parse_expression(const char *source, size_t length) {
+    /* Wrap expression as: $_epp_tmp = (expr) */
+    size_t wrapped_len = length + 20;
+    char *wrapped = puppet_malloc(wrapped_len);
+    snprintf(wrapped, wrapped_len, "$_epp_tmp = (%.*s)", (int)length, source);
+
+    puppet_stmt_list_t *stmts = puppet_ts_parse_string(wrapped, strlen(wrapped));
+    puppet_free(wrapped);
+
+    if (!stmts || stmts->count == 0) {
+        if (stmts) puppet_free(stmts);
+        return NULL;
+    }
+
+    /* Extract the expression from the assignment */
+    puppet_stmt_t *stmt = stmts->stmts[0];
+    puppet_expr_t *result = NULL;
+
+    if (stmt && stmt->type == PUPPET_STMT_ASSIGNMENT && stmt->data.assignment.value) {
+        /* Clone the expression so we can free the statement */
+        result = stmt->data.assignment.value;
+        stmt->data.assignment.value = NULL;  /* Prevent double-free */
+    }
+
+    /* Clean up (but we've stolen the expression) */
+    for (size_t i = 0; i < stmts->count; i++) {
+        puppet_stmt_destroy(stmts->stmts[i]);
+    }
+    puppet_free(stmts->stmts);
+    puppet_free(stmts);
+
+    return result;
+}

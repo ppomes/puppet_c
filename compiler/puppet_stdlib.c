@@ -200,7 +200,7 @@ void puppet_warning_at(puppet_location_t loc, const char *format, ...) {
 }
 
 // Check if a value is truthy (false and undef are falsy, everything else is truthy)
-static bool puppet_value_is_truthy(puppet_value_t *value) {
+bool puppet_value_is_truthy(puppet_value_t *value) {
     if (!value) return false;
     if (value->type == PUPPET_VALUE_UNDEF) return false;
     if (value->type == PUPPET_VALUE_BOOL) return value->data.boolean;
