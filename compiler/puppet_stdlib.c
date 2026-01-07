@@ -2632,6 +2632,144 @@ puppet_value_t *puppet_func_shell_escape(puppet_expr_list_t *args, puppet_env_t 
 }
 
 /**
+ * Helper function to shell-escape a single string value
+ * Returns newly allocated string that caller must free
+ */
+static char *shell_escape_string(const char *input, size_t input_len) {
+    /* Empty string becomes '' */
+    if (input_len == 0) {
+        return puppet_strdup("''");
+    }
+
+    /* Check if string needs escaping */
+    bool needs_escape = false;
+    for (size_t i = 0; i < input_len; i++) {
+        char c = input[i];
+        /* Safe chars: alphanumeric, dash, underscore, dot, forward slash, colon */
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+              c == '.' || c == '/' || c == ':')) {
+            needs_escape = true;
+            break;
+        }
+    }
+
+    if (!needs_escape) {
+        return puppet_strdup(input);
+    }
+
+    /* Escape by wrapping in single quotes, escaping any single quotes */
+    size_t quote_count = 0;
+    for (size_t i = 0; i < input_len; i++) {
+        if (input[i] == '\'') quote_count++;
+    }
+
+    size_t output_len = 2 + input_len + quote_count * 3;
+    char *output = puppet_malloc(output_len + 1);
+    char *p = output;
+
+    *p++ = '\'';
+    for (size_t i = 0; i < input_len; i++) {
+        if (input[i] == '\'') {
+            *p++ = '\'';
+            *p++ = '\\';
+            *p++ = '\'';
+            *p++ = '\'';
+        } else {
+            *p++ = input[i];
+        }
+    }
+    *p++ = '\'';
+    *p = '\0';
+
+    return output;
+}
+
+/**
+ * @brief stdlib::shell_join function
+ *
+ * Joins an array of strings into a shell-safe command line.
+ * Each element is escaped and joined with spaces.
+ *
+ * Usage: shell_join(['cmd', 'arg1', 'arg with spaces'])
+ * Returns: "cmd arg1 'arg with spaces'"
+ */
+puppet_value_t *puppet_func_shell_join(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+                       "shell_join() requires 1 argument (array)");
+        return puppet_value_create_string("", 0);
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    if (!val) {
+        return puppet_value_create_string("", 0);
+    }
+
+    if (val->type != PUPPET_VALUE_ARRAY) {
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+                       "shell_join() argument must be an array");
+        puppet_value_destroy(val);
+        return puppet_value_create_string("", 0);
+    }
+
+    puppet_array_t *arr = val->data.array;
+    if (arr->count == 0) {
+        puppet_value_destroy(val);
+        return puppet_value_create_string("", 0);
+    }
+
+    /* First pass: escape all elements and calculate total length */
+    char **escaped = puppet_malloc(arr->count * sizeof(char*));
+    size_t *lengths = puppet_malloc(arr->count * sizeof(size_t));
+    size_t total_len = 0;
+
+    for (size_t i = 0; i < arr->count; i++) {
+        puppet_value_t *item = arr->items[i];
+        const char *str = "";
+        size_t str_len = 0;
+
+        if (item && item->type == PUPPET_VALUE_STRING) {
+            str = item->data.string.data;
+            str_len = item->data.string.len;
+        } else if (item) {
+            char *display = puppet_value_to_display_string(item);
+            escaped[i] = shell_escape_string(display, strlen(display));
+            puppet_free(display);
+            lengths[i] = strlen(escaped[i]);
+            total_len += lengths[i];
+            if (i > 0) total_len++; /* space */
+            continue;
+        }
+
+        escaped[i] = shell_escape_string(str, str_len);
+        lengths[i] = strlen(escaped[i]);
+        total_len += lengths[i];
+        if (i > 0) total_len++; /* space */
+    }
+
+    /* Build result */
+    char *result = puppet_malloc(total_len + 1);
+    char *p = result;
+
+    for (size_t i = 0; i < arr->count; i++) {
+        if (i > 0) *p++ = ' ';
+        memcpy(p, escaped[i], lengths[i]);
+        p += lengths[i];
+        puppet_free(escaped[i]);
+    }
+    *p = '\0';
+
+    puppet_free(escaped);
+    puppet_free(lengths);
+    puppet_value_destroy(val);
+
+    puppet_value_t *ret = puppet_value_create_string(result, total_len);
+    puppet_free(result);
+    return ret;
+}
+
+/**
  * @brief Puppet is_string() function - check if value is a string
  */
 puppet_value_t *puppet_func_is_string(puppet_expr_list_t *args, puppet_env_t *env) {

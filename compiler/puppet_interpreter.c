@@ -809,6 +809,10 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
                      strcmp(func_name, "shell_escape") == 0) {
                 return puppet_func_shell_escape(&expr->data.funcall.args, env);
             }
+            else if (strcmp(func_name, "stdlib::shell_join") == 0 ||
+                     strcmp(func_name, "shell_join") == 0) {
+                return puppet_func_shell_join(&expr->data.funcall.args, env);
+            }
             // Type checking functions
             else if (strcmp(func_name, "is_string") == 0) {
                 return puppet_func_is_string(&expr->data.funcall.args, env);

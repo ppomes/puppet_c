@@ -124,6 +124,7 @@ puppet_value_t *puppet_func_mysql_normalise_and_deepmerge(puppet_expr_list_t *ar
 
 // Shell/string escaping functions
 puppet_value_t *puppet_func_shell_escape(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_shell_join(puppet_expr_list_t *args, puppet_env_t *env);
 
 // Type checking functions
 puppet_value_t *puppet_func_is_string(puppet_expr_list_t *args, puppet_env_t *env);
