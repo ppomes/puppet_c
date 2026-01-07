@@ -32,6 +32,21 @@ static puppet_ruby_context_t *global_ruby_ctx = NULL;
 static pthread_mutex_t ruby_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /**
+ * Trim whitespace up to and including ONE newline
+ *
+ * EPP trim marker (-%>) should only remove trailing whitespace
+ * up to and including a single newline, not all whitespace.
+ */
+static const char *trim_one_newline(const char *p, const char *end) {
+    while (p < end && (*p == ' ' || *p == '\t')) p++;
+    if (p < end && (*p == '\n' || *p == '\r')) {
+        if (*p == '\r' && p + 1 < end && *(p + 1) == '\n') p += 2;
+        else p++;
+    }
+    return p;
+}
+
+/**
  * Initialize Ruby VM for ERB template processing
  * 
  * This function sets up the Ruby interpreter with full environment including
@@ -881,12 +896,7 @@ static char *puppet_epp_render_range(const char *start, const char *end,
             if (*tag_start == '#') {
                 p = tag_end + 2;
                 if (trim_after) {
-                    /* Trim whitespace up to and including ONE newline */
-                    while (p < end && (*p == ' ' || *p == '\t')) p++;
-                    if (p < end && (*p == '\n' || *p == '\r')) {
-                        if (*p == '\r' && p + 1 < end && *(p + 1) == '\n') p += 2;
-                        else p++;
-                    }
+                    p = trim_one_newline(p, end);
                 }
                 continue;
             }
@@ -921,12 +931,7 @@ static char *puppet_epp_render_range(const char *start, const char *end,
 
                 p = tag_end + 2;
                 if (trim_after) {
-                    /* Trim whitespace up to and including ONE newline */
-                    while (p < end && (*p == ' ' || *p == '\t')) p++;
-                    if (p < end && (*p == '\n' || *p == '\r')) {
-                        if (*p == '\r' && p + 1 < end && *(p + 1) == '\n') p += 2;
-                        else p++;
-                    }
+                    p = trim_one_newline(p, end);
                 }
                 continue;
             }
@@ -978,12 +983,7 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                     /* Find matching closing brace - it's in a later tag: <% } %> */
                     const char *body_start = tag_end + 2;
                     if (trim_after) {
-                        /* Trim whitespace up to and including ONE newline */
-                        while (body_start < end && (*body_start == ' ' || *body_start == '\t')) body_start++;
-                        if (body_start < end && (*body_start == '\n' || *body_start == '\r')) {
-                            if (*body_start == '\r' && body_start + 1 < end && *(body_start + 1) == '\n') body_start += 2;
-                            else body_start++;
-                        }
+                        body_start = trim_one_newline(body_start, end);
                     }
 
                     /* Find <% } %> that closes this each */
@@ -1141,18 +1141,7 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                     branches[0].is_else = 0;
                     branches[0].body_start = tag_end + 2;
                     if (trim_after) {
-                        /* Trim whitespace up to and including ONE newline */
-                        while (branches[0].body_start < end &&
-                               (*branches[0].body_start == ' ' || *branches[0].body_start == '\t'))
-                            branches[0].body_start++;
-                        if (branches[0].body_start < end &&
-                            (*branches[0].body_start == '\n' || *branches[0].body_start == '\r')) {
-                            if (*branches[0].body_start == '\r' && branches[0].body_start + 1 < end &&
-                                *(branches[0].body_start + 1) == '\n')
-                                branches[0].body_start += 2;
-                            else
-                                branches[0].body_start++;
-                        }
+                        branches[0].body_start = trim_one_newline(branches[0].body_start, end);
                     }
                     branch_count = 1;
 
@@ -1197,22 +1186,9 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                                             branches[branch_count].cond_len = elsif_cond_end - elsif_cond;
                                             branches[branch_count].is_else = 0;
                                             branches[branch_count].body_start = tag_close + 2;
-                                            /* Check for trim marker before %> - only trim ONE newline */
+                                            /* Check for trim marker before %> */
                                             if (tag_close > inner_start && *(tag_close - 1) == '-') {
-                                                while (branches[branch_count].body_start < end &&
-                                                       (*branches[branch_count].body_start == ' ' ||
-                                                        *branches[branch_count].body_start == '\t'))
-                                                    branches[branch_count].body_start++;
-                                                if (branches[branch_count].body_start < end &&
-                                                    (*branches[branch_count].body_start == '\n' ||
-                                                     *branches[branch_count].body_start == '\r')) {
-                                                    if (*branches[branch_count].body_start == '\r' &&
-                                                        branches[branch_count].body_start + 1 < end &&
-                                                        *(branches[branch_count].body_start + 1) == '\n')
-                                                        branches[branch_count].body_start += 2;
-                                                    else
-                                                        branches[branch_count].body_start++;
-                                                }
+                                                branches[branch_count].body_start = trim_one_newline(branches[branch_count].body_start, end);
                                             }
                                             branch_count++;
                                         }
@@ -1230,22 +1206,9 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                                             branches[branch_count].cond_len = 0;
                                             branches[branch_count].is_else = 1;
                                             branches[branch_count].body_start = tag_close + 2;
-                                            /* Check for trim marker before %> - only trim ONE newline */
+                                            /* Check for trim marker before %> */
                                             if (tag_close > inner_start && *(tag_close - 1) == '-') {
-                                                while (branches[branch_count].body_start < end &&
-                                                       (*branches[branch_count].body_start == ' ' ||
-                                                        *branches[branch_count].body_start == '\t'))
-                                                    branches[branch_count].body_start++;
-                                                if (branches[branch_count].body_start < end &&
-                                                    (*branches[branch_count].body_start == '\n' ||
-                                                     *branches[branch_count].body_start == '\r')) {
-                                                    if (*branches[branch_count].body_start == '\r' &&
-                                                        branches[branch_count].body_start + 1 < end &&
-                                                        *(branches[branch_count].body_start + 1) == '\n')
-                                                        branches[branch_count].body_start += 2;
-                                                    else
-                                                        branches[branch_count].body_start++;
-                                                }
+                                                branches[branch_count].body_start = trim_one_newline(branches[branch_count].body_start, end);
                                             }
                                             branch_count++;
                                         }
@@ -1257,15 +1220,7 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                                         chain_end = tag_close + 2;
                                         /* Check if final brace has trim marker */
                                         if (tag_close > inner_start && *(tag_close - 1) == '-') {
-                                            /* Trim whitespace up to and including ONE newline */
-                                            while (chain_end < end && (*chain_end == ' ' || *chain_end == '\t'))
-                                                chain_end++;
-                                            if (chain_end < end && (*chain_end == '\n' || *chain_end == '\r')) {
-                                                if (*chain_end == '\r' && chain_end + 1 < end && *(chain_end + 1) == '\n')
-                                                    chain_end += 2;
-                                                else
-                                                    chain_end++;
-                                            }
+                                            chain_end = trim_one_newline(chain_end, end);
                                         }
                                         brace_depth = 0;
                                         break;
@@ -1337,12 +1292,7 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                 else if (code[0] == '}') {
                     p = tag_end + 2;
                     if (trim_after) {
-                        /* Trim whitespace up to and including ONE newline */
-                        while (p < end && (*p == ' ' || *p == '\t')) p++;
-                        if (p < end && (*p == '\n' || *p == '\r')) {
-                            if (*p == '\r' && p + 1 < end && *(p + 1) == '\n') p += 2;
-                            else p++;
-                        }
+                        p = trim_one_newline(p, end);
                     }
                 }
                 /* Other code - try to execute as statements */
@@ -1358,12 +1308,7 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                     }
                     p = tag_end + 2;
                     if (trim_after) {
-                        /* Trim whitespace up to and including ONE newline */
-                        while (p < end && (*p == ' ' || *p == '\t')) p++;
-                        if (p < end && (*p == '\n' || *p == '\r')) {
-                            if (*p == '\r' && p + 1 < end && *(p + 1) == '\n') p += 2;
-                            else p++;
-                        }
+                        p = trim_one_newline(p, end);
                     }
                 }
 
@@ -1373,12 +1318,7 @@ static char *puppet_epp_render_range(const char *start, const char *end,
 
             p = tag_end + 2;
             if (trim_after) {
-                /* Trim whitespace up to and including ONE newline */
-                while (p < end && (*p == ' ' || *p == '\t')) p++;
-                if (p < end && (*p == '\n' || *p == '\r')) {
-                    if (*p == '\r' && p + 1 < end && *(p + 1) == '\n') p += 2;
-                    else p++;
-                }
+                p = trim_one_newline(p, end);
             }
             continue;
         }
