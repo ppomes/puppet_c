@@ -336,9 +336,11 @@ docker compose -f docker-compose.demo.yml down
 
 ### Implemented Functions
 
-**Logging**: notice, info, warning, debug, err, fail
+**Logging**: notice, info, warning, debug, err, crit, fail
 
 **Strings**: split, join, chomp, strip, upcase, downcase, capitalize, match, regsubst
+
+**Shell**: shell_escape, shell_join
 
 **Arrays**: concat, flatten, unique, sort, reverse, first, last, length, member, range
 
@@ -356,7 +358,7 @@ docker compose -f docker-compose.demo.yml down
 
 **Iterators**: each, map, filter, reduce
 
-**Resources**: realize, create_resources
+**Resources**: realize, create_resources, ensure_resource
 
 ### Resource Providers (Agent)
 
