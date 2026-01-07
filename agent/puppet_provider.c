@@ -860,16 +860,17 @@ int catalog_apply(const char *catalog_json, apply_context_t *ctx) {
         if (resource) {
             apply_result_t result = resource_apply(resource, ctx);
 
-            /* Track if this resource changed */
-            if (result == APPLY_CHANGED) {
+            /* Track if this resource changed (or would change in noop mode) */
+            if (result == APPLY_CHANGED || result == APPLY_SKIPPED) {
                 entries[idx].changed = true;
                 /* Mark all notify targets for refresh */
                 for (size_t j = 0; j < entries[idx].notify_count; j++) {
                     size_t target = entries[idx].notify_targets[j];
                     entries[target].needs_refresh = true;
                     if (ctx->verbose) {
-                        print_info("%s[%s]: Will refresh %s[%s]",
+                        print_info("%s[%s]: %s %s[%s]",
                                   resource->type, resource->title,
+                                  ctx->noop ? "Would refresh" : "Will refresh",
                                   entries[target].resource->type,
                                   entries[target].resource->title);
                     }
@@ -879,7 +880,7 @@ int catalog_apply(const char *catalog_json, apply_context_t *ctx) {
             /* Check if this resource needs refresh (from earlier notify) */
             if (entries[idx].needs_refresh && result != APPLY_FAILED) {
                 apply_result_t refresh_result = resource_refresh(resource, ctx);
-                if (refresh_result == APPLY_CHANGED) {
+                if (refresh_result == APPLY_CHANGED || refresh_result == APPLY_SKIPPED) {
                     entries[idx].changed = true;
                     refreshed++;
                     /* Propagate refresh to notify targets */

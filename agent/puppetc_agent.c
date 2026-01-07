@@ -36,6 +36,7 @@ typedef struct {
     const char *server_url;
     char *certname;
     const char *environment;
+    const char *catalog_file;  /* Local catalog file to apply (for testing) */
     bool verbose;
     bool noop;           /* No-op mode - don't apply changes */
     bool apply_catalog;  /* Actually apply resources */
@@ -366,40 +367,74 @@ static int run_agent(agent_config_t *config) {
         return 0;
     }
 
-    /* Check server status */
-    print_info("Connecting to server...");
-    if (check_server_status(config->server_url, config->verbose) != 0) {
-        print_error("Cannot connect to server at %s", config->server_url);
-        print_error("Make sure puppetc-server is running");
-        facter_destroy(facts);
-        return 1;
+    char *catalog_json = NULL;
+
+    /* Load catalog from local file or request from server */
+    if (config->catalog_file) {
+        /* Load from local file */
+        print_info("Loading catalog from file: %s", config->catalog_file);
+
+        FILE *f = fopen(config->catalog_file, "r");
+        if (!f) {
+            print_error("Cannot open catalog file: %s", config->catalog_file);
+            facter_destroy(facts);
+            return 1;
+        }
+
+        /* Get file size */
+        fseek(f, 0, SEEK_END);
+        long size = ftell(f);
+        fseek(f, 0, SEEK_SET);
+
+        catalog_json = puppet_malloc(size + 1);
+        if (!catalog_json) {
+            print_error("Out of memory reading catalog file");
+            fclose(f);
+            facter_destroy(facts);
+            return 1;
+        }
+
+        size_t read_size = fread(catalog_json, 1, size, f);
+        catalog_json[read_size] = '\0';
+        fclose(f);
+
+        print_info("Catalog loaded (%ld bytes)", size);
+    } else {
+        /* Check server status */
+        print_info("Connecting to server...");
+        if (check_server_status(config->server_url, config->verbose) != 0) {
+            print_error("Cannot connect to server at %s", config->server_url);
+            print_error("Make sure puppetc-server is running");
+            facter_destroy(facts);
+            return 1;
+        }
+        print_info("Server is available");
+
+        /* Build catalog request */
+        print_info("Requesting catalog...");
+        char *request_json = build_catalog_request(config->certname, config->environment, facts);
+        if (!request_json) {
+            print_error("Failed to build catalog request");
+            facter_destroy(facts);
+            return 1;
+        }
+
+        if (config->verbose) {
+            print_debug("Request:\n%s", request_json);
+        }
+
+        /* Request catalog from server */
+        catalog_json = request_catalog(config->server_url, request_json, config->verbose);
+        puppet_free(request_json);
+
+        if (!catalog_json) {
+            print_error("Failed to receive catalog from server");
+            facter_destroy(facts);
+            return 1;
+        }
+
+        print_info("Catalog received");
     }
-    print_info("Server is available");
-
-    /* Build catalog request */
-    print_info("Requesting catalog...");
-    char *request_json = build_catalog_request(config->certname, config->environment, facts);
-    if (!request_json) {
-        print_error("Failed to build catalog request");
-        facter_destroy(facts);
-        return 1;
-    }
-
-    if (config->verbose) {
-        print_debug("Request:\n%s", request_json);
-    }
-
-    /* Request catalog from server */
-    char *catalog_json = request_catalog(config->server_url, request_json, config->verbose);
-    puppet_free(request_json);
-
-    if (!catalog_json) {
-        print_error("Failed to receive catalog from server");
-        facter_destroy(facts);
-        return 1;
-    }
-
-    print_info("Catalog received");
 
     /* Display catalog */
     if (config->show_catalog) {
@@ -466,6 +501,7 @@ static void print_usage(const char *prog) {
     printf("  -s, --server URL      Server URL (default: %s)\n", DEFAULT_SERVER);
     printf("      --certname NAME   Node certificate name (default: hostname)\n");
     printf("  -e, --environment ENV Environment (default: %s)\n", DEFAULT_ENVIRONMENT);
+    printf("  -F, --catalog-file FILE  Apply a local catalog JSON file\n");
     printf("  -a, --apply           Apply catalog resources (requires root for some)\n");
     printf("  -n, --noop            No-op mode - simulate but don't apply\n");
     printf("  -f, --facts           Just show collected facts\n");
@@ -480,6 +516,7 @@ static void print_usage(const char *prog) {
     printf("  %s -n                                 # Noop mode, show what would change\n", prog);
     printf("  %s -a                                 # Apply catalog resources\n", prog);
     printf("  %s -s http://puppet:8140 -a           # Apply from remote server\n", prog);
+    printf("  %s -F catalog.json -a                 # Apply local catalog file\n", prog);
     printf("  %s -f                                 # Just show facts\n", prog);
 }
 
@@ -492,6 +529,7 @@ int main(int argc, char *argv[]) {
         .server_url = NULL,
         .certname = NULL,
         .environment = NULL,
+        .catalog_file = NULL,
         .verbose = false,
         .noop = false,
         .apply_catalog = false,
@@ -504,6 +542,7 @@ int main(int argc, char *argv[]) {
         {"server", required_argument, 0, 's'},
         {"certname", required_argument, 0, 'N'},
         {"environment", required_argument, 0, 'e'},
+        {"catalog-file", required_argument, 0, 'F'},
         {"apply", no_argument, 0, 'a'},
         {"noop", no_argument, 0, 'n'},
         {"facts", no_argument, 0, 'f'},
@@ -516,7 +555,7 @@ int main(int argc, char *argv[]) {
     /* First pass: find config file option */
     int opt;
     optind = 1;
-    while ((opt = getopt_long(argc, argv, "c:s:N:e:anfCvh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:s:N:e:F:anfCvh", long_options, NULL)) != -1) {
         if (opt == 'c') {
             config_file = optarg;
             break;
@@ -571,7 +610,7 @@ int main(int argc, char *argv[]) {
 
     /* Second pass: command-line options (highest priority) */
     optind = 1;
-    while ((opt = getopt_long(argc, argv, "c:s:N:e:anfCvh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:s:N:e:F:anfCvh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'c':
                 /* Already handled */
@@ -585,6 +624,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'e':
                 config.environment = optarg;
+                break;
+            case 'F':
+                config.catalog_file = optarg;
                 break;
             case 'a':
                 config.apply_catalog = true;

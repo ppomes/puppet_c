@@ -60,6 +60,13 @@ server {
     require => Package['nginx'],
   }
 
+  # Log nginx config changes (refreshonly - only runs when notified)
+  exec { 'log_nginx_reload':
+    command     => '/bin/echo "Nginx config changed at $(date)" >> /var/log/puppet_nginx_reload.log',
+    refreshonly => true,
+    subscribe   => File['/etc/nginx/sites-available/default'],
+  }
+
   notify { 'web_complete': message => 'Web server configured' }
 }
 
