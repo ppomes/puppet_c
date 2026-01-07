@@ -931,27 +931,37 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                 memcpy(code, tag_start, code_len);
                 code[code_len] = '\0';
 
-                /* Check for 'each' iterator: EXPR.each |VAR| { */
+                /* Check for 'each' iterator: EXPR.each |VAR| { or each(EXPR) |VAR| { */
                 char *each_pos = strstr(code, ".each");
-                if (each_pos) {
-                    /* Extract array expression */
-                    size_t arr_len = each_pos - code;
-                    char *arr_code = puppet_malloc(arr_len + 1);
-                    memcpy(arr_code, code, arr_len);
-                    arr_code[arr_len] = '\0';
+                char *each_func = strstr(code, "each(");
+                if (each_pos || (each_func && each_func == code)) {
+                    /* Parse the full expression as a statement to get AST with lambda */
+                    /* The code ends with '{', wrap as: $_epp_iter = (code without {) { } */
+                    size_t clean_len = code_len;
+                    /* Strip trailing { and whitespace */
+                    while (clean_len > 0 && (code[clean_len-1] == '{' || code[clean_len-1] == ' ' || code[clean_len-1] == '\t')) {
+                        clean_len--;
+                    }
+                    size_t wrap_len = clean_len + 50;
+                    char *wrap_code = puppet_malloc(wrap_len);
+                    snprintf(wrap_code, wrap_len, "$_epp_iter = %.*s { }", (int)clean_len, code);
 
-                    /* Find lambda parameter: |$var| or |$var, $idx| */
-                    char *pipe1 = strchr(each_pos, '|');
-                    char *pipe2 = pipe1 ? strchr(pipe1 + 1, '|') : NULL;
-                    char *var_name = NULL;
-                    if (pipe1 && pipe2) {
-                        pipe1++;
-                        while (*pipe1 == ' ' || *pipe1 == '$') pipe1++;
-                        size_t var_len = 0;
-                        while (pipe1[var_len] && pipe1[var_len] != '|' && pipe1[var_len] != ',' && pipe1[var_len] != ' ') var_len++;
-                        var_name = puppet_malloc(var_len + 1);
-                        memcpy(var_name, pipe1, var_len);
-                        var_name[var_len] = '\0';
+                    puppet_stmt_list_t *stmts = puppet_ts_parse_string(wrap_code, strlen(wrap_code));
+                    puppet_free(wrap_code);
+
+                    puppet_expr_t *iter_expr = NULL;
+                    puppet_lambda_t *lambda = NULL;
+
+                    /* Extract the funcall expression with lambda */
+                    if (stmts && stmts->count > 0) {
+                        puppet_stmt_t *stmt = stmts->stmts[0];
+                        if (stmt && stmt->type == PUPPET_STMT_ASSIGNMENT && stmt->data.assignment.value) {
+                            puppet_expr_t *expr = stmt->data.assignment.value;
+                            if (expr->type == PUPPET_EXPR_FUNCALL && expr->data.funcall.lambda) {
+                                iter_expr = expr;
+                                lambda = expr->data.funcall.lambda;
+                            }
+                        }
                     }
 
                     /* Find matching closing brace - it's in a later tag: <% } %> */
@@ -979,32 +989,81 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                         body_end++;
                     }
 
-                    /* Evaluate array expression */
-                    puppet_expr_t *arr_expr = puppet_ts_parse_expression(arr_code, strlen(arr_code));
-                    puppet_value_t *arr_val = NULL;
-                    if (arr_expr && env) {
-                        arr_val = puppet_eval_expr(arr_expr, env);
-                        puppet_expr_destroy(arr_expr);
+                    /* Get lambda parameter names */
+                    const char *param1_name = NULL;
+                    const char *param2_name = NULL;
+                    if (lambda && lambda->params.count >= 1 && lambda->params.params[0].name.data) {
+                        param1_name = lambda->params.params[0].name.data;
                     }
-                    puppet_free(arr_code);
+                    if (lambda && lambda->params.count >= 2 && lambda->params.params[1].name.data) {
+                        param2_name = lambda->params.params[1].name.data;
+                    }
 
-                    /* Iterate */
-                    if (arr_val && arr_val->type == PUPPET_VALUE_ARRAY && var_name) {
-                        for (size_t i = 0; i < arr_val->data.array->count; i++) {
-                            /* Set iteration variable */
-                            puppet_env_set_var(env, var_name, puppet_value_copy(arr_val->data.array->items[i]));
+                    /* Evaluate the collection (first argument to each) */
+                    puppet_value_t *collection = NULL;
+                    if (iter_expr && iter_expr->data.funcall.args.count >= 1 && env) {
+                        collection = puppet_eval_expr(iter_expr->data.funcall.args.exprs[0], env);
+                    }
 
-                            /* Render body */
-                            char *body_output = puppet_epp_render_range(body_start, body_end, params, env);
-                            if (body_output) {
-                                epp_append(&output, &out_len, &out_capacity, body_output, strlen(body_output));
-                                puppet_free(body_output);
+                    /* Iterate based on collection type */
+                    if (collection && param1_name) {
+                        if (collection->type == PUPPET_VALUE_ARRAY) {
+                            puppet_array_t *arr = collection->data.array;
+                            for (size_t i = 0; i < arr->count; i++) {
+                                if (lambda->params.count == 1) {
+                                    /* |$item| - just the value */
+                                    puppet_env_set_var(env, param1_name, puppet_value_copy(arr->items[i]));
+                                } else if (param2_name) {
+                                    /* |$index, $item| - index and value */
+                                    puppet_env_set_var(env, param1_name, puppet_value_create_number((double)i));
+                                    puppet_env_set_var(env, param2_name, puppet_value_copy(arr->items[i]));
+                                }
+
+                                /* Render body */
+                                char *body_output = puppet_epp_render_range(body_start, body_end, params, env);
+                                if (body_output) {
+                                    epp_append(&output, &out_len, &out_capacity, body_output, strlen(body_output));
+                                    puppet_free(body_output);
+                                }
+                            }
+                        } else if (collection->type == PUPPET_VALUE_HASH) {
+                            puppet_hash_t *hash = collection->data.hash;
+                            for (size_t i = 0; i < hash->bucket_count; i++) {
+                                puppet_hash_entry_t *entry = hash->buckets[i];
+                                while (entry) {
+                                    if (lambda->params.count == 1) {
+                                        /* |$item| - [key, value] array */
+                                        puppet_value_t *pair = puppet_value_create_array();
+                                        puppet_array_append(pair->data.array, puppet_value_create_string(entry->key.data, entry->key.len));
+                                        puppet_array_append(pair->data.array, puppet_value_copy(entry->value));
+                                        puppet_env_set_var(env, param1_name, pair);
+                                    } else if (param2_name) {
+                                        /* |$key, $value| - key and value separately */
+                                        puppet_env_set_var(env, param1_name, puppet_value_create_string(entry->key.data, entry->key.len));
+                                        puppet_env_set_var(env, param2_name, puppet_value_copy(entry->value));
+                                    }
+
+                                    /* Render body */
+                                    char *body_output = puppet_epp_render_range(body_start, body_end, params, env);
+                                    if (body_output) {
+                                        epp_append(&output, &out_len, &out_capacity, body_output, strlen(body_output));
+                                        puppet_free(body_output);
+                                    }
+
+                                    entry = entry->next;
+                                }
                             }
                         }
                     }
 
-                    if (arr_val) puppet_value_destroy(arr_val);
-                    if (var_name) puppet_free(var_name);
+                    if (collection) puppet_value_destroy(collection);
+                    if (stmts) {
+                        for (size_t i = 0; i < stmts->count; i++) {
+                            puppet_stmt_destroy(stmts->stmts[i]);
+                        }
+                        puppet_free(stmts->stmts);
+                        puppet_free(stmts);
+                    }
 
                     /* Skip past closing <% } %> */
                     const char *close_tag = strstr(body_end, "%>");

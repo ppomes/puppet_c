@@ -4606,11 +4606,8 @@ static puppet_value_t *exec_lambda_with_result(puppet_lambda_t *lambda, puppet_e
         return puppet_value_create_undef();
     }
 
-    /* If last statement is a function call or expression, evaluate and return it */
-    if (last_stmt->type == PUPPET_STMT_FUNCTION_CALL && last_stmt->data.expr) {
-        return puppet_eval_expr(last_stmt->data.expr, env);
-    }
-    if (last_stmt->type == PUPPET_STMT_EXPRESSION && last_stmt->data.expr) {
+    /* If last statement has an expression, evaluate and return it */
+    if (last_stmt->data.expr) {
         return puppet_eval_expr(last_stmt->data.expr, env);
     }
 
