@@ -1170,12 +1170,10 @@ static puppet_expr_t *convert_expression(TSNode node, const char *source) {
 static puppet_attribute_t convert_attribute(TSNode node, const char *source) {
     puppet_attribute_t attr = {0};
 
-    /* First check for variable + access pattern (e.g., ensure => $hash['key']) */
-    TSNode var_child = find_child(node, "variable");
+    /* Check for selector expression */
     TSNode selector_child = find_child(node, "selector");
 
-    /* Check for type + access pattern (resource reference, e.g., notify => Service['name']) */
-    TSNode type_child = find_child(node, "type");
+    /* Check for access pattern (resource reference or hash access) */
     TSNode access_child = find_child(node, "access");
 
     /* Check for lhs: field which indicates a selector control variable */
