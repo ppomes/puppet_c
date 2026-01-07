@@ -1,0 +1,4 @@
+<%# This is a comment that should not appear -%>
+line1
+<%# Another comment -%>
+line2

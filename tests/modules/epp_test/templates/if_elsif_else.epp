@@ -1,0 +1,8 @@
+<%- | String $value | -%>
+<%- if $value == 'a' { -%>
+result: alpha
+<%- } elsif $value == 'b' { -%>
+result: beta
+<%- } else { -%>
+result: other
+<%- } -%>

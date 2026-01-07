@@ -1,0 +1,10 @@
+<%- | Hash $items | -%>
+<%- $items.each |$k, $v| { -%>
+<%- if $v == true { -%>
+<%= $k %>
+<%- } elsif $v == false { -%>
+skip
+<%- } else { -%>
+<%= $k %> = <%= $v %>
+<%- } -%>
+<%- } -%>
