@@ -954,19 +954,28 @@ static puppet_expr_t *convert_method_with_lambda(TSNode node, const char *source
             if (!ts_node_is_null(access)) {
                 uint32_t access_count = ts_node_named_child_count(access);
                 if (access_count >= 2) {
-                    /* First child is the object, last is the method name */
+                    /* Build object from first child, then apply any intermediate access nodes
+                     * For $v[1].map: children are variable($v), access([1]), name(map)
+                     * We need to apply [1] to $v before using it as method target */
                     TSNode obj = ts_node_named_child(access, 0);
-                    TSNode method = ts_node_named_child(access, access_count - 1);
-
-                    /* Convert object to first argument */
                     puppet_expr_t *obj_expr = convert_expression(obj, source);
+
+                    /* Apply intermediate access nodes */
+                    for (uint32_t j = 1; j < access_count - 1; j++) {
+                        TSNode acc = ts_node_named_child(access, j);
+                        if (node_is(acc, "access")) {
+                            obj_expr = build_index_expr(obj_expr, acc, source);
+                        }
+                    }
+
                     if (obj_expr) {
                         expr->data.funcall.args.exprs = puppet_calloc(1, sizeof(puppet_expr_t*));
                         expr->data.funcall.args.exprs[0] = obj_expr;
                         expr->data.funcall.args.count = 1;
                     }
 
-                    /* Get method name */
+                    /* Get method name (last child) */
+                    TSNode method = ts_node_named_child(access, access_count - 1);
                     if (node_is(method, "name")) {
                         char *method_name = node_text(method, source);
                         expr->data.funcall.name = puppet_string_create(method_name);
@@ -982,7 +991,7 @@ static puppet_expr_t *convert_method_with_lambda(TSNode node, const char *source
     return expr;
 }
 
-/* Convert named_access: obj.method */
+/* Convert named_access: obj.method or obj[idx].method */
 static puppet_expr_t *convert_named_access(TSNode node, const char *source) {
     puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
     expr->type = PUPPET_EXPR_DOT;
@@ -990,10 +999,22 @@ static puppet_expr_t *convert_named_access(TSNode node, const char *source) {
 
     uint32_t count = ts_node_named_child_count(node);
     if (count >= 2) {
+        /* Build object expression from first child, then apply any access nodes */
         TSNode obj = ts_node_named_child(node, 0);
-        TSNode field = ts_node_named_child(node, count - 1);
+        puppet_expr_t *obj_expr = convert_expression(obj, source);
 
-        expr->data.dot.object = convert_expression(obj, source);
+        /* Apply any intermediate access nodes (for $v[1].method pattern) */
+        for (uint32_t i = 1; i < count - 1; i++) {
+            TSNode child = ts_node_named_child(node, i);
+            if (node_is(child, "access")) {
+                obj_expr = build_index_expr(obj_expr, child, source);
+            }
+        }
+
+        expr->data.dot.object = obj_expr;
+
+        /* Last child is the method name */
+        TSNode field = ts_node_named_child(node, count - 1);
         if (node_is(field, "name")) {
             char *field_name = node_text(field, source);
             expr->data.dot.field = puppet_string_create(field_name);
