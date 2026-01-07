@@ -53,7 +53,6 @@ static int systemd_stop(const char *service, bool verbose) {
     return exec_command(cmd, verbose);
 }
 
-static int systemd_restart(const char *service, bool verbose) __attribute__((unused));
 static int systemd_restart(const char *service, bool verbose) {
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "systemctl restart '%s' 2>&1", service);
@@ -170,6 +169,30 @@ static apply_result_t systemd_apply(const resource_t *resource, apply_context_t 
     return changed ? APPLY_CHANGED : APPLY_NOOP;
 }
 
+static apply_result_t systemd_refresh(const resource_t *resource, apply_context_t *ctx) {
+    const char *service = resource->title;
+
+    /* Check if service exists */
+    if (!systemd_service_exists(service)) {
+        apply_context_set_error(ctx, "Service not found: %s", service);
+        return APPLY_FAILED;
+    }
+
+    if (ctx->noop) {
+        print_resource_noop("Service", service, "refresh", "would be restarted");
+        return APPLY_SKIPPED;
+    }
+
+    if (systemd_restart(service, ctx->verbose) != 0) {
+        apply_context_set_error(ctx, "Failed to restart service: %s", service);
+        return APPLY_FAILED;
+    }
+
+    print_resource_change("Service", service, "refresh", "restarted");
+    ctx->changes_made++;
+    return APPLY_CHANGED;
+}
+
 /* ============================================================================
  * Provider Definition
  * ============================================================================ */
@@ -180,6 +203,7 @@ static const provider_t systemd_provider = {
     .os_family = 0,  /* Generic - works on all systemd-based systems */
     .apply = systemd_apply,
     .check = systemd_check,
+    .refresh = systemd_refresh,
     .cleanup = NULL
 };
 

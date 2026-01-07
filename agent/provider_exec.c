@@ -122,6 +122,16 @@ static apply_result_t exec_apply(const resource_t *resource, apply_context_t *ct
         command = resource->title;
     }
 
+    /* Check refreshonly - if true, skip normal apply (only run on refresh) */
+    const char *refreshonly = resource_get_param(resource, "refreshonly");
+    if (refreshonly && (strcmp(refreshonly, "true") == 0 || strcmp(refreshonly, "1") == 0)) {
+        if (ctx->verbose) {
+            print_info("Exec[%s]: Skipping (refreshonly=true, waiting for refresh)",
+                      resource->title);
+        }
+        return APPLY_NOOP;
+    }
+
     /* Handle array format: [cmd, arg1, arg2] -> "cmd arg1 arg2" */
     char *converted_cmd = NULL;
     if (command && command[0] == '[') {
@@ -215,6 +225,64 @@ static apply_result_t exec_apply(const resource_t *resource, apply_context_t *ct
     return result;
 }
 
+/**
+ * @brief Refresh an exec resource (re-run the command)
+ *
+ * This is called when a resource that this exec subscribes to changes,
+ * or when a resource notifies this exec.
+ */
+static apply_result_t exec_refresh(const resource_t *resource, apply_context_t *ctx) {
+    /* For refresh, we just re-run the command (skipping 'creates' check for refreshonly execs) */
+    const char *command = resource_get_param(resource, "command");
+    if (!command || strlen(command) == 0) {
+        command = resource->title;
+    }
+
+    /* Handle array format */
+    char *converted_cmd = NULL;
+    if (command && command[0] == '[') {
+        converted_cmd = convert_array_command(command);
+        if (converted_cmd) {
+            command = converted_cmd;
+        }
+    }
+
+    const char *cwd = resource_get_param(resource, "cwd");
+    const char *user = resource_get_param(resource, "user");
+    const char *environment = resource_get_param(resource, "environment");
+    const char *returns_str = resource_get_param(resource, "returns");
+
+    int expected_return = returns_str ? atoi(returns_str) : 0;
+
+    if (ctx->noop) {
+        print_resource_noop("Exec", resource->title, "refresh", "would be executed");
+        if (converted_cmd) puppet_free(converted_cmd);
+        return APPLY_SKIPPED;
+    }
+
+    if (ctx->verbose) {
+        print_info("Exec[%s]: Refreshing (running '%s')", resource->title, command);
+    }
+
+    int ret = run_as_user(command, user, cwd, environment, ctx->verbose);
+    int exit_code = WIFEXITED(ret) ? WEXITSTATUS(ret) : -1;
+
+    apply_result_t result;
+    if (exit_code == expected_return) {
+        print_resource_change("Exec", resource->title, "refresh",
+                             "executed on refresh (exit code %d)", exit_code);
+        ctx->changes_made++;
+        result = APPLY_CHANGED;
+    } else {
+        apply_context_set_error(ctx, "Refresh command returned %d, expected %d",
+                               exit_code, expected_return);
+        result = APPLY_FAILED;
+    }
+
+    if (converted_cmd) puppet_free(converted_cmd);
+    return result;
+}
+
 /* ============================================================================
  * Provider Registration
  * ============================================================================ */
@@ -225,6 +293,7 @@ static const provider_t exec_provider = {
     .os_family = 0,  /* Generic - works on all platforms */
     .apply = exec_apply,
     .check = exec_check,
+    .refresh = exec_refresh,
     .cleanup = NULL
 };
 

@@ -284,23 +284,49 @@ apply_result_t resource_apply(const resource_t *resource, apply_context_t *ctx) 
     return result;
 }
 
+apply_result_t resource_refresh(const resource_t *resource, apply_context_t *ctx) {
+    if (!resource || !ctx) return APPLY_FAILED;
+
+    const provider_t *provider = provider_get(resource->type);
+    if (!provider) {
+        apply_context_set_error(ctx, "No provider for type: %s", resource->type);
+        return APPLY_FAILED;
+    }
+
+    /* If provider has no refresh function, it doesn't support refresh */
+    if (!provider->refresh) {
+        if (ctx->verbose) {
+            print_info("%s[%s]: No refresh action (provider doesn't support refresh)",
+                      resource->type, resource->title);
+        }
+        return APPLY_NOOP;
+    }
+
+    return provider->refresh(resource, ctx);
+}
+
 /* ============================================================================
  * Catalog Parsing and Application
  * ============================================================================ */
 
 #define MAX_DEPS 64
+#define MAX_NOTIFY 64
 #define MAX_RESOURCES 1024
 
 /**
- * @brief Resource entry with dependencies for ordering
+ * @brief Resource entry with dependencies for ordering and refresh tracking
  */
 typedef struct {
     resource_t *resource;
     json_value_t *json_obj;     /* Keep reference to parse dependencies */
     size_t deps[MAX_DEPS];      /* Indices of resources this depends on */
     size_t dep_count;
+    size_t notify_targets[MAX_NOTIFY];  /* Resources to notify on change */
+    size_t notify_count;
     size_t in_degree;           /* For topological sort */
     bool applied;
+    bool changed;               /* Did this resource change during apply? */
+    bool needs_refresh;         /* Should this resource be refreshed? */
 } resource_entry_t;
 
 /**
@@ -331,6 +357,22 @@ static void add_dependency(resource_entry_t *entries, size_t from, size_t to) {
     }
     if (entry->dep_count < MAX_DEPS) {
         entry->deps[entry->dep_count++] = to;
+    }
+}
+
+/**
+ * @brief Add a notify relationship (from notifies to)
+ */
+static void add_notify(resource_entry_t *entries, size_t from, size_t to) {
+    if (from == to) return;  /* No self-notification */
+
+    resource_entry_t *entry = &entries[from];
+    /* Check if already exists */
+    for (size_t i = 0; i < entry->notify_count; i++) {
+        if (entry->notify_targets[i] == to) return;
+    }
+    if (entry->notify_count < MAX_NOTIFY) {
+        entry->notify_targets[entry->notify_count++] = to;
     }
 }
 
@@ -482,7 +524,8 @@ static void extract_dependencies(resource_entry_t *entries, size_t count, size_t
         }
     }
 
-    /* Process 'notify' - similar to before, notified resources depend on this */
+    /* Process 'notify' - this resource notifies the target(s) on change
+     * Also adds ordering dependency: target depends on this */
     json_value_t *notify = json_object_get(params, "notify");
     if (notify) {
         if (json_is_string(notify)) {
@@ -491,12 +534,28 @@ static void extract_dependencies(resource_entry_t *entries, size_t count, size_t
                 int other_idx = find_resource_index(entries, count, type_buf, title_buf);
                 if (other_idx >= 0) {
                     add_dependency(entries, (size_t)other_idx, idx);
+                    add_notify(entries, idx, (size_t)other_idx);  /* This notifies target */
+                }
+            }
+        } else if (json_is_array(notify)) {
+            for (size_t j = 0; j < notify->data.array.count; j++) {
+                json_value_t *elem = notify->data.array.elements[j];
+                if (json_is_string(elem)) {
+                    if (parse_resource_ref(json_get_string(elem), type_buf, sizeof(type_buf),
+                                           title_buf, sizeof(title_buf)) == 0) {
+                        int other_idx = find_resource_index(entries, count, type_buf, title_buf);
+                        if (other_idx >= 0) {
+                            add_dependency(entries, (size_t)other_idx, idx);
+                            add_notify(entries, idx, (size_t)other_idx);
+                        }
+                    }
                 }
             }
         }
     }
 
-    /* Process 'subscribe' - this resource subscribes to (depends on) listed resources */
+    /* Process 'subscribe' - this resource subscribes to (depends on) listed resources
+     * The source resources notify this one on change */
     json_value_t *subscribe = json_object_get(params, "subscribe");
     if (subscribe) {
         if (json_is_string(subscribe)) {
@@ -505,6 +564,21 @@ static void extract_dependencies(resource_entry_t *entries, size_t count, size_t
                 int dep_idx = find_resource_index(entries, count, type_buf, title_buf);
                 if (dep_idx >= 0) {
                     add_dependency(entries, idx, (size_t)dep_idx);
+                    add_notify(entries, (size_t)dep_idx, idx);  /* Source notifies this */
+                }
+            }
+        } else if (json_is_array(subscribe)) {
+            for (size_t j = 0; j < subscribe->data.array.count; j++) {
+                json_value_t *elem = subscribe->data.array.elements[j];
+                if (json_is_string(elem)) {
+                    if (parse_resource_ref(json_get_string(elem), type_buf, sizeof(type_buf),
+                                           title_buf, sizeof(title_buf)) == 0) {
+                        int dep_idx = find_resource_index(entries, count, type_buf, title_buf);
+                        if (dep_idx >= 0) {
+                            add_dependency(entries, idx, (size_t)dep_idx);
+                            add_notify(entries, (size_t)dep_idx, idx);
+                        }
+                    }
                 }
             }
         }
@@ -778,12 +852,52 @@ int catalog_apply(const char *catalog_json, apply_context_t *ctx) {
 
     /* Phase 5: Apply resources in sorted order */
     int applied = 0;
+    int refreshed = 0;
     for (size_t i = 0; i < resource_count; i++) {
         size_t idx = sorted_order[i];
         resource_t *resource = entries[idx].resource;
 
         if (resource) {
             apply_result_t result = resource_apply(resource, ctx);
+
+            /* Track if this resource changed */
+            if (result == APPLY_CHANGED) {
+                entries[idx].changed = true;
+                /* Mark all notify targets for refresh */
+                for (size_t j = 0; j < entries[idx].notify_count; j++) {
+                    size_t target = entries[idx].notify_targets[j];
+                    entries[target].needs_refresh = true;
+                    if (ctx->verbose) {
+                        print_info("%s[%s]: Will refresh %s[%s]",
+                                  resource->type, resource->title,
+                                  entries[target].resource->type,
+                                  entries[target].resource->title);
+                    }
+                }
+            }
+
+            /* Check if this resource needs refresh (from earlier notify) */
+            if (entries[idx].needs_refresh && result != APPLY_FAILED) {
+                apply_result_t refresh_result = resource_refresh(resource, ctx);
+                if (refresh_result == APPLY_CHANGED) {
+                    entries[idx].changed = true;
+                    refreshed++;
+                    /* Propagate refresh to notify targets */
+                    for (size_t j = 0; j < entries[idx].notify_count; j++) {
+                        size_t target = entries[idx].notify_targets[j];
+                        /* Only mark for refresh if not yet applied */
+                        if (!entries[target].applied) {
+                            entries[target].needs_refresh = true;
+                        }
+                    }
+                } else if (refresh_result == APPLY_FAILED) {
+                    print_resource_error(resource->type, resource->title,
+                                        "refresh failed: %s",
+                                        ctx->last_error ? ctx->last_error : "unknown error");
+                }
+            }
+
+            entries[idx].applied = true;
 
             /* Only print status for non-changes in verbose mode */
             switch (result) {
@@ -823,8 +937,13 @@ int catalog_apply(const char *catalog_json, apply_context_t *ctx) {
     double elapsed = (end_time.tv_sec - start_time.tv_sec) +
                      (end_time.tv_nsec - start_time.tv_nsec) / 1e9;
     print_notice("Applied catalog in %.2f seconds", elapsed);
-    print_info("Resources: %d total, %d changed, %d failed",
-               applied, ctx->changes_made, ctx->failures);
+    if (refreshed > 0) {
+        print_info("Resources: %d total, %d changed, %d refreshed, %d failed",
+                   applied, ctx->changes_made, refreshed, ctx->failures);
+    } else {
+        print_info("Resources: %d total, %d changed, %d failed",
+                   applied, ctx->changes_made, ctx->failures);
+    }
 
     return ctx->failures;
 }

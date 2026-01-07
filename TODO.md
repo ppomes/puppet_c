@@ -26,11 +26,12 @@
 - [ ] Exported resource collectors from PuppetDB (`<<| |>>`)
 
 ### Resource Relationships
-- [x] `require` metaparameter (ordering only)
-- [x] `before` metaparameter (ordering only)
-- [x] `notify` metaparameter (ordering only, refresh pending)
-- [x] `subscribe` metaparameter (ordering only, refresh pending)
-- [ ] Refresh triggers (restart service when file changes)
+- [x] `require` metaparameter (ordering)
+- [x] `before` metaparameter (ordering)
+- [x] `notify` metaparameter (ordering + refresh)
+- [x] `subscribe` metaparameter (ordering + refresh)
+- [x] Refresh triggers (service restart, exec refresh)
+- [x] `refreshonly` parameter for exec resources
 
 ### Type System
 - [ ] Type aliases (`type MyType = String[1]`)

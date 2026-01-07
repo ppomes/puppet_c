@@ -96,6 +96,7 @@ typedef struct {
  */
 typedef apply_result_t (*provider_apply_fn)(const resource_t *resource, apply_context_t *ctx);
 typedef resource_state_t (*provider_check_fn)(const resource_t *resource, apply_context_t *ctx);
+typedef apply_result_t (*provider_refresh_fn)(const resource_t *resource, apply_context_t *ctx);
 typedef void (*provider_cleanup_fn)(void);
 
 /**
@@ -107,6 +108,7 @@ typedef struct {
     os_family_t os_family;      /* OS family (0 for generic) */
     provider_apply_fn apply;    /* Apply resource */
     provider_check_fn check;    /* Check current state */
+    provider_refresh_fn refresh;/* Refresh resource (e.g., restart service) */
     provider_cleanup_fn cleanup;/* Cleanup function */
 } provider_t;
 
@@ -225,6 +227,14 @@ void apply_context_set_error(apply_context_t *ctx, const char *fmt, ...);
  * @return Apply result
  */
 apply_result_t resource_apply(const resource_t *resource, apply_context_t *ctx);
+
+/**
+ * @brief Refresh a resource (e.g., restart a service)
+ * @param resource Resource to refresh
+ * @param ctx Apply context
+ * @return Apply result
+ */
+apply_result_t resource_refresh(const resource_t *resource, apply_context_t *ctx);
 
 /**
  * @brief Apply all resources from a catalog JSON
