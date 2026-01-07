@@ -2380,6 +2380,48 @@ puppet_value_t *puppet_func_merge(puppet_expr_list_t *args, puppet_env_t *env) {
     return result;
 }
 
+/* Forward declaration for deep_merge_hash defined later */
+static void deep_merge_hash(puppet_hash_t *dest, puppet_hash_t *src);
+
+/**
+ * deep_merge() - Recursively merge hashes
+ *
+ * Unlike merge(), when both values for a key are hashes, they are merged
+ * recursively instead of replaced.
+ *
+ * Usage: deep_merge(hash1, hash2, ...)
+ */
+puppet_value_t *puppet_func_deep_merge(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+            "deep_merge() requires at least 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *result = puppet_value_create_hash();
+
+    for (size_t i = 0; i < args->count; i++) {
+        puppet_value_t *hash_val = puppet_eval_expr(args->exprs[i], env);
+
+        if (!hash_val || hash_val->type == PUPPET_VALUE_UNDEF) {
+            if (hash_val) puppet_value_destroy(hash_val);
+            continue;
+        }
+
+        if (hash_val->type != PUPPET_VALUE_HASH) {
+            puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
+                "deep_merge() skipping non-hash argument");
+            puppet_value_destroy(hash_val);
+            continue;
+        }
+
+        deep_merge_hash(result->data.hash, hash_val->data.hash);
+        puppet_value_destroy(hash_val);
+    }
+
+    return result;
+}
+
 /**
  * Helper function to normalize a key by replacing dashes with underscores
  * Returns a newly allocated string that must be freed
@@ -2391,51 +2433,6 @@ static char *normalize_key(const char *key, size_t len) {
     }
     normalized[len] = '\0';
     return normalized;
-}
-
-/**
- * Helper function to find a key in a hash, considering dash/underscore equivalence
- * Returns the existing key if found (as normalized), or NULL if not found
- */
-static const char *find_normalized_key(puppet_hash_t *hash, const char *key, size_t len) {
-    /* First try exact match */
-    if (puppet_hash_get(hash, key, len)) {
-        return key;
-    }
-
-    /* Try normalized version (convert dashes to underscores) */
-    char *normalized = normalize_key(key, len);
-    puppet_value_t *val = puppet_hash_get(hash, normalized, len);
-    puppet_free(normalized);
-
-    if (val) {
-        /* The hash has the underscore version, return that pattern */
-        return NULL;  /* Indicates we should use underscore version */
-    }
-
-    /* Try dash version if key had underscores */
-    bool has_underscore = false;
-    for (size_t i = 0; i < len; i++) {
-        if (key[i] == '_') {
-            has_underscore = true;
-            break;
-        }
-    }
-
-    if (has_underscore) {
-        char *dashed = puppet_malloc(len + 1);
-        for (size_t i = 0; i < len; i++) {
-            dashed[i] = (key[i] == '_') ? '-' : key[i];
-        }
-        dashed[len] = '\0';
-        val = puppet_hash_get(hash, dashed, len);
-        puppet_free(dashed);
-        if (val) {
-            return NULL;  /* Found dash version in hash */
-        }
-    }
-
-    return NULL;  /* Key not found */
 }
 
 /**
@@ -2767,6 +2764,705 @@ puppet_value_t *puppet_func_shell_join(puppet_expr_list_t *args, puppet_env_t *e
     puppet_value_t *ret = puppet_value_create_string(result, total_len);
     puppet_free(result);
     return ret;
+}
+
+/**
+ * shell_split() - Split a string into array by shell-style tokenization
+ */
+puppet_value_t *puppet_func_shell_split(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+                       "shell_split() requires 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    if (!val || val->type != PUPPET_VALUE_STRING) {
+        if (val) puppet_value_destroy(val);
+        return puppet_value_create_undef();
+    }
+
+    const char *str = val->data.string.data;
+    puppet_array_t *arr = puppet_calloc(1, sizeof(puppet_array_t));
+    arr->capacity = 8;
+    arr->items = puppet_calloc(arr->capacity, sizeof(puppet_value_t*));
+
+    /* Simple shell-style split: split on whitespace, respect quotes */
+    const char *p = str;
+    while (*p) {
+        /* Skip leading whitespace */
+        while (*p && (*p == ' ' || *p == '\t')) p++;
+        if (!*p) break;
+
+        char quote = 0;
+        size_t len = 0;
+        char *token = puppet_malloc(strlen(p) + 1);
+
+        while (*p && (quote || (*p != ' ' && *p != '\t'))) {
+            if (!quote && (*p == '"' || *p == '\'')) {
+                quote = *p;
+                p++;
+            } else if (quote && *p == quote) {
+                quote = 0;
+                p++;
+            } else {
+                token[len++] = *p++;
+            }
+        }
+        token[len] = '\0';
+
+        if (arr->count >= arr->capacity) {
+            arr->capacity *= 2;
+            arr->items = puppet_realloc(arr->items, arr->capacity * sizeof(puppet_value_t*));
+        }
+        arr->items[arr->count++] = puppet_value_create_string(token, len);
+        puppet_free(token);
+    }
+
+    puppet_value_destroy(val);
+    puppet_value_t *result = puppet_calloc(1, sizeof(puppet_value_t));
+    result->type = PUPPET_VALUE_ARRAY;
+    result->data.array = arr;
+    return result;
+}
+
+/**
+ * swapcase() - Swap case of each character
+ */
+puppet_value_t *puppet_func_swapcase(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        return puppet_value_create_string("", 0);
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    if (!val || val->type != PUPPET_VALUE_STRING) {
+        if (val) puppet_value_destroy(val);
+        return puppet_value_create_string("", 0);
+    }
+
+    size_t len = val->data.string.len;
+    char *result = puppet_malloc(len + 1);
+    for (size_t i = 0; i < len; i++) {
+        char c = val->data.string.data[i];
+        if (c >= 'a' && c <= 'z') {
+            result[i] = c - 32;
+        } else if (c >= 'A' && c <= 'Z') {
+            result[i] = c + 32;
+        } else {
+            result[i] = c;
+        }
+    }
+    result[len] = '\0';
+
+    puppet_value_destroy(val);
+    puppet_value_t *ret = puppet_value_create_string(result, len);
+    puppet_free(result);
+    return ret;
+}
+
+/**
+ * squeeze() - Remove consecutive duplicate characters
+ */
+puppet_value_t *puppet_func_squeeze(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        return puppet_value_create_string("", 0);
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    if (!val || val->type != PUPPET_VALUE_STRING) {
+        if (val) puppet_value_destroy(val);
+        return puppet_value_create_string("", 0);
+    }
+
+    const char *src = val->data.string.data;
+    size_t src_len = val->data.string.len;
+    char *result = puppet_malloc(src_len + 1);
+    size_t j = 0;
+
+    for (size_t i = 0; i < src_len; i++) {
+        if (i == 0 || src[i] != src[i-1]) {
+            result[j++] = src[i];
+        }
+    }
+    result[j] = '\0';
+
+    puppet_value_destroy(val);
+    puppet_value_t *ret = puppet_value_create_string(result, j);
+    puppet_free(result);
+    return ret;
+}
+
+/**
+ * prefix() - Add prefix to each element of array
+ */
+puppet_value_t *puppet_func_prefix(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+                       "prefix() requires 2 arguments (array, prefix)");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *arr_val = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *prefix_val = puppet_eval_expr(args->exprs[1], env);
+
+    if (!arr_val || arr_val->type != PUPPET_VALUE_ARRAY) {
+        if (arr_val) puppet_value_destroy(arr_val);
+        if (prefix_val) puppet_value_destroy(prefix_val);
+        return puppet_value_create_undef();
+    }
+    if (!prefix_val || prefix_val->type != PUPPET_VALUE_STRING) {
+        puppet_value_destroy(arr_val);
+        if (prefix_val) puppet_value_destroy(prefix_val);
+        return puppet_value_create_undef();
+    }
+
+    const char *prefix = prefix_val->data.string.data;
+    size_t prefix_len = prefix_val->data.string.len;
+    puppet_array_t *src = arr_val->data.array;
+
+    puppet_array_t *result = puppet_calloc(1, sizeof(puppet_array_t));
+    result->count = src->count;
+    result->capacity = src->count;
+    result->items = puppet_calloc(result->capacity, sizeof(puppet_value_t*));
+
+    for (size_t i = 0; i < src->count; i++) {
+        if (src->items[i] && src->items[i]->type == PUPPET_VALUE_STRING) {
+            size_t str_len = src->items[i]->data.string.len;
+            size_t new_len = prefix_len + str_len;
+            char *new_str = puppet_malloc(new_len + 1);
+            memcpy(new_str, prefix, prefix_len);
+            memcpy(new_str + prefix_len, src->items[i]->data.string.data, str_len);
+            new_str[new_len] = '\0';
+            result->items[i] = puppet_value_create_string(new_str, new_len);
+            puppet_free(new_str);
+        } else {
+            result->items[i] = puppet_value_copy(src->items[i]);
+        }
+    }
+
+    puppet_value_destroy(arr_val);
+    puppet_value_destroy(prefix_val);
+
+    puppet_value_t *ret = puppet_calloc(1, sizeof(puppet_value_t));
+    ret->type = PUPPET_VALUE_ARRAY;
+    ret->data.array = result;
+    return ret;
+}
+
+/**
+ * suffix() - Add suffix to each element of array
+ */
+puppet_value_t *puppet_func_suffix(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+                       "suffix() requires 2 arguments (array, suffix)");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *arr_val = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *suffix_val = puppet_eval_expr(args->exprs[1], env);
+
+    if (!arr_val || arr_val->type != PUPPET_VALUE_ARRAY) {
+        if (arr_val) puppet_value_destroy(arr_val);
+        if (suffix_val) puppet_value_destroy(suffix_val);
+        return puppet_value_create_undef();
+    }
+    if (!suffix_val || suffix_val->type != PUPPET_VALUE_STRING) {
+        puppet_value_destroy(arr_val);
+        if (suffix_val) puppet_value_destroy(suffix_val);
+        return puppet_value_create_undef();
+    }
+
+    const char *suffix = suffix_val->data.string.data;
+    size_t suffix_len = suffix_val->data.string.len;
+    puppet_array_t *src = arr_val->data.array;
+
+    puppet_array_t *result = puppet_calloc(1, sizeof(puppet_array_t));
+    result->count = src->count;
+    result->capacity = src->count;
+    result->items = puppet_calloc(result->capacity, sizeof(puppet_value_t*));
+
+    for (size_t i = 0; i < src->count; i++) {
+        if (src->items[i] && src->items[i]->type == PUPPET_VALUE_STRING) {
+            size_t str_len = src->items[i]->data.string.len;
+            size_t new_len = str_len + suffix_len;
+            char *new_str = puppet_malloc(new_len + 1);
+            memcpy(new_str, src->items[i]->data.string.data, str_len);
+            memcpy(new_str + str_len, suffix, suffix_len);
+            new_str[new_len] = '\0';
+            result->items[i] = puppet_value_create_string(new_str, new_len);
+            puppet_free(new_str);
+        } else {
+            result->items[i] = puppet_value_copy(src->items[i]);
+        }
+    }
+
+    puppet_value_destroy(arr_val);
+    puppet_value_destroy(suffix_val);
+
+    puppet_value_t *ret = puppet_calloc(1, sizeof(puppet_value_t));
+    ret->type = PUPPET_VALUE_ARRAY;
+    ret->data.array = result;
+    return ret;
+}
+
+/**
+ * delete_undef_values() - Remove undef values from hash
+ */
+puppet_value_t *puppet_func_delete_undef_values(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+                       "delete_undef_values() requires 1 argument");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    if (!val || val->type != PUPPET_VALUE_HASH) {
+        if (val) puppet_value_destroy(val);
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *result = puppet_value_create_hash();
+    puppet_hash_t *src = val->data.hash;
+
+    for (size_t i = 0; i < src->bucket_count; i++) {
+        puppet_hash_entry_t *entry = src->buckets[i];
+        while (entry) {
+            if (entry->value && entry->value->type != PUPPET_VALUE_UNDEF) {
+                puppet_hash_set(result->data.hash, entry->key.data, entry->key.len,
+                               puppet_value_copy(entry->value));
+            }
+            entry = entry->next;
+        }
+    }
+
+    puppet_value_destroy(val);
+    return result;
+}
+
+/**
+ * Helper to compare two puppet values for equality
+ */
+static bool values_equal(puppet_value_t *a, puppet_value_t *b) {
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    if (a->type != b->type) return false;
+
+    switch (a->type) {
+        case PUPPET_VALUE_UNDEF:
+            return true;
+        case PUPPET_VALUE_BOOL:
+            return a->data.boolean == b->data.boolean;
+        case PUPPET_VALUE_NUMBER:
+            return a->data.number == b->data.number;
+        case PUPPET_VALUE_STRING:
+            return a->data.string.len == b->data.string.len &&
+                   memcmp(a->data.string.data, b->data.string.data, a->data.string.len) == 0;
+        default:
+            /* For complex types, just compare pointers (identity) */
+            return a == b;
+    }
+}
+
+/**
+ * Helper to check if value exists in array
+ */
+static bool array_contains_value(puppet_array_t *arr, puppet_value_t *val) {
+    for (size_t i = 0; i < arr->count; i++) {
+        if (values_equal(arr->items[i], val)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * union() - Return unique elements from both arrays
+ */
+puppet_value_t *puppet_func_union(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+                       "union() requires 2 arguments");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *a = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *b = puppet_eval_expr(args->exprs[1], env);
+
+    if (!a || a->type != PUPPET_VALUE_ARRAY || !b || b->type != PUPPET_VALUE_ARRAY) {
+        if (a) puppet_value_destroy(a);
+        if (b) puppet_value_destroy(b);
+        return puppet_value_create_undef();
+    }
+
+    puppet_array_t *result = puppet_calloc(1, sizeof(puppet_array_t));
+    result->capacity = a->data.array->count + b->data.array->count;
+    result->items = puppet_calloc(result->capacity, sizeof(puppet_value_t*));
+
+    /* Add all from first array (unique) */
+    for (size_t i = 0; i < a->data.array->count; i++) {
+        if (!array_contains_value(result, a->data.array->items[i])) {
+            result->items[result->count++] = puppet_value_copy(a->data.array->items[i]);
+        }
+    }
+    /* Add from second array if not already present */
+    for (size_t i = 0; i < b->data.array->count; i++) {
+        if (!array_contains_value(result, b->data.array->items[i])) {
+            result->items[result->count++] = puppet_value_copy(b->data.array->items[i]);
+        }
+    }
+
+    puppet_value_destroy(a);
+    puppet_value_destroy(b);
+
+    puppet_value_t *ret = puppet_calloc(1, sizeof(puppet_value_t));
+    ret->type = PUPPET_VALUE_ARRAY;
+    ret->data.array = result;
+    return ret;
+}
+
+/**
+ * intersection() - Return elements present in both arrays
+ */
+puppet_value_t *puppet_func_intersection(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+                       "intersection() requires 2 arguments");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *a = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *b = puppet_eval_expr(args->exprs[1], env);
+
+    if (!a || a->type != PUPPET_VALUE_ARRAY || !b || b->type != PUPPET_VALUE_ARRAY) {
+        if (a) puppet_value_destroy(a);
+        if (b) puppet_value_destroy(b);
+        return puppet_value_create_undef();
+    }
+
+    puppet_array_t *result = puppet_calloc(1, sizeof(puppet_array_t));
+    result->capacity = a->data.array->count;
+    result->items = puppet_calloc(result->capacity, sizeof(puppet_value_t*));
+
+    for (size_t i = 0; i < a->data.array->count; i++) {
+        if (array_contains_value(b->data.array, a->data.array->items[i]) &&
+            !array_contains_value(result, a->data.array->items[i])) {
+            result->items[result->count++] = puppet_value_copy(a->data.array->items[i]);
+        }
+    }
+
+    puppet_value_destroy(a);
+    puppet_value_destroy(b);
+
+    puppet_value_t *ret = puppet_calloc(1, sizeof(puppet_value_t));
+    ret->type = PUPPET_VALUE_ARRAY;
+    ret->data.array = result;
+    return ret;
+}
+
+/**
+ * difference() - Return elements in first array not in second
+ */
+puppet_value_t *puppet_func_difference(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+                       "difference() requires 2 arguments");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *a = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *b = puppet_eval_expr(args->exprs[1], env);
+
+    if (!a || a->type != PUPPET_VALUE_ARRAY || !b || b->type != PUPPET_VALUE_ARRAY) {
+        if (a) puppet_value_destroy(a);
+        if (b) puppet_value_destroy(b);
+        return puppet_value_create_undef();
+    }
+
+    puppet_array_t *result = puppet_calloc(1, sizeof(puppet_array_t));
+    result->capacity = a->data.array->count;
+    result->items = puppet_calloc(result->capacity, sizeof(puppet_value_t*));
+
+    for (size_t i = 0; i < a->data.array->count; i++) {
+        if (!array_contains_value(b->data.array, a->data.array->items[i])) {
+            result->items[result->count++] = puppet_value_copy(a->data.array->items[i]);
+        }
+    }
+
+    puppet_value_destroy(a);
+    puppet_value_destroy(b);
+
+    puppet_value_t *ret = puppet_calloc(1, sizeof(puppet_value_t));
+    ret->type = PUPPET_VALUE_ARRAY;
+    ret->data.array = result;
+    return ret;
+}
+
+/**
+ * zip() - Merge arrays element by element into nested arrays
+ */
+puppet_value_t *puppet_func_zip(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+                       "zip() requires at least 2 arguments");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *a = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *b = puppet_eval_expr(args->exprs[1], env);
+
+    if (!a || a->type != PUPPET_VALUE_ARRAY || !b || b->type != PUPPET_VALUE_ARRAY) {
+        if (a) puppet_value_destroy(a);
+        if (b) puppet_value_destroy(b);
+        return puppet_value_create_undef();
+    }
+
+    size_t len = a->data.array->count < b->data.array->count ?
+                 a->data.array->count : b->data.array->count;
+
+    puppet_array_t *result = puppet_calloc(1, sizeof(puppet_array_t));
+    result->count = len;
+    result->capacity = len;
+    result->items = puppet_calloc(len, sizeof(puppet_value_t*));
+
+    for (size_t i = 0; i < len; i++) {
+        puppet_array_t *pair = puppet_calloc(1, sizeof(puppet_array_t));
+        pair->count = 2;
+        pair->capacity = 2;
+        pair->items = puppet_calloc(2, sizeof(puppet_value_t*));
+        pair->items[0] = puppet_value_copy(a->data.array->items[i]);
+        pair->items[1] = puppet_value_copy(b->data.array->items[i]);
+
+        result->items[i] = puppet_calloc(1, sizeof(puppet_value_t));
+        result->items[i]->type = PUPPET_VALUE_ARRAY;
+        result->items[i]->data.array = pair;
+    }
+
+    puppet_value_destroy(a);
+    puppet_value_destroy(b);
+
+    puppet_value_t *ret = puppet_calloc(1, sizeof(puppet_value_t));
+    ret->type = PUPPET_VALUE_ARRAY;
+    ret->data.array = result;
+    return ret;
+}
+
+/**
+ * count() - Count elements in array (or matching a value)
+ */
+puppet_value_t *puppet_func_count(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        return puppet_value_create_number(0);
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    if (!val || val->type != PUPPET_VALUE_ARRAY) {
+        if (val) puppet_value_destroy(val);
+        return puppet_value_create_number(0);
+    }
+
+    size_t count = val->data.array->count;
+
+    /* If second argument, count matching values */
+    if (args->count >= 2) {
+        puppet_value_t *match = puppet_eval_expr(args->exprs[1], env);
+        count = 0;
+        for (size_t i = 0; i < val->data.array->count; i++) {
+            if (values_equal(val->data.array->items[i], match)) {
+                count++;
+            }
+        }
+        puppet_value_destroy(match);
+    }
+
+    puppet_value_destroy(val);
+    return puppet_value_create_number((double)count);
+}
+
+/**
+ * shuffle() - Randomly shuffle array elements
+ */
+puppet_value_t *puppet_func_shuffle(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    if (!val || val->type != PUPPET_VALUE_ARRAY) {
+        if (val) puppet_value_destroy(val);
+        return puppet_value_create_undef();
+    }
+
+    /* Copy array */
+    puppet_array_t *result = puppet_calloc(1, sizeof(puppet_array_t));
+    result->count = val->data.array->count;
+    result->capacity = result->count;
+    result->items = puppet_calloc(result->capacity, sizeof(puppet_value_t*));
+    for (size_t i = 0; i < result->count; i++) {
+        result->items[i] = puppet_value_copy(val->data.array->items[i]);
+    }
+
+    /* Fisher-Yates shuffle */
+    static int seeded = 0;
+    if (!seeded) {
+        srand((unsigned int)time(NULL));
+        seeded = 1;
+    }
+    for (size_t i = result->count - 1; i > 0; i--) {
+        size_t j = rand() % (i + 1);
+        puppet_value_t *tmp = result->items[i];
+        result->items[i] = result->items[j];
+        result->items[j] = tmp;
+    }
+
+    puppet_value_destroy(val);
+    puppet_value_t *ret = puppet_calloc(1, sizeof(puppet_value_t));
+    ret->type = PUPPET_VALUE_ARRAY;
+    ret->data.array = result;
+    return ret;
+}
+
+/**
+ * clamp() - Clamp value between min and max
+ */
+puppet_value_t *puppet_func_clamp(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 3) {
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+                       "clamp() requires 3 arguments (value, min, max)");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *min_val = puppet_eval_expr(args->exprs[1], env);
+    puppet_value_t *max_val = puppet_eval_expr(args->exprs[2], env);
+
+    if (!val || val->type != PUPPET_VALUE_NUMBER ||
+        !min_val || min_val->type != PUPPET_VALUE_NUMBER ||
+        !max_val || max_val->type != PUPPET_VALUE_NUMBER) {
+        if (val) puppet_value_destroy(val);
+        if (min_val) puppet_value_destroy(min_val);
+        if (max_val) puppet_value_destroy(max_val);
+        return puppet_value_create_undef();
+    }
+
+    double v = val->data.number;
+    double min = min_val->data.number;
+    double max = max_val->data.number;
+
+    double result = v < min ? min : (v > max ? max : v);
+
+    puppet_value_destroy(val);
+    puppet_value_destroy(min_val);
+    puppet_value_destroy(max_val);
+
+    return puppet_value_create_number(result);
+}
+
+/**
+ * any2bool() - Convert any value to boolean
+ */
+puppet_value_t *puppet_func_any2bool(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        return puppet_value_create_bool(false);
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    if (!val) {
+        return puppet_value_create_bool(false);
+    }
+
+    bool result = false;
+    switch (val->type) {
+        case PUPPET_VALUE_BOOL:
+            result = val->data.boolean;
+            break;
+        case PUPPET_VALUE_STRING:
+            if (val->data.string.len == 0) {
+                result = false;
+            } else if (strcasecmp(val->data.string.data, "true") == 0 ||
+                       strcasecmp(val->data.string.data, "yes") == 0 ||
+                       strcasecmp(val->data.string.data, "y") == 0 ||
+                       strcasecmp(val->data.string.data, "1") == 0) {
+                result = true;
+            } else if (strcasecmp(val->data.string.data, "false") == 0 ||
+                       strcasecmp(val->data.string.data, "no") == 0 ||
+                       strcasecmp(val->data.string.data, "n") == 0 ||
+                       strcasecmp(val->data.string.data, "0") == 0) {
+                result = false;
+            } else {
+                result = val->data.string.len > 0;
+            }
+            break;
+        case PUPPET_VALUE_NUMBER:
+            result = val->data.number != 0;
+            break;
+        case PUPPET_VALUE_ARRAY:
+            result = val->data.array->count > 0;
+            break;
+        case PUPPET_VALUE_HASH:
+            result = val->data.hash->entry_count > 0;
+            break;
+        case PUPPET_VALUE_UNDEF:
+            result = false;
+            break;
+        default:
+            result = true;
+    }
+
+    puppet_value_destroy(val);
+    return puppet_value_create_bool(result);
+}
+
+/**
+ * bool2num() - Convert boolean to number (true=1, false=0)
+ */
+puppet_value_t *puppet_func_bool2num(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        return puppet_value_create_number(0);
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    if (!val) {
+        return puppet_value_create_number(0);
+    }
+
+    double result = 0;
+    if (val->type == PUPPET_VALUE_BOOL) {
+        result = val->data.boolean ? 1 : 0;
+    } else if (val->type == PUPPET_VALUE_STRING) {
+        if (strcasecmp(val->data.string.data, "true") == 0 ||
+            strcasecmp(val->data.string.data, "yes") == 0) {
+            result = 1;
+        }
+    }
+
+    puppet_value_destroy(val);
+    return puppet_value_create_number(result);
+}
+
+/**
+ * num2bool() - Convert number to boolean (0=false, non-zero=true)
+ */
+puppet_value_t *puppet_func_num2bool(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 1) {
+        return puppet_value_create_bool(false);
+    }
+
+    puppet_value_t *val = puppet_eval_expr(args->exprs[0], env);
+    if (!val) {
+        return puppet_value_create_bool(false);
+    }
+
+    bool result = false;
+    if (val->type == PUPPET_VALUE_NUMBER) {
+        result = val->data.number != 0;
+    } else if (val->type == PUPPET_VALUE_STRING) {
+        result = strcmp(val->data.string.data, "0") != 0 &&
+                 val->data.string.len > 0;
+    }
+
+    puppet_value_destroy(val);
+    return puppet_value_create_bool(result);
 }
 
 /**

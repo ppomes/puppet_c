@@ -801,10 +801,41 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "merge") == 0) {
                 return puppet_func_merge(&expr->data.funcall.args, env);
             }
+            else if (strcmp(func_name, "deep_merge") == 0) {
+                return puppet_func_deep_merge(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "delete_undef_values") == 0) {
+                return puppet_func_delete_undef_values(&expr->data.funcall.args, env);
+            }
             else if (strcmp(func_name, "mysql::normalise_and_deepmerge") == 0) {
                 return puppet_func_mysql_normalise_and_deepmerge(&expr->data.funcall.args, env);
             }
-            // Shell/string escaping functions
+            // Array set operations
+            else if (strcmp(func_name, "prefix") == 0) {
+                return puppet_func_prefix(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "suffix") == 0) {
+                return puppet_func_suffix(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "union") == 0) {
+                return puppet_func_union(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "intersection") == 0) {
+                return puppet_func_intersection(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "difference") == 0) {
+                return puppet_func_difference(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "zip") == 0) {
+                return puppet_func_zip(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "count") == 0) {
+                return puppet_func_count(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "shuffle") == 0) {
+                return puppet_func_shuffle(&expr->data.funcall.args, env);
+            }
+            // Shell/string functions
             else if (strcmp(func_name, "stdlib::shell_escape") == 0 ||
                      strcmp(func_name, "shell_escape") == 0) {
                 return puppet_func_shell_escape(&expr->data.funcall.args, env);
@@ -812,6 +843,30 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "stdlib::shell_join") == 0 ||
                      strcmp(func_name, "shell_join") == 0) {
                 return puppet_func_shell_join(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "stdlib::shell_split") == 0 ||
+                     strcmp(func_name, "shell_split") == 0) {
+                return puppet_func_shell_split(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "swapcase") == 0) {
+                return puppet_func_swapcase(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "squeeze") == 0) {
+                return puppet_func_squeeze(&expr->data.funcall.args, env);
+            }
+            // Numeric functions
+            else if (strcmp(func_name, "clamp") == 0) {
+                return puppet_func_clamp(&expr->data.funcall.args, env);
+            }
+            // Type conversion functions
+            else if (strcmp(func_name, "any2bool") == 0) {
+                return puppet_func_any2bool(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "bool2num") == 0) {
+                return puppet_func_bool2num(&expr->data.funcall.args, env);
+            }
+            else if (strcmp(func_name, "num2bool") == 0) {
+                return puppet_func_num2bool(&expr->data.funcall.args, env);
             }
             // Type checking functions
             else if (strcmp(func_name, "is_string") == 0) {

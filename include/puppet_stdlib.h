@@ -120,11 +120,34 @@ puppet_value_t *puppet_func_range(puppet_expr_list_t *args, puppet_env_t *env);
 
 // Hash functions
 puppet_value_t *puppet_func_merge(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_deep_merge(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_delete_undef_values(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_mysql_normalise_and_deepmerge(puppet_expr_list_t *args, puppet_env_t *env);
 
-// Shell/string escaping functions
+// Array set operations
+puppet_value_t *puppet_func_prefix(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_suffix(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_union(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_intersection(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_difference(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_zip(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_count(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_shuffle(puppet_expr_list_t *args, puppet_env_t *env);
+
+// Shell/string functions
 puppet_value_t *puppet_func_shell_escape(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_shell_join(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_shell_split(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_swapcase(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_squeeze(puppet_expr_list_t *args, puppet_env_t *env);
+
+// Numeric functions
+puppet_value_t *puppet_func_clamp(puppet_expr_list_t *args, puppet_env_t *env);
+
+// Type conversion functions
+puppet_value_t *puppet_func_any2bool(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_bool2num(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_num2bool(puppet_expr_list_t *args, puppet_env_t *env);
 
 // Type checking functions
 puppet_value_t *puppet_func_is_string(puppet_expr_list_t *args, puppet_env_t *env);

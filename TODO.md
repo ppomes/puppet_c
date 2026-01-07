@@ -46,12 +46,19 @@
 - [x] EPP templates (Embedded Puppet)
 
 ### Functions
-- [x] ~80 stdlib functions implemented
+- [x] ~100 stdlib functions implemented
 - [x] `each()`, `map()`, `filter()`, `reduce()` iterators
 - [x] `create_resources()` function
+- [x] `deep_merge()`, `delete_undef_values()` hash functions
+- [x] `prefix()`, `suffix()`, `union()`, `intersection()`, `difference()` array functions
+- [x] `zip()`, `count()`, `shuffle()` array utilities
+- [x] `swapcase()`, `squeeze()`, `shell_split()` string functions
+- [x] `clamp()` numeric function
+- [x] `any2bool()`, `bool2num()`, `num2bool()` type conversions
 - [ ] Custom function definitions (`function mymod::myfunc() {}`)
 - [ ] `with()` function
 - [ ] `assert_type()` function
+- [ ] `loadyaml()`, `parseyaml()`, `loadjson()`, `parsejson()` data loading
 
 ## Providers
 
@@ -144,6 +151,7 @@
 
 - [x] Parser unit tests
 - [x] Docker integration tests
+- [x] Stdlib function tests (`tests/test_stdlib_extra.sh`)
 - [ ] Memory leak testing (Valgrind)
 - [ ] Performance benchmarks
 - [ ] Coverage reporting
