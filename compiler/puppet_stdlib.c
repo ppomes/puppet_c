@@ -5029,6 +5029,236 @@ puppet_value_t *puppet_func_create_resources(puppet_expr_list_t *args, puppet_en
 }
 
 /**
+ * @brief Puppet ensure_resource() function - create resource if not exists
+ *
+ * Usage: ensure_resource(type, title, params)
+ *        ensure_resource(type, [title1, title2, ...], params)
+ *
+ * Creates a resource only if one with that type and title doesn't already exist.
+ * Unlike create_resources(), this silently skips existing resources.
+ */
+puppet_value_t *puppet_func_ensure_resource(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count < 2) {
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+                       "ensure_resource() requires at least 2 arguments (type, title)");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *type_val = puppet_eval_expr(args->exprs[0], env);
+    puppet_value_t *title_val = puppet_eval_expr(args->exprs[1], env);
+    puppet_value_t *params_val = NULL;
+
+    if (args->count >= 3) {
+        params_val = puppet_eval_expr(args->exprs[2], env);
+    }
+
+    if (!type_val || type_val->type != PUPPET_VALUE_STRING) {
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+                       "ensure_resource() first argument must be a string (resource type)");
+        if (type_val) puppet_value_destroy(type_val);
+        if (title_val) puppet_value_destroy(title_val);
+        if (params_val) puppet_value_destroy(params_val);
+        return puppet_value_create_undef();
+    }
+
+    if (!title_val ||
+        (title_val->type != PUPPET_VALUE_STRING && title_val->type != PUPPET_VALUE_ARRAY)) {
+        puppet_log_loc(PUPPET_LOG_ERROR, get_args_location(args),
+                       "ensure_resource() second argument must be a string or array of strings");
+        puppet_value_destroy(type_val);
+        if (title_val) puppet_value_destroy(title_val);
+        if (params_val) puppet_value_destroy(params_val);
+        return puppet_value_create_undef();
+    }
+
+    const char *res_type = type_val->data.string.data;
+    puppet_hash_t *params_hash = (params_val && params_val->type == PUPPET_VALUE_HASH)
+                                 ? params_val->data.hash : NULL;
+
+    /* Build array of titles to process */
+    size_t title_count = 1;
+    const char **titles = NULL;
+
+    if (title_val->type == PUPPET_VALUE_ARRAY) {
+        title_count = title_val->data.array->count;
+        titles = puppet_malloc(title_count * sizeof(char*));
+        for (size_t i = 0; i < title_count; i++) {
+            puppet_value_t *t = title_val->data.array->items[i];
+            if (t && t->type == PUPPET_VALUE_STRING) {
+                titles[i] = t->data.string.data;
+            } else {
+                titles[i] = "";  /* skip invalid */
+            }
+        }
+    } else {
+        titles = puppet_malloc(sizeof(char*));
+        titles[0] = title_val->data.string.data;
+    }
+
+    /* Look up the defined type */
+    puppet_value_t *define_ptr = puppet_hash_get(env->define_types, res_type, strlen(res_type));
+
+    /* Try to autoload the define if not already registered */
+    if (!define_ptr && env->loader && strchr(res_type, ':')) {
+        puppet_stmt_t *loaded_def = puppet_loader_load_define(env->loader, res_type);
+        if (loaded_def) {
+            puppet_debug("ensure_resource: Autoloaded defined type: %s", res_type);
+            puppet_value_t *stmt_ptr = puppet_calloc(1, sizeof(puppet_value_t));
+            stmt_ptr->type = PUPPET_VALUE_UNDEF;
+            stmt_ptr->data.string.data = (char*)loaded_def;
+            puppet_hash_set(env->define_types, res_type, strlen(res_type), stmt_ptr);
+            define_ptr = stmt_ptr;
+        }
+    }
+
+    puppet_stmt_t *define_stmt = define_ptr ? (puppet_stmt_t *)define_ptr->data.string.data : NULL;
+
+    /* Process each title */
+    for (size_t ti = 0; ti < title_count; ti++) {
+        const char *title_str = titles[ti];
+        if (!title_str || !*title_str) continue;
+
+        /* Check if resource already exists */
+        size_t res_id_len = strlen(res_type) + strlen(title_str) + 3;
+        char *resource_id = puppet_malloc(res_id_len);
+        snprintf(resource_id, res_id_len, "%s[%s]", res_type, title_str);
+
+        puppet_value_t *existing = puppet_hash_get(env->resource_catalog, resource_id, strlen(resource_id));
+        if (existing) {
+            /* Resource already exists - silently skip (this is ensure_resource's behavior) */
+            puppet_debug("ensure_resource: %s already exists, skipping", resource_id);
+            puppet_free(resource_id);
+            continue;
+        }
+
+        /* Mark as declared */
+        puppet_value_t *marker = puppet_value_create_bool(true);
+        puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);
+
+        if (define_stmt) {
+            /* This is a defined type - execute its body */
+            puppet_debug("ensure_resource: Executing defined type %s[%s]", res_type, title_str);
+
+            /* Create new scope for the define execution */
+            puppet_scope_t *define_scope = puppet_scope_create(env->current_scope, res_type);
+            puppet_scope_push(env, define_scope);
+
+            /* Bind $name and $title to the title */
+            puppet_value_t *name_val = puppet_value_create_string(title_str, strlen(title_str));
+            puppet_scope_set_var(define_scope, "name", name_val);
+            puppet_scope_set_var(define_scope, "title", puppet_value_copy(name_val));
+
+            /* Bind define parameters from params hash */
+            for (size_t p = 0; p < define_stmt->data.define.params.count; p++) {
+                const char *param_name = define_stmt->data.define.params.params[p].name.data;
+                puppet_value_t *param_value = NULL;
+
+                if (params_hash) {
+                    param_value = puppet_hash_get(params_hash, param_name, strlen(param_name));
+                    if (param_value) {
+                        param_value = puppet_value_copy(param_value);
+                    }
+                }
+
+                /* If not found, use define's default value */
+                if (!param_value && define_stmt->data.define.params.params[p].default_value) {
+                    param_value = puppet_eval_expr(
+                        define_stmt->data.define.params.params[p].default_value, env);
+                }
+
+                if (param_value) {
+                    puppet_scope_set_var(define_scope, param_name, param_value);
+                }
+            }
+
+            /* Execute the define body */
+            puppet_exec_stmt_list(&define_stmt->data.define.body, env);
+
+            /* Add the define instance to catalog */
+            if (env->build_catalog && env->catalog) {
+                size_t param_count = 0;
+                puppet_catalog_param_t *cat_params = NULL;
+
+                if (params_hash) {
+                    for (size_t bi = 0; bi < params_hash->bucket_count; bi++) {
+                        puppet_hash_entry_t *pe = params_hash->buckets[bi];
+                        while (pe) {
+                            param_count++;
+                            pe = pe->next;
+                        }
+                    }
+                }
+
+                if (param_count > 0) {
+                    cat_params = puppet_calloc(param_count, sizeof(puppet_catalog_param_t));
+                    size_t param_idx = 0;
+                    for (size_t bi = 0; bi < params_hash->bucket_count; bi++) {
+                        puppet_hash_entry_t *pe = params_hash->buckets[bi];
+                        while (pe) {
+                            cat_params[param_idx].name = puppet_strdup(pe->key.data);
+                            cat_params[param_idx].value = puppet_value_copy(pe->value);
+                            param_idx++;
+                            pe = pe->next;
+                        }
+                    }
+                }
+
+                puppet_catalog_add_resource(env->catalog, res_type, title_str, cat_params, param_count,
+                                            NULL, 0);
+            }
+
+            /* Pop the define scope */
+            puppet_scope_t *popped = puppet_scope_pop(env);
+            puppet_scope_destroy(popped);
+        } else {
+            /* Built-in resource type - add directly to catalog */
+            puppet_debug("ensure_resource: Creating resource %s[%s]", res_type, title_str);
+
+            if (env->build_catalog && env->catalog) {
+                size_t param_count = 0;
+                puppet_catalog_param_t *cat_params = NULL;
+
+                if (params_hash) {
+                    for (size_t bi = 0; bi < params_hash->bucket_count; bi++) {
+                        puppet_hash_entry_t *pe = params_hash->buckets[bi];
+                        while (pe) {
+                            param_count++;
+                            pe = pe->next;
+                        }
+                    }
+
+                    if (param_count > 0) {
+                        cat_params = puppet_calloc(param_count, sizeof(puppet_catalog_param_t));
+                        size_t param_idx = 0;
+                        for (size_t bi = 0; bi < params_hash->bucket_count; bi++) {
+                            puppet_hash_entry_t *pe = params_hash->buckets[bi];
+                            while (pe) {
+                                cat_params[param_idx].name = puppet_strdup(pe->key.data);
+                                cat_params[param_idx].value = puppet_value_copy(pe->value);
+                                param_idx++;
+                                pe = pe->next;
+                            }
+                        }
+                    }
+                }
+
+                puppet_catalog_add_resource(env->catalog, res_type, title_str, cat_params, param_count,
+                                            NULL, 0);
+            }
+        }
+
+        puppet_free(resource_id);
+    }
+
+    puppet_free(titles);
+    puppet_value_destroy(type_val);
+    puppet_value_destroy(title_val);
+    if (params_val) puppet_value_destroy(params_val);
+
+    return puppet_value_create_undef();
+}
+
+/**
  * @brief Puppet ensure_packages() function - ensure packages are installed
  *
  * Usage: ensure_packages(packages, [options])

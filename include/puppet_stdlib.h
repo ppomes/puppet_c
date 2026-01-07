@@ -177,6 +177,7 @@ puppet_value_t *puppet_func_is_ip_address(puppet_expr_list_t *args, puppet_env_t
 
 // Resource creation
 puppet_value_t *puppet_func_create_resources(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_ensure_resource(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_ensure_packages(puppet_expr_list_t *args, puppet_env_t *env);
 
 // Conversion functions
