@@ -881,7 +881,12 @@ static char *puppet_epp_render_range(const char *start, const char *end,
             if (*tag_start == '#') {
                 p = tag_end + 2;
                 if (trim_after) {
-                    while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+                    /* Trim whitespace up to and including ONE newline */
+                    while (p < end && (*p == ' ' || *p == '\t')) p++;
+                    if (p < end && (*p == '\n' || *p == '\r')) {
+                        if (*p == '\r' && p + 1 < end && *(p + 1) == '\n') p += 2;
+                        else p++;
+                    }
                 }
                 continue;
             }
@@ -916,7 +921,12 @@ static char *puppet_epp_render_range(const char *start, const char *end,
 
                 p = tag_end + 2;
                 if (trim_after) {
-                    while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+                    /* Trim whitespace up to and including ONE newline */
+                    while (p < end && (*p == ' ' || *p == '\t')) p++;
+                    if (p < end && (*p == '\n' || *p == '\r')) {
+                        if (*p == '\r' && p + 1 < end && *(p + 1) == '\n') p += 2;
+                        else p++;
+                    }
                 }
                 continue;
             }
@@ -968,7 +978,12 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                     /* Find matching closing brace - it's in a later tag: <% } %> */
                     const char *body_start = tag_end + 2;
                     if (trim_after) {
-                        while (body_start < end && (*body_start == ' ' || *body_start == '\t' || *body_start == '\n' || *body_start == '\r')) body_start++;
+                        /* Trim whitespace up to and including ONE newline */
+                        while (body_start < end && (*body_start == ' ' || *body_start == '\t')) body_start++;
+                        if (body_start < end && (*body_start == '\n' || *body_start == '\r')) {
+                            if (*body_start == '\r' && body_start + 1 < end && *(body_start + 1) == '\n') body_start += 2;
+                            else body_start++;
+                        }
                     }
 
                     /* Find <% } %> that closes this each */
@@ -1126,10 +1141,18 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                     branches[0].is_else = 0;
                     branches[0].body_start = tag_end + 2;
                     if (trim_after) {
+                        /* Trim whitespace up to and including ONE newline */
                         while (branches[0].body_start < end &&
-                               (*branches[0].body_start == ' ' || *branches[0].body_start == '\t' ||
-                                *branches[0].body_start == '\n' || *branches[0].body_start == '\r'))
+                               (*branches[0].body_start == ' ' || *branches[0].body_start == '\t'))
                             branches[0].body_start++;
+                        if (branches[0].body_start < end &&
+                            (*branches[0].body_start == '\n' || *branches[0].body_start == '\r')) {
+                            if (*branches[0].body_start == '\r' && branches[0].body_start + 1 < end &&
+                                *(branches[0].body_start + 1) == '\n')
+                                branches[0].body_start += 2;
+                            else
+                                branches[0].body_start++;
+                        }
                     }
                     branch_count = 1;
 
@@ -1174,14 +1197,22 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                                             branches[branch_count].cond_len = elsif_cond_end - elsif_cond;
                                             branches[branch_count].is_else = 0;
                                             branches[branch_count].body_start = tag_close + 2;
-                                            /* Check for trim marker before %> */
+                                            /* Check for trim marker before %> - only trim ONE newline */
                                             if (tag_close > inner_start && *(tag_close - 1) == '-') {
                                                 while (branches[branch_count].body_start < end &&
                                                        (*branches[branch_count].body_start == ' ' ||
-                                                        *branches[branch_count].body_start == '\t' ||
-                                                        *branches[branch_count].body_start == '\n' ||
-                                                        *branches[branch_count].body_start == '\r'))
+                                                        *branches[branch_count].body_start == '\t'))
                                                     branches[branch_count].body_start++;
+                                                if (branches[branch_count].body_start < end &&
+                                                    (*branches[branch_count].body_start == '\n' ||
+                                                     *branches[branch_count].body_start == '\r')) {
+                                                    if (*branches[branch_count].body_start == '\r' &&
+                                                        branches[branch_count].body_start + 1 < end &&
+                                                        *(branches[branch_count].body_start + 1) == '\n')
+                                                        branches[branch_count].body_start += 2;
+                                                    else
+                                                        branches[branch_count].body_start++;
+                                                }
                                             }
                                             branch_count++;
                                         }
@@ -1199,13 +1230,22 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                                             branches[branch_count].cond_len = 0;
                                             branches[branch_count].is_else = 1;
                                             branches[branch_count].body_start = tag_close + 2;
+                                            /* Check for trim marker before %> - only trim ONE newline */
                                             if (tag_close > inner_start && *(tag_close - 1) == '-') {
                                                 while (branches[branch_count].body_start < end &&
                                                        (*branches[branch_count].body_start == ' ' ||
-                                                        *branches[branch_count].body_start == '\t' ||
-                                                        *branches[branch_count].body_start == '\n' ||
-                                                        *branches[branch_count].body_start == '\r'))
+                                                        *branches[branch_count].body_start == '\t'))
                                                     branches[branch_count].body_start++;
+                                                if (branches[branch_count].body_start < end &&
+                                                    (*branches[branch_count].body_start == '\n' ||
+                                                     *branches[branch_count].body_start == '\r')) {
+                                                    if (*branches[branch_count].body_start == '\r' &&
+                                                        branches[branch_count].body_start + 1 < end &&
+                                                        *(branches[branch_count].body_start + 1) == '\n')
+                                                        branches[branch_count].body_start += 2;
+                                                    else
+                                                        branches[branch_count].body_start++;
+                                                }
                                             }
                                             branch_count++;
                                         }
@@ -1215,6 +1255,18 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                                         /* Plain closing brace - end of if chain */
                                         branches[branch_count - 1].body_end = scan;
                                         chain_end = tag_close + 2;
+                                        /* Check if final brace has trim marker */
+                                        if (tag_close > inner_start && *(tag_close - 1) == '-') {
+                                            /* Trim whitespace up to and including ONE newline */
+                                            while (chain_end < end && (*chain_end == ' ' || *chain_end == '\t'))
+                                                chain_end++;
+                                            if (chain_end < end && (*chain_end == '\n' || *chain_end == '\r')) {
+                                                if (*chain_end == '\r' && chain_end + 1 < end && *(chain_end + 1) == '\n')
+                                                    chain_end += 2;
+                                                else
+                                                    chain_end++;
+                                            }
+                                        }
                                         brace_depth = 0;
                                         break;
                                     }
@@ -1279,13 +1331,18 @@ static char *puppet_epp_render_range(const char *start, const char *end,
 
                     /* Skip past the entire if/elsif/else chain */
                     p = chain_end ? chain_end : end;
-                    while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+                    /* Don't trim unconditionally - let the loop body preserve newlines */
                 }
                 /* Plain closing brace - skip */
                 else if (code[0] == '}') {
                     p = tag_end + 2;
                     if (trim_after) {
-                        while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+                        /* Trim whitespace up to and including ONE newline */
+                        while (p < end && (*p == ' ' || *p == '\t')) p++;
+                        if (p < end && (*p == '\n' || *p == '\r')) {
+                            if (*p == '\r' && p + 1 < end && *(p + 1) == '\n') p += 2;
+                            else p++;
+                        }
                     }
                 }
                 /* Other code - try to execute as statements */
@@ -1301,7 +1358,12 @@ static char *puppet_epp_render_range(const char *start, const char *end,
                     }
                     p = tag_end + 2;
                     if (trim_after) {
-                        while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+                        /* Trim whitespace up to and including ONE newline */
+                        while (p < end && (*p == ' ' || *p == '\t')) p++;
+                        if (p < end && (*p == '\n' || *p == '\r')) {
+                            if (*p == '\r' && p + 1 < end && *(p + 1) == '\n') p += 2;
+                            else p++;
+                        }
                     }
                 }
 
@@ -1311,7 +1373,12 @@ static char *puppet_epp_render_range(const char *start, const char *end,
 
             p = tag_end + 2;
             if (trim_after) {
-                while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+                /* Trim whitespace up to and including ONE newline */
+                while (p < end && (*p == ' ' || *p == '\t')) p++;
+                if (p < end && (*p == '\n' || *p == '\r')) {
+                    if (*p == '\r' && p + 1 < end && *(p + 1) == '\n') p += 2;
+                    else p++;
+                }
             }
             continue;
         }
