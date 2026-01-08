@@ -1,116 +1,54 @@
-# Puppetc Multipass Development Environment
+# Puppetc Multipass Test Environment
 
-Lightweight Ubuntu VM for development and testing, using [Multipass](https://multipass.run/) instead of VirtualBox/Vagrant.
-
-**Why Multipass?**
-- **Fast**: VMs start in seconds (vs minutes for VirtualBox)
-- **Light**: Uses native hypervisor (Hypervisor.framework on macOS, KVM on Linux)
-- **Simple**: No Vagrantfile complexity, just cloud-init
+Lightweight alternative to Vagrant/VirtualBox for testing puppetc server/agent.
 
 ## Quick Start
 
 ```bash
-# Install multipass (macOS)
-brew install multipass
+# Install multipass
+brew install multipass        # macOS
+sudo snap install multipass   # Ubuntu
 
-# Install multipass (Ubuntu)
-sudo snap install multipass
-
-# Create development VM
+# Start server + agent VMs
 cd multipass
-./puppetc-vm.sh create
+./puppetc-vm.sh up
 
-# Run valgrind memory check
-./puppetc-vm.sh valgrind
-
-# SSH into VM for manual testing
-./puppetc-vm.sh shell
+# Test agent
+./puppetc-vm.sh agent -n      # noop mode
+./puppetc-vm.sh agent -a      # apply mode
 ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `./puppetc-vm.sh create` | Create VM with all dependencies |
-| `./puppetc-vm.sh shell` | SSH into VM |
-| `./puppetc-vm.sh build` | Build puppetc in VM |
-| `./puppetc-vm.sh packages` | Build Debian packages |
-| `./puppetc-vm.sh valgrind [file]` | Run valgrind on test file |
-| `./puppetc-vm.sh valgrind-full` | Comprehensive memory check |
-| `./puppetc-vm.sh test` | Run `make check` |
-| `./puppetc-vm.sh stop` | Stop VM (preserves state) |
-| `./puppetc-vm.sh start` | Start stopped VM |
-| `./puppetc-vm.sh destroy` | Delete VM completely |
-| `./puppetc-vm.sh status` | Show VM info |
+| `./puppetc-vm.sh up` | Create and start server + agent VMs |
+| `./puppetc-vm.sh down` | Stop VMs (preserves state) |
+| `./puppetc-vm.sh destroy` | Delete VMs completely |
+| `./puppetc-vm.sh ssh server` | SSH into server |
+| `./puppetc-vm.sh ssh agent` | SSH into agent |
+| `./puppetc-vm.sh agent -n` | Run agent (noop) |
+| `./puppetc-vm.sh agent -a` | Run agent (apply) |
+| `./puppetc-vm.sh logs` | Follow server logs |
+| `./puppetc-vm.sh status` | Show VM status |
 
-## Valgrind Testing
+## Testing Puppet Code
+
+Edit `puppetcode/manifests/site.pp` on your host - changes are immediately available:
 
 ```bash
-# Quick check on simple manifest
-./puppetc-vm.sh valgrind
+# Edit manifest
+vim ../puppetcode/manifests/site.pp
 
-# Test specific file
-./puppetc-vm.sh valgrind tests/puppet/complex.pp
-
-# Comprehensive check (multiple test cases)
-./puppetc-vm.sh valgrind-full
-
-# Manual valgrind in VM
-./puppetc-vm.sh shell
-cd puppetc
-export LD_LIBRARY_PATH=./compiler/.libs:./common/.libs:./facter/.libs
-valgrind --leak-check=full ./compiler/.libs/puppetc-compile -p tests/puppet/simple.pp
+# Test (no restart needed)
+./puppetc-vm.sh agent -n
 ```
 
-## How It Works
+## Comparison with Vagrant
 
-1. **VM Creation**: Creates Ubuntu 24.04 VM with cloud-init provisioning
-2. **Dependencies**: Installs build tools, libraries, valgrind, gdb
-3. **Mount**: Your project directory is mounted at `/home/ubuntu/puppetc`
-4. **Build**: Runs in VM but edits happen on host (mounted directory)
-
-## VM Specs
-
-- **OS**: Ubuntu 24.04 LTS
-- **CPUs**: 4
-- **Memory**: 4GB
-- **Disk**: 20GB
-- **Mount**: Project directory at `/home/ubuntu/puppetc`
-
-## Comparison with Vagrant/VirtualBox
-
-| Feature | Multipass | Vagrant/VirtualBox |
-|---------|-----------|-------------------|
-| Startup time | ~10 seconds | ~2 minutes |
-| Memory overhead | Low | High |
+| | Multipass | Vagrant/VirtualBox |
+|---|---|---|
+| Startup | ~10 sec | ~2 min |
 | Hypervisor | Native (HVF/KVM) | VirtualBox |
-| Setup | `brew install multipass` | Install VirtualBox + Vagrant |
-| Synced folders | `multipass mount` | VirtualBox shared folders |
-
-## Troubleshooting
-
-### Mount not working
-```bash
-# Remount project
-multipass umount puppetc-dev
-multipass mount /path/to/puppet_c puppetc-dev:/home/ubuntu/puppetc
-```
-
-### VM won't start
-```bash
-# Check status
-multipass list
-
-# Check logs
-multipass info puppetc-dev
-
-# Recreate if needed
-./puppetc-vm.sh destroy
-./puppetc-vm.sh create
-```
-
-### Valgrind shows errors in Ruby
-Ruby has known valgrind issues. Focus on leaks in puppetc code:
-```bash
-valgrind --leak-check=full --suppressions=ruby.supp ./compiler/.libs/puppetc-compile ...
-```
+| Memory | Low | High |
+| Install | `brew install multipass` | VirtualBox + Vagrant |

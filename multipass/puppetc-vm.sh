@@ -1,23 +1,24 @@
 #!/bin/bash
 #
-# Multipass VM management for puppetc development and testing
-# Much lighter than VirtualBox/Vagrant!
+# Multipass VM management for puppetc server/agent testing
+# Lighter alternative to Vagrant/VirtualBox
 #
 # Usage:
-#   ./puppetc-vm.sh create    - Create VM with build dependencies
-#   ./puppetc-vm.sh shell     - SSH into VM
-#   ./puppetc-vm.sh build     - Build packages in VM
-#   ./puppetc-vm.sh valgrind  - Run valgrind memory check
-#   ./puppetc-vm.sh test      - Run make check in VM
-#   ./puppetc-vm.sh destroy   - Destroy VM
-#   ./puppetc-vm.sh status    - Show VM status
+#   ./puppetc-vm.sh up           - Create and start server + agent VMs
+#   ./puppetc-vm.sh down         - Stop VMs
+#   ./puppetc-vm.sh destroy      - Destroy VMs
+#   ./puppetc-vm.sh ssh server   - SSH into server
+#   ./puppetc-vm.sh ssh agent    - SSH into agent
+#   ./puppetc-vm.sh status       - Show VM status
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-VM_NAME="puppetc-dev"
 CLOUD_INIT="$SCRIPT_DIR/cloud-init.yaml"
+
+VM_SERVER="puppetc-server"
+VM_AGENT="puppetc-agent"
 
 # Colors
 RED='\033[0;31m'
@@ -31,273 +32,278 @@ error() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 
 check_multipass() {
     if ! command -v multipass &> /dev/null; then
-        error "Multipass not installed. Install from: https://multipass.run/"
+        error "Multipass not installed. Install from: https://multipass.run/
+  macOS:  brew install multipass
+  Ubuntu: sudo snap install multipass"
     fi
 }
 
 vm_exists() {
-    multipass list --format csv 2>/dev/null | grep -q "^${VM_NAME},"
+    multipass list --format csv 2>/dev/null | grep -q "^${1},"
 }
 
 vm_running() {
-    multipass list --format csv 2>/dev/null | grep -q "^${VM_NAME},Running"
+    multipass list --format csv 2>/dev/null | grep -q "^${1},Running"
+}
+
+get_vm_ip() {
+    multipass info "$1" --format csv 2>/dev/null | tail -1 | cut -d',' -f3
 }
 
 create_vm() {
-    check_multipass
+    local name="$1"
+    local memory="${2:-2G}"
 
-    if vm_exists; then
-        warn "VM '$VM_NAME' already exists"
-        if ! vm_running; then
-            info "Starting VM..."
-            multipass start "$VM_NAME"
+    if vm_exists "$name"; then
+        if ! vm_running "$name"; then
+            info "Starting existing VM '$name'..."
+            multipass start "$name"
+        else
+            info "VM '$name' already running"
         fi
         return 0
     fi
 
-    info "Creating VM '$VM_NAME' with Ubuntu 24.04..."
+    info "Creating VM '$name'..."
     multipass launch 24.04 \
-        --name "$VM_NAME" \
-        --cpus 4 \
-        --memory 4G \
-        --disk 20G \
+        --name "$name" \
+        --cpus 2 \
+        --memory "$memory" \
+        --disk 10G \
         --cloud-init "$CLOUD_INIT"
 
-    info "Waiting for cloud-init to complete..."
-    multipass exec "$VM_NAME" -- cloud-init status --wait
-
-    info "Mounting project directory..."
-    multipass mount "$PROJECT_DIR" "$VM_NAME":/home/ubuntu/puppetc
-
-    info "VM ready!"
-    echo ""
-    echo "  Shell:    $0 shell"
-    echo "  Build:    $0 build"
-    echo "  Valgrind: $0 valgrind"
-    echo "  Test:     $0 test"
+    info "Waiting for cloud-init..."
+    multipass exec "$name" -- cloud-init status --wait >/dev/null 2>&1 || true
 }
 
-shell_vm() {
-    check_multipass
-    if ! vm_exists; then
-        error "VM '$VM_NAME' does not exist. Run: $0 create"
-    fi
-    if ! vm_running; then
-        info "Starting VM..."
-        multipass start "$VM_NAME"
-    fi
-    multipass shell "$VM_NAME"
-}
+setup_server() {
+    info "Setting up server..."
 
-build_vm() {
-    check_multipass
-    if ! vm_running; then
-        error "VM '$VM_NAME' not running. Run: $0 create"
-    fi
+    # Mount source code
+    multipass mount "$PROJECT_DIR" "$VM_SERVER":/home/ubuntu/puppetc 2>/dev/null || true
 
-    info "Building puppetc in VM..."
-    multipass exec "$VM_NAME" -- bash -c '
-        cd /home/ubuntu/puppetc
-        ./autogen.sh
-        ./configure
-        make -j$(nproc)
-    '
-    info "Build complete!"
-}
-
-build_packages() {
-    check_multipass
-    if ! vm_running; then
-        error "VM '$VM_NAME' not running. Run: $0 create"
-    fi
-
-    info "Building Debian packages in VM..."
-    multipass exec "$VM_NAME" -- bash -c '
-        cd /home/ubuntu/puppetc
-        ./autogen.sh
-        dpkg-buildpackage -us -uc -b
-        ls -la ../*.deb
-    '
-    info "Packages built! Copy them from VM with: multipass transfer $VM_NAME:/home/ubuntu/*.deb ."
-}
-
-run_valgrind() {
-    check_multipass
-    if ! vm_running; then
-        error "VM '$VM_NAME' not running. Run: $0 create"
-    fi
-
-    local test_file="${1:-tests/puppet/simple.pp}"
-
-    info "Running valgrind on $test_file..."
-    multipass exec "$VM_NAME" -- bash -c "
+    # Build and install
+    multipass exec "$VM_SERVER" -- bash -c '
         cd /home/ubuntu/puppetc
 
-        # Ensure built
+        # Build if needed
         if [ ! -f compiler/.libs/puppetc-compile ]; then
-            echo 'Building first...'
-            ./autogen.sh && ./configure && make -j\$(nproc)
+            echo "Building puppetc..."
+            ./autogen.sh
+            ./configure
+            make -j$(nproc)
         fi
 
-        export LD_LIBRARY_PATH=./compiler/.libs:./common/.libs:./facter/.libs
+        # Create puppet directories
+        sudo mkdir -p /etc/puppet/manifests /etc/puppet/modules /etc/puppet/hiera /var/lib/puppetc
 
-        valgrind --leak-check=full \
-                 --show-leak-kinds=definite,possible \
-                 --track-origins=yes \
-                 --error-exitcode=1 \
-                 ./compiler/.libs/puppetc-compile -p '$test_file'
+        # Link to mounted code for live editing
+        sudo rm -rf /etc/puppet/manifests /etc/puppet/modules /etc/puppet/hiera
+        sudo ln -sf /home/ubuntu/puppetc/puppetcode/manifests /etc/puppet/manifests
+        sudo ln -sf /home/ubuntu/puppetc/puppetcode/modules /etc/puppet/modules
+        sudo ln -sf /home/ubuntu/puppetc/puppetcode/hiera /etc/puppet/hiera
+    '
+
+    local server_ip=$(get_vm_ip "$VM_SERVER")
+    info "Server IP: $server_ip"
+}
+
+setup_agent() {
+    local server_ip=$(get_vm_ip "$VM_SERVER")
+
+    info "Setting up agent (server: $server_ip)..."
+
+    # Mount source code
+    multipass mount "$PROJECT_DIR" "$VM_AGENT":/home/ubuntu/puppetc 2>/dev/null || true
+
+    # Build
+    multipass exec "$VM_AGENT" -- bash -c '
+        cd /home/ubuntu/puppetc
+
+        if [ ! -f compiler/.libs/puppetc-compile ]; then
+            echo "Building puppetc..."
+            ./autogen.sh
+            ./configure
+            make -j$(nproc)
+        fi
+    '
+
+    info "Agent ready. Server IP: $server_ip"
+}
+
+start_server_daemon() {
+    local server_ip=$(get_vm_ip "$VM_SERVER")
+
+    info "Starting puppetc-server on $server_ip:8140..."
+
+    # Kill any existing server
+    multipass exec "$VM_SERVER" -- pkill -f puppetc-server 2>/dev/null || true
+
+    # Start server in background
+    multipass exec "$VM_SERVER" -- bash -c '
+        cd /home/ubuntu/puppetc
+        export LD_LIBRARY_PATH=./compiler/.libs:./common/.libs:./facter/.libs
+        nohup ./server/.libs/puppetc-server -v -p 8140 \
+            -m /etc/puppet/modules \
+            -D /etc/puppet/hiera \
+            -P /var/lib/puppetc/puppetdb.sqlite \
+            /etc/puppet > /tmp/puppetc-server.log 2>&1 &
+        sleep 2
+        if pgrep -f puppetc-server > /dev/null; then
+            echo "Server started (PID: $(pgrep -f puppetc-server))"
+        else
+            echo "Failed to start server. Check /tmp/puppetc-server.log"
+            cat /tmp/puppetc-server.log
+            exit 1
+        fi
+    '
+}
+
+up() {
+    check_multipass
+
+    info "Creating VMs..."
+    create_vm "$VM_SERVER" "2G"
+    create_vm "$VM_AGENT" "2G"
+
+    setup_server
+    setup_agent
+    start_server_daemon
+
+    local server_ip=$(get_vm_ip "$VM_SERVER")
+    local agent_ip=$(get_vm_ip "$VM_AGENT")
+
+    echo ""
+    echo "=========================================="
+    echo -e "${GREEN}VMs ready!${NC}"
+    echo ""
+    echo "Server: $server_ip:8140"
+    echo "Agent:  $agent_ip"
+    echo ""
+    echo "Test commands:"
+    echo "  $0 ssh agent"
+    echo "  puppetc-agent -s http://$server_ip:8140 -n   # noop"
+    echo "  puppetc-agent -s http://$server_ip:8140 -a   # apply"
+    echo ""
+    echo "Edit puppetcode/manifests/site.pp and test!"
+    echo "=========================================="
+}
+
+down() {
+    check_multipass
+    info "Stopping VMs..."
+    multipass stop "$VM_SERVER" 2>/dev/null || true
+    multipass stop "$VM_AGENT" 2>/dev/null || true
+    info "VMs stopped"
+}
+
+destroy() {
+    check_multipass
+    info "Destroying VMs..."
+    multipass delete "$VM_SERVER" 2>/dev/null || true
+    multipass delete "$VM_AGENT" 2>/dev/null || true
+    multipass purge
+    info "VMs destroyed"
+}
+
+ssh_vm() {
+    check_multipass
+    local target="$1"
+    local vm_name=""
+
+    case "$target" in
+        server) vm_name="$VM_SERVER" ;;
+        agent)  vm_name="$VM_AGENT" ;;
+        *)      error "Usage: $0 ssh [server|agent]" ;;
+    esac
+
+    if ! vm_running "$vm_name"; then
+        error "VM '$vm_name' not running. Run: $0 up"
+    fi
+
+    multipass shell "$vm_name"
+}
+
+run_agent() {
+    check_multipass
+    local server_ip=$(get_vm_ip "$VM_SERVER")
+    local mode="${1:--n}"  # default to noop
+
+    if ! vm_running "$VM_AGENT"; then
+        error "Agent VM not running. Run: $0 up"
+    fi
+
+    multipass exec "$VM_AGENT" -- bash -c "
+        cd /home/ubuntu/puppetc
+        export LD_LIBRARY_PATH=./compiler/.libs:./common/.libs:./facter/.libs:./agent/.libs
+        ./agent/.libs/puppetc-agent -s http://$server_ip:8140 $mode -v
     "
 }
 
-run_valgrind_full() {
-    check_multipass
-    if ! vm_running; then
-        error "VM '$VM_NAME' not running. Run: $0 create"
-    fi
-
-    info "Running comprehensive valgrind check..."
-    multipass exec "$VM_NAME" -- bash -c '
-        cd /home/ubuntu/puppetc
-
-        # Ensure built
-        if [ ! -f compiler/.libs/puppetc-compile ]; then
-            echo "Building first..."
-            ./autogen.sh && ./configure && make -j$(nproc)
-        fi
-
-        export LD_LIBRARY_PATH=./compiler/.libs:./common/.libs:./facter/.libs
-
-        echo "=== Testing simple.pp ==="
-        valgrind --leak-check=full --error-exitcode=1 \
-            ./compiler/.libs/puppetc-compile -p tests/puppet/simple.pp
-
-        echo ""
-        echo "=== Testing with modules ==="
-        valgrind --leak-check=full --error-exitcode=1 \
-            ./compiler/.libs/puppetc-compile -p -m tests/modules tests/puppet/basic.pp
-
-        echo ""
-        echo "=== Testing ERB templates ==="
-        valgrind --leak-check=full --error-exitcode=1 \
-            ./compiler/.libs/puppetc-compile -p -m tests/modules tests/puppet/erb_basic.pp 2>/dev/null || true
-
-        echo ""
-        echo "Valgrind checks complete!"
-    '
-}
-
-run_tests() {
-    check_multipass
-    if ! vm_running; then
-        error "VM '$VM_NAME' not running. Run: $0 create"
-    fi
-
-    info "Running tests in VM..."
-    multipass exec "$VM_NAME" -- bash -c '
-        cd /home/ubuntu/puppetc
-
-        # Ensure built
-        if [ ! -f compiler/.libs/puppetc-compile ]; then
-            echo "Building first..."
-            ./autogen.sh && ./configure && make -j$(nproc)
-        fi
-
-        make check
-    '
-}
-
-destroy_vm() {
-    check_multipass
-    if ! vm_exists; then
-        warn "VM '$VM_NAME' does not exist"
-        return 0
-    fi
-
-    info "Destroying VM '$VM_NAME'..."
-    multipass delete "$VM_NAME"
-    multipass purge
-    info "VM destroyed"
-}
-
-status_vm() {
+status() {
     check_multipass
     echo "=== Multipass VMs ==="
     multipass list
     echo ""
-    if vm_exists; then
-        echo "=== VM Info ==="
-        multipass info "$VM_NAME"
+
+    if vm_running "$VM_SERVER"; then
+        local server_ip=$(get_vm_ip "$VM_SERVER")
+        echo "Server: $server_ip:8140"
+        echo "  Logs: multipass exec $VM_SERVER -- tail -f /tmp/puppetc-server.log"
+    fi
+
+    if vm_running "$VM_AGENT"; then
+        local agent_ip=$(get_vm_ip "$VM_AGENT")
+        echo "Agent:  $agent_ip"
     fi
 }
 
-stop_vm() {
+logs() {
     check_multipass
-    if vm_running; then
-        info "Stopping VM..."
-        multipass stop "$VM_NAME"
-        info "VM stopped"
-    else
-        warn "VM not running"
+    if ! vm_running "$VM_SERVER"; then
+        error "Server VM not running"
     fi
-}
-
-start_vm() {
-    check_multipass
-    if ! vm_exists; then
-        error "VM '$VM_NAME' does not exist. Run: $0 create"
-    fi
-    if vm_running; then
-        warn "VM already running"
-    else
-        info "Starting VM..."
-        multipass start "$VM_NAME"
-        info "VM started"
-    fi
+    multipass exec "$VM_SERVER" -- tail -f /tmp/puppetc-server.log
 }
 
 usage() {
     cat <<EOF
-Multipass VM management for puppetc development
+Multipass VM management for puppetc server/agent testing
 
 Usage: $0 <command> [args]
 
 Commands:
-  create          Create VM with build dependencies and valgrind
-  shell           SSH into VM
-  build           Build puppetc (./configure && make)
-  packages        Build Debian packages
-  valgrind [file] Run valgrind on a test file (default: tests/puppet/simple.pp)
-  valgrind-full   Run comprehensive valgrind checks
-  test            Run make check
-  start           Start VM
-  stop            Stop VM
-  destroy         Destroy VM
+  up              Create and start server + agent VMs
+  down            Stop VMs (preserves state)
+  destroy         Destroy VMs completely
+  ssh server      SSH into server VM
+  ssh agent       SSH into agent VM
+  agent [opts]    Run puppetc-agent (default: -n for noop)
+  logs            Follow server logs
   status          Show VM status
 
 Examples:
-  $0 create                              # Create development VM
-  $0 shell                               # SSH into VM
-  $0 valgrind                            # Quick memory check
-  $0 valgrind tests/puppet/complex.pp   # Test specific file
-  $0 valgrind-full                       # Comprehensive check
+  $0 up                    # Start everything
+  $0 ssh agent             # SSH into agent
+  $0 agent -n              # Run agent in noop mode
+  $0 agent -a              # Run agent in apply mode
+  $0 logs                  # Watch server logs
+  $0 down                  # Stop VMs
+  $0 destroy               # Clean up
 
-The project directory is automatically mounted at /home/ubuntu/puppetc
+Edit puppetcode/manifests/site.pp on your host - changes are live!
 EOF
 }
 
 # Main
 case "${1:-}" in
-    create)     create_vm ;;
-    shell)      shell_vm ;;
-    build)      build_vm ;;
-    packages)   build_packages ;;
-    valgrind)   run_valgrind "${2:-}" ;;
-    valgrind-full) run_valgrind_full ;;
-    test)       run_tests ;;
-    start)      start_vm ;;
-    stop)       stop_vm ;;
-    destroy)    destroy_vm ;;
-    status)     status_vm ;;
+    up)         up ;;
+    down)       down ;;
+    destroy)    destroy ;;
+    ssh)        ssh_vm "${2:-}" ;;
+    agent)      shift; run_agent "$@" ;;
+    logs)       logs ;;
+    status)     status ;;
     -h|--help|help) usage ;;
     *)
         usage
