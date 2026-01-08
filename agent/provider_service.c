@@ -77,7 +77,9 @@ static int systemd_disable(const char *service, bool verbose) {
 
 static resource_state_t systemd_check(const resource_t *resource, apply_context_t *ctx) {
     (void)ctx;
-    const char *service = resource->title;
+    /* Use 'name' parameter if set, otherwise use title */
+    const char *service = resource_get_param(resource, "name");
+    if (!service || service[0] == '\0') service = resource->title;
 
     if (systemd_is_active(service)) {
         return RESOURCE_STATE_RUNNING;
@@ -86,7 +88,9 @@ static resource_state_t systemd_check(const resource_t *resource, apply_context_
 }
 
 static apply_result_t systemd_apply(const resource_t *resource, apply_context_t *ctx) {
-    const char *service = resource->title;
+    /* Use 'name' parameter if set, otherwise use title */
+    const char *service = resource_get_param(resource, "name");
+    if (!service || service[0] == '\0') service = resource->title;
     const char *ensure = resource_get_param(resource, "ensure");
     const char *enable = resource_get_param(resource, "enable");
 
@@ -170,7 +174,9 @@ static apply_result_t systemd_apply(const resource_t *resource, apply_context_t 
 }
 
 static apply_result_t systemd_refresh(const resource_t *resource, apply_context_t *ctx) {
-    const char *service = resource->title;
+    /* Use 'name' parameter if set, otherwise use title */
+    const char *service = resource_get_param(resource, "name");
+    if (!service || service[0] == '\0') service = resource->title;
 
     /* Check if service exists */
     if (!systemd_service_exists(service)) {

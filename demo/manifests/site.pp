@@ -87,20 +87,20 @@ node 'db' {
   }
 
   # Test Ruby providers - mysql_database
-  # Note: require => Service explicitly because Class dependency not yet fully implemented
+  # Depend on wait_for_mysql_socket_to_open to ensure MySQL is fully ready
   mysql_database { 'puppetc_demo':
     ensure  => present,
     charset => 'utf8mb4',
     collate => 'utf8mb4_general_ci',
-    require => [Class['mysql::server'], Service['mysqld']],
+    require => Exec['wait_for_mysql_socket_to_open'],
   }
 
-  # Note: mysql_user skipped - requires proper .my.cnf auth setup
-  # mysql_user { 'demo_user@localhost':
-  #   ensure        => present,
-  #   password_hash => '*2470C0C06DEE42FD1618BB99005ADCA2EC9D1E19',
-  #   require       => [Mysql_database['puppetc_demo'], Service['mysqld']],
-  # }
+  # Create a demo user using the mysql_user Ruby provider
+  mysql_user { 'demo_user@localhost':
+    ensure        => present,
+    password_hash => '*2470C0C06DEE42FD1618BB99005ADCA2EC9D1E19',
+    require       => Mysql_database['puppetc_demo'],
+  }
 
   notify { 'db_complete': message => 'Database server configured with mysql module' }
 }

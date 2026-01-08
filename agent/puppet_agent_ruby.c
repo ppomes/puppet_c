@@ -82,6 +82,9 @@ agent_ruby_context_t *agent_ruby_init(const char *libdir) {
         "  msg\n"
         "end\n"
         "\n"
+        "# Global flag for fact collection mode (affects Puppet::Type.type behavior)\n"
+        "$puppet_collecting_facts = false\n"
+        "\n"
         "module Puppet\n"
         "  class Error < StandardError; end\n"
         "  class ParseError < Error; end\n"
@@ -168,12 +171,14 @@ agent_ruby_context_t *agent_ruby_init(const char *libdir) {
         "    end\n"
         "    \n"
         "    def self.commands(cmds)\n"
+        "      require 'shellwords'\n"
         "      @commands_cache ||= {}\n"
         "      cmds.each do |method_name, command|\n"
         "        @commands_cache[method_name] = command\n"
         "        define_singleton_method(method_name) do |*args|\n"
         "          cmd = [command] + args.flatten.compact\n"
-        "          result = `#{cmd.map { |c| c.to_s.include?(' ') ? \"'#{c}'\" : c }.join(' ')} 2>&1`\n"
+        "          shell_cmd = cmd.map { |c| Shellwords.shellescape(c.to_s) }.join(' ')\n"
+        "          result = `#{shell_cmd} 2>&1`\n"
         "          raise Puppet::Error, \"Command failed: #{cmd.join(' ')}\" unless $?.success?\n"
         "          result\n"
         "        end\n"
@@ -184,6 +189,7 @@ agent_ruby_context_t *agent_ruby_init(const char *libdir) {
         "    end\n"
         "    \n"
         "    def self.optional_commands(cmds)\n"
+        "      require 'shellwords'\n"
         "      @commands_cache ||= {}\n"
         "      cmds.each do |method_name, command|\n"
         "        # Only define if command exists\n"
@@ -192,7 +198,8 @@ agent_ruby_context_t *agent_ruby_init(const char *libdir) {
         "        @commands_cache[method_name] = command\n"
         "        define_singleton_method(method_name) do |*args|\n"
         "          cmd = [command] + args.flatten.compact\n"
-        "          result = `#{cmd.map { |c| c.to_s.include?(' ') ? \"'#{c}'\" : c }.join(' ')} 2>&1`\n"
+        "          shell_cmd = cmd.map { |c| Shellwords.shellescape(c.to_s) }.join(' ')\n"
+        "          result = `#{shell_cmd} 2>&1`\n"
         "          raise Puppet::Error, \"Command failed: #{cmd.join(' ')}\" unless $?.success?\n"
         "          result\n"
         "        end\n"
@@ -253,8 +260,35 @@ agent_ruby_context_t *agent_ruby_init(const char *libdir) {
         "  module Type\n"
         "    @@types = {}\n"
         "    \n"
+        "    # Stub class returned when a type isn't found - prevents nil errors in facts\n"
+        "    # Returns self for method chaining, empty values for accessors\n"
+        "    class StubType\n"
+        "      def method_missing(method, *args, &block)\n"
+        "        self  # Return self to allow chaining\n"
+        "      end\n"
+        "      def respond_to_missing?(method, include_private = false)\n"
+        "        true\n"
+        "      end\n"
+        "      def [](key)\n"
+        "        nil\n"
+        "      end\n"
+        "      def to_s\n"
+        "        ''\n"
+        "      end\n"
+        "      def to_a\n"
+        "        []\n"
+        "      end\n"
+        "      def stub?\n"
+        "        true  # Marker to identify this as a stub\n"
+        "      end\n"
+        "    end\n"
+        "    \n"
+        "    # Returns type or stub during fact collection, nil otherwise\n"
         "    def self.type(name)\n"
-        "      @@types[name.to_sym]\n"
+        "      result = @@types[name.to_sym]\n"
+        "      return result if result\n"
+        "      # During fact collection, return stub to prevent nil errors\n"
+        "      $puppet_collecting_facts ? StubType.new : nil\n"
         "    end\n"
         "    \n"
         "    def self.newtype(name, &block)\n"
@@ -538,6 +572,9 @@ int agent_ruby_run_custom_facts(agent_ruby_context_t *ctx, void *facts_ptr) {
         return 0;  /* No custom facts, not an error */
     }
 
+    /* Enable fact collection mode - allows Puppet::Type.type() to return stubs */
+    (void)rb_eval_string_protect("$puppet_collecting_facts = true", &state);
+
     /* Load all .rb files in facter directory */
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
@@ -566,8 +603,13 @@ int agent_ruby_run_custom_facts(agent_ruby_context_t *ctx, void *facts_ptr) {
     }
     closedir(dir);
 
-    /* Resolve all facts and add to facter context */
+    /* Resolve all facts and add to facter context
+     * Note: Keep $puppet_collecting_facts = true during resolution
+     * because fact blocks may call Puppet::Type.type() */
     VALUE all_facts = rb_eval_string_protect("Facter.all_facts", &state);
+
+    /* Disable fact collection mode after resolution */
+    (void)rb_eval_string_protect("$puppet_collecting_facts = false", &state);
     if (state == 0 && TYPE(all_facts) == T_HASH) {
         /* Iterate over hash */
         VALUE keys = rb_funcall(all_facts, rb_intern("keys"), 0);
