@@ -69,11 +69,86 @@ const char *os_family_to_string(os_family_t family) {
  * ============================================================================ */
 
 /**
+ * @brief Build JSON string from arguments array
+ */
+static char *build_args_json(json_value_t *args) {
+    if (!args || !json_is_array(args)) return NULL;
+    if (args->data.array.count == 0) return puppet_strdup("[]");
+
+    size_t buf_size = 1024;
+    char *buf = puppet_malloc(buf_size);
+    if (!buf) return NULL;
+
+    size_t pos = 0;
+    buf[pos++] = '[';
+
+    for (size_t i = 0; i < args->data.array.count; i++) {
+        json_value_t *arg = args->data.array.elements[i];
+        if (i > 0) {
+            buf[pos++] = ',';
+        }
+
+        const char *arg_str = NULL;
+        char num_buf[64];
+        bool needs_quotes = false;
+
+        if (json_is_string(arg)) {
+            arg_str = json_get_string(arg);
+            needs_quotes = true;
+        } else if (json_is_number(arg)) {
+            double num = json_get_number(arg);
+            if (num == (long)num) {
+                snprintf(num_buf, sizeof(num_buf), "%ld", (long)num);
+            } else {
+                snprintf(num_buf, sizeof(num_buf), "%g", num);
+            }
+            arg_str = num_buf;
+        } else if (json_is_bool(arg)) {
+            arg_str = json_get_bool(arg) ? "true" : "false";
+        } else if (json_is_null(arg)) {
+            arg_str = "null";
+        }
+
+        if (arg_str) {
+            size_t arg_len = strlen(arg_str);
+            /* Ensure buffer is large enough */
+            while (pos + arg_len + 10 >= buf_size) {
+                buf_size *= 2;
+                char *new_buf = puppet_realloc(buf, buf_size);
+                if (!new_buf) {
+                    puppet_free(buf);
+                    return NULL;
+                }
+                buf = new_buf;
+            }
+
+            if (needs_quotes) {
+                buf[pos++] = '"';
+                /* Escape special characters */
+                for (size_t j = 0; j < arg_len; j++) {
+                    if (arg_str[j] == '"' || arg_str[j] == '\\') {
+                        buf[pos++] = '\\';
+                    }
+                    buf[pos++] = arg_str[j];
+                }
+                buf[pos++] = '"';
+            } else {
+                memcpy(buf + pos, arg_str, arg_len);
+                pos += arg_len;
+            }
+        }
+    }
+
+    buf[pos++] = ']';
+    buf[pos] = '\0';
+    return buf;
+}
+
+/**
  * @brief Evaluate a Deferred function call
  *
  * Handles Deferred values in catalog parameters by evaluating the
- * function at apply time. Currently returns a placeholder until
- * Ruby support is added to the agent.
+ * function at apply time using Ruby.
  *
  * @param deferred_obj JSON object with __ptype: "Deferred"
  * @return Evaluated result as string, or NULL on error
@@ -91,8 +166,22 @@ static char *evaluate_deferred(json_value_t *deferred_obj) {
     if (!name_val || !json_is_string(name_val)) return NULL;
     const char *func_name = json_get_string(name_val);
 
-    /* TODO: Once Ruby support is added to the agent, call the actual
-     * Ruby function here. For now, return a placeholder. */
+    /* If Ruby context is available, evaluate the function */
+    if (ruby_provider_ctx) {
+        /* Get arguments array */
+        json_value_t *args = json_object_get(deferred_obj, "arguments");
+        char *args_json = build_args_json(args);
+
+        /* Call Ruby function */
+        char *result = agent_ruby_call_function(ruby_provider_ctx, func_name, args_json);
+        puppet_free(args_json);
+
+        if (result) {
+            return result;
+        }
+    }
+
+    /* Fallback: return placeholder if Ruby not available */
     char buf[256];
     snprintf(buf, sizeof(buf), "<Deferred:%s>", func_name);
     return puppet_strdup(buf);
@@ -119,6 +208,7 @@ void providers_init(os_family_t os_family) {
     provider_user_register();
     provider_sysctl_register();
     provider_mount_register();
+    provider_anchor_register();
 }
 
 void providers_shutdown(void) {

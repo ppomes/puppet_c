@@ -166,7 +166,9 @@ static apply_result_t exec_apply(const resource_t *resource, apply_context_t *ct
     }
 
     /* Check 'unless' condition - skip if command succeeds (returns 0) */
-    if (unless_cmd) {
+    /* Skip empty or invalid commands like "[]" */
+    if (unless_cmd && unless_cmd[0] != '\0' &&
+        strcmp(unless_cmd, "[]") != 0 && strcmp(unless_cmd, "[[]]") != 0) {
         if (run_check_command(unless_cmd) == 0) {
             if (ctx->verbose) {
                 print_info("Exec[%s]: Skipping because 'unless' command succeeded",
@@ -178,7 +180,9 @@ static apply_result_t exec_apply(const resource_t *resource, apply_context_t *ct
     }
 
     /* Check 'onlyif' condition - skip if command fails (returns non-zero) */
-    if (onlyif_cmd) {
+    /* Skip empty or invalid commands like "[]" */
+    if (onlyif_cmd && onlyif_cmd[0] != '\0' &&
+        strcmp(onlyif_cmd, "[]") != 0 && strcmp(onlyif_cmd, "[[]]") != 0) {
         if (run_check_command(onlyif_cmd) != 0) {
             if (ctx->verbose) {
                 print_info("Exec[%s]: Skipping because 'onlyif' command failed",

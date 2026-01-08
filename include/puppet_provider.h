@@ -312,6 +312,11 @@ void provider_sysctl_register(void);
  */
 void provider_mount_register(void);
 
+/**
+ * @brief Register anchor provider (no-op for ordering)
+ */
+void provider_anchor_register(void);
+
 #ifdef __cplusplus
 }
 #endif

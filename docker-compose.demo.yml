@@ -73,6 +73,8 @@ services:
     cgroup: host
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      # Mount modules for Ruby types/providers (pluginsync alternative)
+      - ./demo/modules:/etc/puppet/modules:ro
     networks:
       - puppet-demo
 

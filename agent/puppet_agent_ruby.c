@@ -76,10 +76,32 @@ agent_ruby_context_t *agent_ruby_init(const char *libdir) {
     /* Define comprehensive Puppet module namespace for types and providers */
     int state = 0;
     (void)rb_eval_string_protect(
+        "# Puppet translation function stub (_)\n"
+        "# In real Puppet this handles i18n, here we just return the string\n"
+        "def _(msg)\n"
+        "  msg\n"
+        "end\n"
+        "\n"
         "module Puppet\n"
         "  class Error < StandardError; end\n"
         "  class ParseError < Error; end\n"
         "  class DevError < Error; end\n"
+        "  \n"
+        "  # Puppet settings accessor (Puppet[:setting])\n"
+        "  @settings = {\n"
+        "    vardir: '/var/lib/puppet',\n"
+        "    environmentpath: '/etc/puppet/environments',\n"
+        "    server: ENV['PUPPET_SERVER'] || 'puppet',\n"
+        "    confdir: '/etc/puppet',\n"
+        "    rundir: '/var/run/puppet',\n"
+        "    logdir: '/var/log/puppet',\n"
+        "  }\n"
+        "  def self.[](key)\n"
+        "    @settings[key.to_sym]\n"
+        "  end\n"
+        "  def self.[]=(key, value)\n"
+        "    @settings[key.to_sym] = value\n"
+        "  end\n"
         "  \n"
         "  # Puppet::Pops for Sensitive type handling\n"
         "  module Pops\n"
@@ -161,6 +183,25 @@ agent_ruby_context_t *agent_ruby_init(const char *libdir) {
         "      end\n"
         "    end\n"
         "    \n"
+        "    def self.optional_commands(cmds)\n"
+        "      @commands_cache ||= {}\n"
+        "      cmds.each do |method_name, command|\n"
+        "        # Only define if command exists\n"
+        "        cmd_path = `which #{command} 2>/dev/null`.strip\n"
+        "        next if cmd_path.empty?\n"
+        "        @commands_cache[method_name] = command\n"
+        "        define_singleton_method(method_name) do |*args|\n"
+        "          cmd = [command] + args.flatten.compact\n"
+        "          result = `#{cmd.map { |c| c.to_s.include?(' ') ? \"'#{c}'\" : c }.join(' ')} 2>&1`\n"
+        "          raise Puppet::Error, \"Command failed: #{cmd.join(' ')}\" unless $?.success?\n"
+        "          result\n"
+        "        end\n"
+        "        define_method(method_name) do |*args|\n"
+        "          self.class.send(method_name, *args)\n"
+        "        end\n"
+        "      end\n"
+        "    end\n"
+        "    \n"
         "    def self.mk_resource_methods\n"
         "      # Creates getter/setter methods for properties - simplified stub\n"
         "    end\n"
@@ -184,6 +225,18 @@ agent_ruby_context_t *agent_ruby_init(const char *libdir) {
         "    def name\n"
         "      @params['name'] || @params[:name]\n"
         "    end\n"
+        "    \n"
+        "    # Logging methods\n"
+        "    def debug(msg); end\n"
+        "    def info(msg); $stderr.puts \"Info: #{msg}\"; end\n"
+        "    def notice(msg); $stderr.puts \"Notice: #{msg}\"; end\n"
+        "    def warning(msg); $stderr.puts \"Warning: #{msg}\"; end\n"
+        "    def err(msg); $stderr.puts \"Error: #{msg}\"; end\n"
+        "    def self.debug(msg); end\n"
+        "    def self.info(msg); $stderr.puts \"Info: #{msg}\"; end\n"
+        "    def self.notice(msg); $stderr.puts \"Notice: #{msg}\"; end\n"
+        "    def self.warning(msg); $stderr.puts \"Warning: #{msg}\"; end\n"
+        "    def self.err(msg); $stderr.puts \"Error: #{msg}\"; end\n"
         "    \n"
         "    def self.provider(type_name, provider_name)\n"
         "      key = \"#{type_name}::#{provider_name}\"\n"
@@ -343,6 +396,62 @@ agent_ruby_context_t *agent_ruby_init(const char *libdir) {
 
     if (state != 0) {
         print_warning("Failed to define Facter module (state=%d)", state);
+    }
+
+    /* Define common Puppet functions for Deferred evaluation */
+    (void)rb_eval_string_protect(
+        "require 'digest/sha1'\n"
+        "\n"
+        "# mysql::password function - hash password for MySQL\n"
+        "# Handles Deferred('mysql::password', [password])\n"
+        "module MysqlFunctions\n"
+        "  def self.password(password, sensitive = false)\n"
+        "    # Handle Sensitive wrapper\n"
+        "    password = password.unwrap if password.respond_to?(:unwrap)\n"
+        "    \n"
+        "    # If already hashed, return as-is\n"
+        "    if password.to_s =~ /^\\*[A-F0-9]{40}$/\n"
+        "      return password\n"
+        "    end\n"
+        "    \n"
+        "    # Empty password\n"
+        "    return '' if password.to_s.empty?\n"
+        "    \n"
+        "    # MySQL native password hash: *SHA1(SHA1(password))\n"
+        "    \"*#{Digest::SHA1.hexdigest(Digest::SHA1.digest(password.to_s)).upcase}\"\n"
+        "  end\n"
+        "end\n"
+        "\n"
+        "# Make mysql::password callable as a method\n"
+        "def mysql_password(*args)\n"
+        "  MysqlFunctions.password(*args)\n"
+        "end\n",
+        &state);
+
+    if (state != 0) {
+        print_warning("Failed to define Puppet functions (state=%d)", state);
+    }
+
+    /* Register stub require hooks for puppet/* paths that custom facts might need */
+    (void)rb_eval_string_protect(
+        "# Stub require for puppet paths that we provide internally\n"
+        "$puppet_stubs_loaded = ['puppet/type', 'puppet/provider', 'puppet/util',\n"
+        "                        'puppet/util/execution', 'puppet/type/service',\n"
+        "                        'puppet/type/package']\n"
+        "\n"
+        "module Kernel\n"
+        "  alias_method :original_require, :require\n"
+        "  def require(name)\n"
+        "    if $puppet_stubs_loaded.include?(name)\n"
+        "      return false  # Already 'loaded'\n"
+        "    end\n"
+        "    original_require(name)\n"
+        "  end\n"
+        "end\n",
+        &state);
+
+    if (state != 0) {
+        print_warning("Failed to define require stubs (state=%d)", state);
     }
 
     /* Add libdir to load path if it exists */
@@ -551,7 +660,7 @@ bool agent_ruby_has_provider(agent_ruby_context_t *ctx,
  * Load a Ruby type if not already loaded
  */
 static int load_ruby_type(agent_ruby_context_t *ctx, const char *type_name) {
-    char ruby_code[512];
+    char ruby_code[1024];
     int state = 0;
 
     /* Check if already loaded */
@@ -562,12 +671,34 @@ static int load_ruby_type(agent_ruby_context_t *ctx, const char *type_name) {
         return 0;  /* Already loaded */
     }
 
-    /* Load the type file */
+    /* Load the type file with error capture */
     snprintf(ruby_code, sizeof(ruby_code),
-             "require 'puppet/type/%s'", type_name);
-    (void)rb_eval_string_protect(ruby_code, &state);
+             "begin\n"
+             "  require 'puppet/type/%s'\n"
+             "  'ok'\n"
+             "rescue LoadError => e\n"
+             "  $stderr.puts \"Ruby LoadError (type): #{e.message}\"\n"
+             "  'load_error'\n"
+             "rescue => e\n"
+             "  $stderr.puts \"Ruby Error (type): #{e.class}: #{e.message}\"\n"
+             "  'error'\n"
+             "end",
+             type_name);
+    VALUE result = rb_eval_string_protect(ruby_code, &state);
 
-    return state == 0 ? 0 : -1;
+    if (state != 0) {
+        return -1;
+    }
+
+    /* Check if the load was successful */
+    if (TYPE(result) == T_STRING) {
+        const char *result_str = StringValueCStr(result);
+        if (strcmp(result_str, "ok") != 0) {
+            return -1;
+        }
+    }
+
+    return 0;
 }
 
 /**
@@ -576,16 +707,37 @@ static int load_ruby_type(agent_ruby_context_t *ctx, const char *type_name) {
 static int load_ruby_provider(agent_ruby_context_t *ctx,
                               const char *type_name,
                               const char *provider_name) {
-    char ruby_code[512];
+    char ruby_code[1024];
     int state = 0;
 
-    /* Load the provider file */
+    /* Load the provider file with error capture */
     snprintf(ruby_code, sizeof(ruby_code),
-             "require 'puppet/provider/%s/%s'",
+             "begin\n"
+             "  require 'puppet/provider/%s/%s'\n"
+             "  'ok'\n"
+             "rescue LoadError => e\n"
+             "  $stderr.puts \"Ruby LoadError: #{e.message}\"\n"
+             "  'load_error'\n"
+             "rescue => e\n"
+             "  $stderr.puts \"Ruby Error: #{e.class}: #{e.message}\"\n"
+             "  'error'\n"
+             "end",
              type_name, provider_name ? provider_name : "default");
-    (void)rb_eval_string_protect(ruby_code, &state);
+    VALUE result = rb_eval_string_protect(ruby_code, &state);
 
-    return state == 0 ? 0 : -1;
+    if (state != 0) {
+        return -1;
+    }
+
+    /* Check if the load was successful */
+    if (TYPE(result) == T_STRING) {
+        const char *result_str = StringValueCStr(result);
+        if (strcmp(result_str, "ok") != 0) {
+            return -1;
+        }
+    }
+
+    return 0;
 }
 
 /**
@@ -674,9 +826,15 @@ ruby_apply_result_t agent_ruby_call_provider(agent_ruby_context_t *ctx,
     rb_hash_aset(params_hash, title_key, title_val);
 
     /* Add other parameters using symbol keys */
+    /* Skip empty string values - treat them as nil/unset */
     for (size_t i = 0; i < resource->param_count; i++) {
+        const char *param_value = resource->params[i].value;
+        /* Skip empty strings - they should be treated as nil */
+        if (!param_value || param_value[0] == '\0') {
+            continue;
+        }
         VALUE key = ID2SYM(rb_intern(resource->params[i].name));
-        VALUE val = rb_str_new2(resource->params[i].value);
+        VALUE val = rb_str_new2(param_value);
         rb_hash_aset(params_hash, key, val);
     }
 
@@ -839,6 +997,22 @@ char *agent_ruby_call_function(agent_ruby_context_t *ctx,
     int state = 0;
     char ruby_code[2048];
 
+    /* Convert Puppet function name to Ruby method name (:: -> _) */
+    char ruby_func_name[256];
+    const char *src = func_name;
+    char *dst = ruby_func_name;
+    char *dst_end = ruby_func_name + sizeof(ruby_func_name) - 1;
+
+    while (*src && dst < dst_end) {
+        if (src[0] == ':' && src[1] == ':') {
+            *dst++ = '_';
+            src += 2;
+        } else {
+            *dst++ = *src++;
+        }
+    }
+    *dst = '\0';
+
     /* Simple function call - args handling is simplified */
     if (args_json && strlen(args_json) > 0) {
         snprintf(ruby_code, sizeof(ruby_code),
@@ -850,7 +1024,7 @@ char *agent_ruby_call_function(agent_ruby_context_t *ctx,
             "rescue => e\n"
             "  \"<Deferred:%s:error:#{e.message}>\"\n"
             "end\n",
-            args_json, func_name, func_name);
+            args_json, ruby_func_name, func_name);
     } else {
         snprintf(ruby_code, sizeof(ruby_code),
             "begin\n"
@@ -859,7 +1033,7 @@ char *agent_ruby_call_function(agent_ruby_context_t *ctx,
             "rescue => e\n"
             "  \"<Deferred:%s:error:#{e.message}>\"\n"
             "end\n",
-            func_name, func_name);
+            ruby_func_name, func_name);
     }
 
     VALUE ruby_result = rb_eval_string_protect(ruby_code, &state);

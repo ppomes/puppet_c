@@ -754,10 +754,24 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    /* Normalize server URL - add http:// if no protocol specified */
+    char *normalized_url = NULL;
+    if (config.server_url &&
+        strncmp(config.server_url, "http://", 7) != 0 &&
+        strncmp(config.server_url, "https://", 8) != 0) {
+        size_t len = strlen(config.server_url) + 16;
+        normalized_url = puppet_malloc(len);
+        snprintf(normalized_url, len, "http://%s:8140", config.server_url);
+        config.server_url = normalized_url;
+    }
+
     /* Initialize curl */
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
     int result = run_agent(&config);
+
+    /* Free normalized URL if allocated */
+    if (normalized_url) puppet_free(normalized_url);
 
     /* Cleanup */
     curl_global_cleanup();
