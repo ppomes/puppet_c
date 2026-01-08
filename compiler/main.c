@@ -313,7 +313,7 @@ int main(int argc, char *argv[]) {
                 if (verbose) fprintf(stderr, "Using Hiera data directory: %s\n", hiera_datadir);
             } else {
                 /* Look for hiera.yaml in the manifest directory or parent */
-                char *manifest_dir = strdup(argv[optind]);
+                char *manifest_dir = puppet_strdup(argv[optind]);
                 char *last_slash = strrchr(manifest_dir, '/');
                 if (last_slash) {
                     *last_slash = '\0';
@@ -338,7 +338,7 @@ int main(int argc, char *argv[]) {
                         }
                     }
                 }
-                free(manifest_dir);
+                puppet_free(manifest_dir);
             }
 
             /* Configure node execution */
@@ -433,7 +433,7 @@ int main(int argc, char *argv[]) {
                             out = fopen(output_file, "w");
                             if (!out) {
                                 perror("fopen output");
-                                free(json);
+                                puppet_free(json);
                                 puppet_catalog_destroy(catalog);
                                 puppet_env_destroy(env);
                                 puppet_program_destroy(program);
@@ -443,7 +443,7 @@ int main(int argc, char *argv[]) {
                         }
                         fputs(json, out);
                         if (output_file) fclose(out);
-                        free(json);
+                        puppet_free(json);
                     }
                     puppet_catalog_destroy(catalog);
                 }

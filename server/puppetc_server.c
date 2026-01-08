@@ -116,6 +116,290 @@ static enum MHD_Result send_file_response(struct MHD_Connection *connection,
     return ret;
 }
 
+#include <dirent.h>
+#include <sys/stat.h>
+#include <openssl/md5.h>
+
+/**
+ * @brief Compute MD5 checksum of a file
+ * @return Hex string (caller must free) or NULL on error
+ */
+static char *file_md5(const char *path) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return NULL;
+
+    MD5_CTX ctx;
+    MD5_Init(&ctx);
+
+    unsigned char buf[8192];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), fp)) > 0) {
+        MD5_Update(&ctx, buf, n);
+    }
+    fclose(fp);
+
+    unsigned char digest[MD5_DIGEST_LENGTH];
+    MD5_Final(digest, &ctx);
+
+    char *hex = puppet_malloc(MD5_DIGEST_LENGTH * 2 + 1);
+    if (!hex) return NULL;
+
+    for (int i = 0; i < MD5_DIGEST_LENGTH; i++) {
+        snprintf(hex + i * 2, 3, "%02x", digest[i]);
+    }
+    return hex;
+}
+
+/**
+ * @brief Recursively scan a directory for files
+ * @param base_path The base path (module's lib/)
+ * @param rel_path Relative path within lib/
+ * @param json_buf Buffer to append JSON to
+ * @param buf_size Buffer size
+ * @param buf_pos Current position in buffer
+ * @param first Pointer to first element flag
+ */
+static void scan_lib_directory(const char *base_path, const char *rel_path,
+                               char *json_buf, size_t buf_size, size_t *buf_pos,
+                               int *first) {
+    char full_path[4096];
+    if (rel_path && strlen(rel_path) > 0) {
+        snprintf(full_path, sizeof(full_path), "%s/%s", base_path, rel_path);
+    } else {
+        snprintf(full_path, sizeof(full_path), "%s", base_path);
+    }
+
+    DIR *dir = opendir(full_path);
+    if (!dir) return;
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_name[0] == '.') continue;  /* Skip . and .. and hidden */
+
+        char entry_path[4096];
+        snprintf(entry_path, sizeof(entry_path), "%s/%s", full_path, entry->d_name);
+
+        char entry_rel[4096];
+        if (rel_path && strlen(rel_path) > 0) {
+            snprintf(entry_rel, sizeof(entry_rel), "%s/%s", rel_path, entry->d_name);
+        } else {
+            snprintf(entry_rel, sizeof(entry_rel), "%s", entry->d_name);
+        }
+
+        struct stat st;
+        if (stat(entry_path, &st) != 0) continue;
+
+        if (S_ISDIR(st.st_mode)) {
+            /* Recurse into subdirectory */
+            scan_lib_directory(base_path, entry_rel, json_buf, buf_size, buf_pos, first);
+        } else if (S_ISREG(st.st_mode)) {
+            /* Add file entry */
+            char *checksum = file_md5(entry_path);
+            if (checksum) {
+                size_t needed = snprintf(NULL, 0,
+                    "%s{\"path\":\"%s\",\"checksum\":{\"type\":\"md5\",\"value\":\"{md5}%s\"},\"type\":\"file\"}",
+                    *first ? "" : ",", entry_rel, checksum);
+                if (*buf_pos + needed < buf_size - 1) {
+                    *buf_pos += sprintf(json_buf + *buf_pos,
+                        "%s{\"path\":\"%s\",\"checksum\":{\"type\":\"md5\",\"value\":\"{md5}%s\"},\"type\":\"file\"}",
+                        *first ? "" : ",", entry_rel, checksum);
+                    *first = 0;
+                }
+                puppet_free(checksum);
+            }
+        }
+    }
+    closedir(dir);
+}
+
+/**
+ * @brief Handle GET /puppet/v3/file_metadatas/plugins
+ *
+ * Returns JSON listing all files in all modules' lib/ directories.
+ * Used by agents to determine what files to sync.
+ */
+static enum MHD_Result handle_file_metadatas_plugins(struct MHD_Connection *connection) {
+    if (!modules_path) {
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                         "Modules path not configured");
+    }
+
+    /* Allocate buffer for JSON response */
+    size_t buf_size = 1024 * 1024;  /* 1MB max */
+    char *json_buf = puppet_malloc(buf_size);
+    if (!json_buf) {
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                         "Memory allocation failed");
+    }
+
+    size_t buf_pos = 0;
+    buf_pos = sprintf(json_buf, "[");
+    int first = 1;
+
+    /* Scan each module's lib/ directory */
+    DIR *modules_dir = opendir(modules_path);
+    if (!modules_dir) {
+        puppet_free(json_buf);
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                         "Cannot open modules directory");
+    }
+
+    struct dirent *module_entry;
+    while ((module_entry = readdir(modules_dir)) != NULL) {
+        if (module_entry->d_name[0] == '.') continue;
+
+        char module_path[4096];
+        snprintf(module_path, sizeof(module_path), "%s/%s", modules_path, module_entry->d_name);
+
+        struct stat st;
+        if (stat(module_path, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+
+        /* Check for lib/ directory */
+        char lib_path[4096];
+        snprintf(lib_path, sizeof(lib_path), "%s/lib", module_path);
+        if (stat(lib_path, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+
+        if (verbose) {
+            fprintf(stderr, "[INFO] Scanning module lib: %s\n", lib_path);
+        }
+
+        /* Scan lib/ directory - prefix paths with module name for download */
+        DIR *lib_dir = opendir(lib_path);
+        if (!lib_dir) continue;
+
+        struct dirent *lib_entry;
+        while ((lib_entry = readdir(lib_dir)) != NULL) {
+            if (lib_entry->d_name[0] == '.') continue;
+
+            char entry_path[4096];
+            snprintf(entry_path, sizeof(entry_path), "%s/%s", lib_path, lib_entry->d_name);
+
+            if (stat(entry_path, &st) != 0) continue;
+
+            /* Build relative path for agent: module_name/lib_subpath */
+            char rel_prefix[512];
+            snprintf(rel_prefix, sizeof(rel_prefix), "%s", module_entry->d_name);
+
+            if (S_ISDIR(st.st_mode)) {
+                /* Recursively scan subdirectory */
+                char sub_rel[4096];
+                snprintf(sub_rel, sizeof(sub_rel), "%s/%s", rel_prefix, lib_entry->d_name);
+                scan_lib_directory(lib_path, lib_entry->d_name, json_buf, buf_size, &buf_pos, &first);
+            } else if (S_ISREG(st.st_mode)) {
+                /* Add file entry */
+                char *checksum = file_md5(entry_path);
+                if (checksum) {
+                    size_t needed = snprintf(NULL, 0,
+                        "%s{\"path\":\"%s/lib/%s\",\"checksum\":{\"type\":\"md5\",\"value\":\"{md5}%s\"},\"type\":\"file\"}",
+                        first ? "" : ",", module_entry->d_name, lib_entry->d_name, checksum);
+                    if (buf_pos + needed < buf_size - 1) {
+                        buf_pos += sprintf(json_buf + buf_pos,
+                            "%s{\"path\":\"%s/lib/%s\",\"checksum\":{\"type\":\"md5\",\"value\":\"{md5}%s\"},\"type\":\"file\"}",
+                            first ? "" : ",", module_entry->d_name, lib_entry->d_name, checksum);
+                        first = 0;
+                    }
+                    puppet_free(checksum);
+                }
+            }
+        }
+        closedir(lib_dir);
+    }
+    closedir(modules_dir);
+
+    buf_pos += sprintf(json_buf + buf_pos, "]");
+
+    if (verbose) {
+        fprintf(stderr, "[INFO] Returning %zu bytes of plugin metadata\n", buf_pos);
+    }
+
+    enum MHD_Result ret = send_json_response(connection, MHD_HTTP_OK, json_buf);
+    puppet_free(json_buf);
+    return ret;
+}
+
+/**
+ * @brief Handle GET /puppet/v3/file_content/plugins/<path>
+ *
+ * Serves files from module lib/ directories for pluginsync.
+ * Path format: <module>/lib/<subpath>
+ */
+static enum MHD_Result handle_plugin_content(struct MHD_Connection *connection,
+                                              const char *url) {
+    const char *prefix = "/puppet/v3/file_content/plugins/";
+    size_t prefix_len = strlen(prefix);
+
+    if (strncmp(url, prefix, prefix_len) != 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST,
+                         "Invalid plugin URL format");
+    }
+
+    const char *rel_path = url + prefix_len;
+    if (strlen(rel_path) == 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST,
+                         "Missing file path");
+    }
+
+    /* Security: reject paths with .. */
+    if (strstr(rel_path, "..") != NULL) {
+        return send_error(connection, MHD_HTTP_FORBIDDEN,
+                         "Path traversal not allowed");
+    }
+
+    if (!modules_path) {
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                         "Modules path not configured");
+    }
+
+    /* Build full path: <modules_path>/<module>/lib/<subpath> */
+    /* URL path is: <module>/lib/<subpath> */
+    char full_path[4096];
+    snprintf(full_path, sizeof(full_path), "%s/%s", modules_path, rel_path);
+
+    if (verbose) {
+        fprintf(stderr, "[INFO] Plugin content request: %s -> %s\n", url, full_path);
+    }
+
+    /* Read file */
+    FILE *fp = fopen(full_path, "rb");
+    if (!fp) {
+        if (verbose) {
+            fprintf(stderr, "[WARN] Plugin file not found: %s\n", full_path);
+        }
+        return send_error(connection, MHD_HTTP_NOT_FOUND, "File not found");
+    }
+
+    fseek(fp, 0, SEEK_END);
+    long file_size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    if (file_size < 0 || file_size > 10 * 1024 * 1024) { /* 10MB limit for plugins */
+        fclose(fp);
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                         "File too large");
+    }
+
+    char *content = puppet_malloc(file_size + 1);
+    if (!content) {
+        fclose(fp);
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                         "Memory allocation failed");
+    }
+
+    size_t bytes_read = fread(content, 1, file_size, fp);
+    fclose(fp);
+
+    if (bytes_read != (size_t)file_size) {
+        puppet_free(content);
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                         "Failed to read file");
+    }
+
+    enum MHD_Result ret = send_file_response(connection, MHD_HTTP_OK,
+                                              content, bytes_read);
+    puppet_free(content);
+    return ret;
+}
+
 /**
  * @brief Handle GET /puppet/v3/file_content/modules/<module>/<path>
  *
@@ -400,7 +684,7 @@ static enum MHD_Result handle_catalog(struct MHD_Connection *connection,
                 } else if (verbose) {
                     fprintf(stderr, "[INFO] Stored facts for node: %s\n", certname);
                 }
-                free(facts_str);
+                puppet_free(facts_str);
             }
         }
 
@@ -439,7 +723,7 @@ static enum MHD_Result handle_pdb_nodes(struct MHD_Connection *connection) {
     }
 
     enum MHD_Result ret = send_json_response(connection, MHD_HTTP_OK, nodes_json);
-    free(nodes_json);
+    puppet_free(nodes_json);
     return ret;
 }
 
@@ -465,7 +749,7 @@ static enum MHD_Result handle_pdb_facts(struct MHD_Connection *connection,
     }
 
     enum MHD_Result ret = send_json_response(connection, MHD_HTTP_OK, facts_json);
-    free(facts_json);
+    puppet_free(facts_json);
     return ret;
 }
 
@@ -491,7 +775,7 @@ static enum MHD_Result handle_pdb_catalogs(struct MHD_Connection *connection,
     }
 
     enum MHD_Result ret = send_json_response(connection, MHD_HTTP_OK, catalog_json);
-    free(catalog_json);
+    puppet_free(catalog_json);
     return ret;
 }
 
@@ -517,7 +801,7 @@ static enum MHD_Result handle_pdb_resources(struct MHD_Connection *connection,
     }
 
     enum MHD_Result ret = send_json_response(connection, MHD_HTTP_OK, resources_json);
-    free(resources_json);
+    puppet_free(resources_json);
     return ret;
 }
 
@@ -565,6 +849,12 @@ static enum MHD_Result request_handler(void *cls,
 
     if (strcmp(method, "GET") == 0 && strcmp(url, "/status") == 0) {
         ret = handle_status(connection);
+    } else if (strcmp(method, "GET") == 0 &&
+               strcmp(url, "/puppet/v3/file_metadatas/plugins") == 0) {
+        ret = handle_file_metadatas_plugins(connection);
+    } else if (strcmp(method, "GET") == 0 &&
+               strncmp(url, "/puppet/v3/file_content/plugins/", 32) == 0) {
+        ret = handle_plugin_content(connection, url);
     } else if (strcmp(method, "GET") == 0 &&
                strncmp(url, "/puppet/v3/file_content/", 24) == 0) {
         ret = handle_file_content(connection, url);
@@ -642,6 +932,9 @@ static void print_usage(const char *program_name) {
     printf("  GET  /status                                Health check\n");
     printf("  POST /puppet/v4/catalog                     Compile catalog\n");
     printf("  GET  /puppet/v3/file_content/modules/<m>/<p>  Serve file from module\n");
+    printf("\nPluginsync Endpoints:\n");
+    printf("  GET  /puppet/v3/file_metadatas/plugins      List all plugin files (lib/)\n");
+    printf("  GET  /puppet/v3/file_content/plugins/<path> Download plugin file\n");
     printf("\nPuppetDB Endpoints:\n");
     printf("  GET  /pdb/query/v4/nodes                    List all nodes\n");
     printf("  GET  /pdb/query/v4/facts/<certname>         Get facts for node\n");

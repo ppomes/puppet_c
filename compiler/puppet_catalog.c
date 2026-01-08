@@ -470,13 +470,13 @@ int puppet_catalog_write_json(puppet_catalog_t *catalog, const char *filepath) {
 
     FILE *fp = fopen(filepath, "w");
     if (!fp) {
-        free(json);
+        puppet_free(json);
         return -1;
     }
 
     fputs(json, fp);
     fclose(fp);
-    free(json);
+    puppet_free(json);
     return 0;
 }
 

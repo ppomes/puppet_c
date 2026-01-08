@@ -9,6 +9,7 @@
 #include <time.h>
 #include <sqlite3.h>
 #include "puppetdb.h"
+#include "puppet_memory.h"
 
 struct puppetdb {
     sqlite3 *db;
@@ -108,7 +109,7 @@ static int get_or_create_node(puppetdb_t *pdb, const char *certname) {
 }
 
 puppetdb_t *puppetdb_open(const char *path) {
-    puppetdb_t *pdb = calloc(1, sizeof(puppetdb_t));
+    puppetdb_t *pdb = puppet_calloc(1, sizeof(puppetdb_t));
     if (!pdb) return NULL;
 
     int rc = sqlite3_open(path, &pdb->db);
@@ -116,7 +117,7 @@ puppetdb_t *puppetdb_open(const char *path) {
         snprintf(pdb->error_msg, sizeof(pdb->error_msg),
                  "Cannot open database: %s", sqlite3_errmsg(pdb->db));
         sqlite3_close(pdb->db);
-        free(pdb);
+        puppet_free(pdb);
         return NULL;
     }
 
@@ -131,7 +132,7 @@ puppetdb_t *puppetdb_open(const char *path) {
                  "Schema creation failed: %s", errmsg);
         sqlite3_free(errmsg);
         sqlite3_close(pdb->db);
-        free(pdb);
+        puppet_free(pdb);
         return NULL;
     }
 
@@ -143,7 +144,7 @@ void puppetdb_close(puppetdb_t *db) {
         if (db->db) {
             sqlite3_close(db->db);
         }
-        free(db);
+        puppet_free(db);
     }
 }
 
@@ -200,7 +201,7 @@ char *puppetdb_get_facts(puppetdb_t *db, const char *certname) {
     if (rc == SQLITE_ROW) {
         const char *facts = (const char *)sqlite3_column_text(stmt, 0);
         if (facts) {
-            result = strdup(facts);
+            result = puppet_strdup(facts);
         }
     }
     sqlite3_finalize(stmt);
@@ -261,7 +262,7 @@ char *puppetdb_get_catalog(puppetdb_t *db, const char *certname) {
     if (rc == SQLITE_ROW) {
         const char *catalog = (const char *)sqlite3_column_text(stmt, 0);
         if (catalog) {
-            result = strdup(catalog);
+            result = puppet_strdup(catalog);
         }
     }
     sqlite3_finalize(stmt);
@@ -329,7 +330,7 @@ char *puppetdb_query_exported(puppetdb_t *db, const char *type) {
     /* Build JSON array of results */
     size_t buf_size = 4096;
     size_t buf_len = 0;
-    char *buf = malloc(buf_size);
+    char *buf = puppet_malloc(buf_size);
     if (!buf) {
         sqlite3_finalize(stmt);
         return NULL;
@@ -355,9 +356,9 @@ char *puppetdb_query_exported(puppetdb_t *db, const char *type) {
 
         while (buf_len + needed >= buf_size) {
             buf_size *= 2;
-            char *new_buf = realloc(buf, buf_size);
+            char *new_buf = puppet_realloc(buf, buf_size);
             if (!new_buf) {
-                free(buf);
+                puppet_free(buf);
                 sqlite3_finalize(stmt);
                 return NULL;
             }
@@ -378,7 +379,7 @@ char *puppetdb_query_exported(puppetdb_t *db, const char *type) {
 
     /* Close array */
     if (buf_len + 2 >= buf_size) {
-        buf = realloc(buf, buf_size + 2);
+        buf = puppet_realloc(buf, buf_size + 2);
     }
     strcat(buf, "]");
 
@@ -402,7 +403,7 @@ char *puppetdb_list_nodes(puppetdb_t *db) {
     /* Build JSON array of results */
     size_t buf_size = 4096;
     size_t buf_len = 0;
-    char *buf = malloc(buf_size);
+    char *buf = puppet_malloc(buf_size);
     if (!buf) {
         sqlite3_finalize(stmt);
         return NULL;
@@ -418,9 +419,9 @@ char *puppetdb_list_nodes(puppetdb_t *db) {
 
         while (buf_len + 256 >= buf_size) {
             buf_size *= 2;
-            char *new_buf = realloc(buf, buf_size);
+            char *new_buf = puppet_realloc(buf, buf_size);
             if (!new_buf) {
-                free(buf);
+                puppet_free(buf);
                 sqlite3_finalize(stmt);
                 return NULL;
             }
@@ -439,7 +440,7 @@ char *puppetdb_list_nodes(puppetdb_t *db) {
 
     /* Close array */
     if (buf_len + 2 >= buf_size) {
-        buf = realloc(buf, buf_size + 2);
+        buf = puppet_realloc(buf, buf_size + 2);
     }
     strcat(buf, "]");
 
