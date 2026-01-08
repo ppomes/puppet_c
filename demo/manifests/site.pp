@@ -4,6 +4,17 @@
 node 'web' {
   notify { 'web_start': message => 'Configuring web server' }
 
+  # Export this host's entry so other nodes can discover it
+  # Use ipaddress fact (simpler, guaranteed to exist)
+  @@host { 'web.local':
+    ensure       => present,
+    ip           => $facts['ipaddress'],
+    host_aliases => ['web'],
+  }
+
+  # Collect all exported hosts from PuppetDB
+  Host <<| |>>
+
   # Install nginx (simple config - full nginx module has ERB limitations)
   package { 'nginx':
     ensure => installed,
@@ -72,6 +83,17 @@ server {
 
 node 'db' {
   notify { 'db_start': message => 'Configuring database server using mysql module' }
+
+  # Export this host's entry so other nodes can discover it
+  # Use ipaddress fact (simpler, guaranteed to exist)
+  @@host { 'db.local':
+    ensure       => present,
+    ip           => $facts['ipaddress'],
+    host_aliases => ['db'],
+  }
+
+  # Collect all exported hosts from PuppetDB
+  Host <<| |>>
 
   # Use the official puppetlabs/mysql module
   # Skip root user/my.cnf creation (MariaDB on Debian uses socket auth for root)

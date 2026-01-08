@@ -291,9 +291,11 @@ curl http://localhost:8080
 
 **What happens:**
 1. `puppetc-server` starts and waits for catalog requests
-2. `web` container requests its catalog, receives nginx configuration (7 resources)
-3. `db` container requests its catalog using `puppetlabs/mysql` module (16 resources)
-4. Agents apply resources: packages, config files, services
+2. `web` container requests its catalog, receives nginx configuration
+3. `db` container requests its catalog using `puppetlabs/mysql` module
+4. Both nodes export their host entries to PuppetDB (`@@host`)
+5. Both nodes collect exported hosts from PuppetDB (`Host <<| |>>`)
+6. Agents apply resources: packages, config files, services, /etc/hosts entries
 
 **Output:**
 ```html
@@ -330,6 +332,7 @@ docker compose -f docker-compose.demo.yml down
 - Hiera lookups (YAML backend)
 - Module autoloading
 - Virtual resources (`@resource`), `realize()`, collectors (`<| |>`)
+- Exported resources (`@@resource`), exported collectors (`<<| |>>`) with PuppetDB
 - Resource overrides (`Type['title'] { attr => value }`)
 - Iterator functions: `each()`, `map()`, `filter()`, `reduce()`
 - ~50 stdlib functions
@@ -380,7 +383,6 @@ docker compose -f docker-compose.demo.yml down
 
 - **Deferred functions**: `Deferred()` for runtime evaluation not supported
 - **Type matching**: `=~ Type` syntax parsed but not evaluated
-- **Exported resources**: `@@resource` parsed but not sent to PuppetDB
 - **Resource chains**: `->`, `~>` have limited support
 - **All-nodes mode**: ERB templates skipped for faster CI/CD validation
 - **No pluginsync**: Custom facts/functions must be pre-installed

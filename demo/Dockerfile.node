@@ -24,6 +24,7 @@ FROM antmelekhin/docker-systemd:debian-12
 # Note: libruby3.1 matches the version in debian:bookworm builder stage
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4 \
+    libsqlite3-0 \
     ca-certificates \
     curl \
     procps \

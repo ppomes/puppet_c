@@ -8,7 +8,7 @@
 #include <string.h>
 #include <time.h>
 #include <sqlite3.h>
-#include "puppetdb.h"
+#include "puppetdb.h"   /* Now in include/ */
 #include "puppet_memory.h"
 
 struct puppetdb {
@@ -312,11 +312,12 @@ char *puppetdb_query_exported(puppetdb_t *db, const char *type) {
     if (!db || !type) return NULL;
 
     sqlite3_stmt *stmt;
+    /* Use COLLATE NOCASE for case-insensitive type matching (Host vs host) */
     const char *sql =
         "SELECT e.resource_type, e.title, e.parameters, e.tags, n.certname "
         "FROM exported_resources e "
         "JOIN nodes n ON n.id = e.node_id "
-        "WHERE e.resource_type = ? AND n.deactivated IS NULL";
+        "WHERE e.resource_type = ? COLLATE NOCASE AND n.deactivated IS NULL";
 
     int rc = sqlite3_prepare_v2(db->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {

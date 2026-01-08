@@ -64,8 +64,8 @@ RUN dpkg -i /tmp/libpuppetc-common0_*.deb \
             /tmp/puppetc-server_*.deb && \
     rm -rf /tmp/*.deb
 
-# Create puppet directories
-RUN mkdir -p /etc/puppet/manifests /etc/puppet/modules /etc/puppet/hiera
+# Create puppet directories and PuppetDB directory
+RUN mkdir -p /etc/puppet/manifests /etc/puppet/modules /etc/puppet/hiera /var/lib/puppetc
 
 EXPOSE 8140
 
@@ -79,6 +79,7 @@ FROM debian:bookworm-slim AS agent
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4 \
+    libsqlite3-0 \
     ca-certificates \
     cron \
     bash \
@@ -109,6 +110,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libtree-sitter0 \
     libyaml-0-2 \
     libssl3 \
+    libsqlite3-0 \
     libruby3.1 \
     && rm -rf /var/lib/apt/lists/*
 

@@ -25,6 +25,7 @@
 
 /* Forward declarations */
 typedef struct puppet_env puppet_env_t;
+typedef struct puppetdb puppetdb_t;
 
 /*
  * ===========================================================================
@@ -226,6 +227,10 @@ typedef struct puppet_env {
     /* Module context for hiera lookups */
     char *caller_module_name;                 /**< Current module name for hiera $module_name */
     pthread_mutex_t *stats_mutex;             /**< Mutex for stats updates (shared between threads) */
+
+    /* Exported resources (PuppetDB integration) */
+    puppetdb_t *puppetdb;                     /**< PuppetDB for storing/querying exported resources */
+    puppet_hash_t *exported_resources;        /**< Local cache of exported resources awaiting storage */
 } puppet_env_t;
 
 /* Global verbose flag for use before environment is created */
@@ -326,6 +331,9 @@ void puppet_env_set_template_output(puppet_env_t *env, const char *template_targ
 /* Catalog building */
 void puppet_env_enable_catalog(puppet_env_t *env, const char *certname, const char *environment);
 puppet_catalog_t *puppet_env_get_catalog(puppet_env_t *env);
+
+/* PuppetDB integration for exported resources */
+void puppet_env_set_puppetdb(puppet_env_t *env, puppetdb_t *pdb);
 
 /* CI validation tracking */
 void puppet_env_get_stats(puppet_env_t *env, size_t *nodes_processed, size_t *nodes_failed,

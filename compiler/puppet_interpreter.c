@@ -4,6 +4,9 @@
 #include "puppet_loader.h"
 #include "puppet_memory.h"
 #include "puppet_hiera.h"
+#include "puppet_json_parser.h"
+#include "puppet_json.h"
+#include "puppetdb.h"
 #include "facter.h"
 #include <stdlib.h>
 #include <string.h>
@@ -322,6 +325,12 @@ puppet_env_t *puppet_env_create(void) {
     env->skip_erb = false;
     env->stats_mutex = NULL;  /* Allocated only when needed */
 
+    /* Initialize exported resources (PuppetDB integration) */
+    env->puppetdb = NULL;
+    env->exported_resources = puppet_calloc(1, sizeof(puppet_hash_t));
+    env->exported_resources->bucket_count = 64;
+    env->exported_resources->buckets = puppet_calloc(env->exported_resources->bucket_count, sizeof(puppet_hash_entry_t*));
+
     /* Register Hiera data provider */
     puppet_hiera_register_provider(env, "data");
 
@@ -333,6 +342,12 @@ void puppet_env_set_verbose(puppet_env_t *env, bool verbose) {
         env->verbose = verbose;
     }
     puppet_verbose = verbose;  /* Also set global flag */
+}
+
+void puppet_env_set_puppetdb(puppet_env_t *env, puppetdb_t *pdb) {
+    if (env) {
+        env->puppetdb = pdb;
+    }
 }
 
 void puppet_env_destroy(puppet_env_t *env) {
@@ -434,6 +449,21 @@ void puppet_env_destroy(puppet_env_t *env) {
         }
         puppet_free(env->virtual_resources->buckets);
         puppet_free(env->virtual_resources);
+    }
+
+    // Clean up exported resources cache
+    if (env->exported_resources) {
+        for (size_t i = 0; i < env->exported_resources->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->exported_resources->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                puppet_free(entry);
+                entry = next;
+            }
+        }
+        puppet_free(env->exported_resources->buckets);
+        puppet_free(env->exported_resources);
     }
 
     /* Clean up defined types hash */
@@ -1876,14 +1906,14 @@ static bool collector_matches_filter(
 }
 
 /**
- * Execute a resource collector - realize matching virtual resources
+ * Execute a resource collector - realize matching virtual or exported resources
  */
 static void puppet_exec_collector(puppet_stmt_t *stmt, puppet_env_t *env) {
     if (!stmt || stmt->type != PUPPET_STMT_RESOURCE_COLLECTOR) return;
-    if (!env->virtual_resources) return;
 
     const char *collect_type = stmt->data.collector.type.data;
     puppet_expr_t *filter = stmt->data.collector.search_expr;
+    bool is_exported = (stmt->data.collector.style == PUPPET_RES_EXPORTED);
 
     /* Build lowercase type prefix for matching (e.g., "user[") */
     size_t type_len = strlen(collect_type);
@@ -1895,10 +1925,129 @@ static void puppet_exec_collector(puppet_stmt_t *stmt, puppet_env_t *env) {
     type_lower[type_len + 1] = '\0';
     size_t prefix_len = type_len + 1;
 
+    size_t realized_count = 0;
+
+    /* Handle exported resource collector (<<| |>>) - query PuppetDB */
+    if (is_exported && env->puppetdb) {
+        puppet_debug("Exported collector: querying PuppetDB for %s resources", collect_type);
+
+        char *json_result = puppetdb_query_exported(env->puppetdb, collect_type);
+        if (json_result) {
+            /* Parse JSON array using proper JSON parser */
+            json_value_t *resources = json_parse(json_result);
+            if (resources && json_is_array(resources)) {
+                size_t count = json_array_size(resources);
+
+                for (size_t i = 0; i < count; i++) {
+                    json_value_t *res_obj = json_array_get(resources, i);
+                    if (!res_obj || !json_is_object(res_obj)) continue;
+
+                    /* Extract fields */
+                    char *res_type = json_object_get_string(res_obj, "type");
+                    char *res_title = json_object_get_string(res_obj, "title");
+                    char *res_certname = json_object_get_string(res_obj, "certname");
+
+                    if (!res_type || !res_title) {
+                        puppet_free(res_type);
+                        puppet_free(res_title);
+                        puppet_free(res_certname);
+                        continue;
+                    }
+
+                    /* Skip resources from the same node (don't collect your own exports) */
+                    if (res_certname && env->catalog && env->catalog->certname &&
+                        strcmp(res_certname, env->catalog->certname) == 0) {
+                        puppet_debug("Exported collector: skipping own resource %s[%s]",
+                                    res_type, res_title);
+                        puppet_free(res_type);
+                        puppet_free(res_title);
+                        puppet_free(res_certname);
+                        continue;
+                    }
+
+                    /* Build resource ID */
+                    size_t res_id_len = strlen(res_type) + strlen(res_title) + 3;
+                    char *resource_id = puppet_malloc(res_id_len);
+                    snprintf(resource_id, res_id_len, "%s[%s]", res_type, res_title);
+
+                    /* Check for duplicate */
+                    puppet_value_t *existing = puppet_hash_get(env->resource_catalog,
+                                                               resource_id, strlen(resource_id));
+                    if (existing) {
+                        puppet_debug("Exported collector: %s already declared", resource_id);
+                        puppet_free(resource_id);
+                        puppet_free(res_type);
+                        puppet_free(res_title);
+                        puppet_free(res_certname);
+                        continue;
+                    }
+
+                    puppet_debug("Exported collector: realizing %s from %s",
+                                resource_id, res_certname ? res_certname : "unknown");
+
+                    /* Mark as declared */
+                    puppet_value_t *marker = puppet_value_create_bool(true);
+                    puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);
+
+                    /* Add to catalog with parameters */
+                    if (env->build_catalog && env->catalog) {
+                        puppet_catalog_param_t *params = NULL;
+                        size_t param_count = 0;
+
+                        /* Get parameters object */
+                        json_value_t *params_obj = json_object_get(res_obj, "parameters");
+                        if (params_obj && json_is_object(params_obj)) {
+                            param_count = json_object_size(params_obj);
+                            if (param_count > 0) {
+                                params = puppet_calloc(param_count, sizeof(puppet_catalog_param_t));
+                                for (size_t pi = 0; pi < param_count; pi++) {
+                                    /* Get key and value from object */
+                                    const char *key = params_obj->data.object.keys[pi];
+                                    json_value_t *val = params_obj->data.object.values[pi];
+
+                                    params[pi].name = puppet_strdup(key);
+                                    params[pi].value = json_value_to_puppet_value(val);
+                                }
+                            }
+                        }
+
+                        int rc = puppet_catalog_add_resource(env->catalog, res_type, res_title,
+                                                            params, param_count, NULL, 0);
+                        if (rc == 0) {
+                            /* Mark as exported in catalog */
+                            puppet_catalog_resource_t *res = puppet_catalog_find_resource(
+                                env->catalog, res_type, res_title);
+                            if (res) {
+                                res->exported = true;
+                            }
+                            realized_count++;
+                        }
+                    }
+
+                    puppet_free(resource_id);
+                    puppet_free(res_type);
+                    puppet_free(res_title);
+                    puppet_free(res_certname);
+                }
+                json_value_destroy(resources);
+            }
+            puppet_free(json_result);
+        }
+        puppet_free(type_lower);
+        puppet_debug("Exported collector: realized %zu %s resource(s) from PuppetDB",
+                    realized_count, collect_type);
+        return;
+    }
+
+    /* Handle virtual resource collector (<| |>) */
+    if (!env->virtual_resources) {
+        puppet_free(type_lower);
+        return;
+    }
+
     puppet_debug("Collector: looking for virtual %s resources", collect_type);
 
     /* Iterate through all virtual resources */
-    size_t realized_count = 0;
     for (size_t i = 0; i < env->virtual_resources->bucket_count; i++) {
         puppet_hash_entry_t *entry = env->virtual_resources->buckets[i];
         while (entry) {
@@ -2462,6 +2611,85 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                     }
                 }
                 break;  /* Virtual resources are not applied now */
+            }
+
+            /* Handle exported resources - store to PuppetDB and also as virtual */
+            if (stmt->data.resource.style == PUPPET_RES_EXPORTED) {
+                for (size_t i = 0; i < stmt->data.resource.instance_count; i++) {
+                    puppet_resource_instance_t *instance = &stmt->data.resource.instances[i];
+                    if (instance->title) {
+                        puppet_value_t *title_val = puppet_eval_expr(instance->title, env);
+                        const char *title_str = puppet_value_to_string(title_val);
+
+                        /* Build resource identifier */
+                        size_t res_id_len = strlen(stmt->data.resource.type.data) + strlen(title_str) + 3;
+                        char *resource_id = puppet_malloc(res_id_len);
+                        snprintf(resource_id, res_id_len, "%s[%s]", stmt->data.resource.type.data, title_str);
+
+                        /* Create pre-evaluated exported resource structure (like virtual) */
+                        puppet_virtual_resource_t *vres = puppet_calloc(1, sizeof(puppet_virtual_resource_t));
+                        vres->type = puppet_strdup(stmt->data.resource.type.data);
+                        vres->title = puppet_strdup(title_str);
+                        vres->realized = false;
+
+                        /* Evaluate and store all attributes */
+                        vres->attr_count = instance->attr_count;
+                        if (vres->attr_count > 0) {
+                            vres->attrs = puppet_calloc(vres->attr_count, sizeof(puppet_virtual_attr_t));
+                            for (size_t j = 0; j < instance->attr_count; j++) {
+                                if (instance->attributes[j].name.data) {
+                                    vres->attrs[j].name = puppet_strdup(instance->attributes[j].name.data);
+                                    vres->attrs[j].value = puppet_eval_expr(instance->attributes[j].value, env);
+                                }
+                            }
+                        }
+
+                        /* Store locally for potential local collection */
+                        puppet_value_t *vres_ptr = puppet_calloc(1, sizeof(puppet_value_t));
+                        vres_ptr->type = PUPPET_VALUE_UNDEF;
+                        vres_ptr->data.string.data = (char*)vres;
+                        puppet_hash_set(env->exported_resources, resource_id, strlen(resource_id), vres_ptr);
+
+                        /* Store to PuppetDB if available */
+                        if (env->puppetdb && env->catalog && env->catalog->certname) {
+                            /* Build JSON for parameters using proper JSON serialization */
+                            json_buffer_t *buf = json_buffer_create();
+                            json_buffer_append_char(buf, '{');
+                            bool first_param = true;
+                            for (size_t j = 0; j < vres->attr_count; j++) {
+                                if (vres->attrs[j].name && vres->attrs[j].value) {
+                                    if (!first_param) {
+                                        json_buffer_append_char(buf, ',');
+                                    }
+                                    first_param = false;
+                                    json_buffer_append_string(buf, vres->attrs[j].name);
+                                    json_buffer_append_char(buf, ':');
+                                    puppet_value_to_json(buf, vres->attrs[j].value, 0);
+                                }
+                            }
+                            json_buffer_append_char(buf, '}');
+                            const char *params_json = buf->data;
+
+                            /* Store to PuppetDB */
+                            int rc = puppetdb_store_exported(env->puppetdb, env->catalog->certname,
+                                                            vres->type, vres->title, params_json, "[]");
+                            json_buffer_destroy(buf);
+                            if (rc == 0) {
+                                puppet_debug("Exported resource %s to PuppetDB from %s",
+                                            resource_id, env->catalog->certname);
+                            } else {
+                                puppet_warn("Failed to export %s to PuppetDB", resource_id);
+                            }
+                        } else {
+                            puppet_debug("Stored exported resource locally: %s (PuppetDB not available)",
+                                        resource_id);
+                        }
+
+                        puppet_free(resource_id);
+                        puppet_value_destroy(title_val);
+                    }
+                }
+                break;  /* Exported resources are stored, not applied now */
             }
 
             /* Check if this is a defined type - execute its body if so */
@@ -4440,8 +4668,6 @@ puppet_data_provider_t *puppet_get_data_provider(puppet_env_t *env, const char *
  * FACTS DATABASE IMPLEMENTATION
  * ===========================================================================
  */
-
-#include "puppet_json_parser.h"
 
 puppet_facts_db_t *puppet_facts_db_create(void) {
     puppet_facts_db_t *facts_db = puppet_calloc(1, sizeof(puppet_facts_db_t));

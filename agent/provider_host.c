@@ -167,8 +167,23 @@ static resource_state_t host_check(const resource_t *resource, apply_context_t *
 static apply_result_t host_apply(const resource_t *resource, apply_context_t *ctx) {
     const char *hostname = resource->title;
     const char *ip = resource_get_param(resource, "ip");
-    const char *aliases = resource_get_param(resource, "host_aliases");
+    const char *aliases_raw = resource_get_param(resource, "host_aliases");
     const char *ensure = resource_get_param(resource, "ensure");
+
+    /* Strip brackets from aliases if present (arrays come as "[a, b, c]") */
+    char *aliases = NULL;
+    if (aliases_raw && aliases_raw[0] == '[') {
+        size_t len = strlen(aliases_raw);
+        if (len >= 2 && aliases_raw[len-1] == ']') {
+            aliases = puppet_malloc(len - 1);
+            strncpy(aliases, aliases_raw + 1, len - 2);
+            aliases[len - 2] = '\0';
+        } else {
+            aliases = puppet_strdup(aliases_raw);
+        }
+    } else if (aliases_raw) {
+        aliases = puppet_strdup(aliases_raw);
+    }
 
     if (!ensure) ensure = "present";
 
@@ -177,6 +192,7 @@ static apply_result_t host_apply(const resource_t *resource, apply_context_t *ct
     /* Validate required parameters */
     if (want_present && (!ip || strlen(ip) == 0)) {
         apply_context_set_error(ctx, "Host resource requires 'ip' parameter");
+        puppet_free(aliases);
         return APPLY_FAILED;
     }
 
@@ -184,6 +200,7 @@ static apply_result_t host_apply(const resource_t *resource, apply_context_t *ct
     char *hosts = read_hosts_file();
     if (!hosts) {
         apply_context_set_error(ctx, "Failed to read %s", HOSTS_FILE);
+        puppet_free(aliases);
         return APPLY_FAILED;
     }
 
@@ -199,12 +216,14 @@ static apply_result_t host_apply(const resource_t *resource, apply_context_t *ct
     if (!want_present) {
         if (!found) {
             puppet_free(hosts);
+            puppet_free(aliases);
             return APPLY_SUCCESS;
         }
 
         if (ctx->noop) {
             print_resource_noop("Host", hostname, "ensure", "would be removed");
             puppet_free(hosts);
+            puppet_free(aliases);
             return APPLY_SKIPPED;
         }
 
@@ -216,6 +235,7 @@ static apply_result_t host_apply(const resource_t *resource, apply_context_t *ct
         char *new_hosts = puppet_malloc(new_size);
         if (!new_hosts) {
             puppet_free(hosts);
+            puppet_free(aliases);
             apply_context_set_error(ctx, "Memory allocation failed");
             return APPLY_FAILED;
         }
@@ -227,6 +247,7 @@ static apply_result_t host_apply(const resource_t *resource, apply_context_t *ct
         if (write_hosts_file(new_hosts) != 0) {
             puppet_free(hosts);
             puppet_free(new_hosts);
+            puppet_free(aliases);
             apply_context_set_error(ctx, "Failed to write %s: %s",
                                    HOSTS_FILE, strerror(errno));
             return APPLY_FAILED;
@@ -234,6 +255,7 @@ static apply_result_t host_apply(const resource_t *resource, apply_context_t *ct
 
         puppet_free(hosts);
         puppet_free(new_hosts);
+        puppet_free(aliases);
 
         print_resource_change("Host", hostname, "ensure", "removed");
         return APPLY_CHANGED;
@@ -243,6 +265,7 @@ static apply_result_t host_apply(const resource_t *resource, apply_context_t *ct
     char *new_entry = build_host_entry(hostname, ip, aliases);
     if (!new_entry) {
         puppet_free(hosts);
+        puppet_free(aliases);
         apply_context_set_error(ctx, "Failed to build host entry");
         return APPLY_FAILED;
     }
@@ -257,6 +280,7 @@ static apply_result_t host_apply(const resource_t *resource, apply_context_t *ct
             /* Already correct */
             puppet_free(new_entry);
             puppet_free(hosts);
+            puppet_free(aliases);
             return APPLY_SUCCESS;
         }
 
@@ -264,6 +288,7 @@ static apply_result_t host_apply(const resource_t *resource, apply_context_t *ct
             print_resource_noop("Host", hostname, "ip", "would be updated");
             puppet_free(new_entry);
             puppet_free(hosts);
+            puppet_free(aliases);
             return APPLY_SKIPPED;
         }
 
@@ -277,6 +302,7 @@ static apply_result_t host_apply(const resource_t *resource, apply_context_t *ct
         if (!new_hosts) {
             puppet_free(new_entry);
             puppet_free(hosts);
+            puppet_free(aliases);
             apply_context_set_error(ctx, "Memory allocation failed");
             return APPLY_FAILED;
         }
@@ -290,6 +316,7 @@ static apply_result_t host_apply(const resource_t *resource, apply_context_t *ct
             puppet_free(new_entry);
             puppet_free(hosts);
             puppet_free(new_hosts);
+            puppet_free(aliases);
             apply_context_set_error(ctx, "Failed to write %s: %s",
                                    HOSTS_FILE, strerror(errno));
             return APPLY_FAILED;
@@ -298,6 +325,7 @@ static apply_result_t host_apply(const resource_t *resource, apply_context_t *ct
         puppet_free(new_entry);
         puppet_free(hosts);
         puppet_free(new_hosts);
+        puppet_free(aliases);
 
         print_resource_change("Host", hostname, "ip", "updated to %s", ip);
         return APPLY_CHANGED;
@@ -308,6 +336,7 @@ static apply_result_t host_apply(const resource_t *resource, apply_context_t *ct
             print_resource_noop("Host", hostname, "ensure", "would be created");
             puppet_free(new_entry);
             puppet_free(hosts);
+            puppet_free(aliases);
             return APPLY_SKIPPED;
         }
 
@@ -319,6 +348,7 @@ static apply_result_t host_apply(const resource_t *resource, apply_context_t *ct
         if (!new_hosts) {
             puppet_free(new_entry);
             puppet_free(hosts);
+            puppet_free(aliases);
             apply_context_set_error(ctx, "Memory allocation failed");
             return APPLY_FAILED;
         }
@@ -334,6 +364,7 @@ static apply_result_t host_apply(const resource_t *resource, apply_context_t *ct
             puppet_free(new_entry);
             puppet_free(hosts);
             puppet_free(new_hosts);
+            puppet_free(aliases);
             apply_context_set_error(ctx, "Failed to write %s: %s",
                                    HOSTS_FILE, strerror(errno));
             return APPLY_FAILED;
@@ -342,6 +373,7 @@ static apply_result_t host_apply(const resource_t *resource, apply_context_t *ct
         puppet_free(new_entry);
         puppet_free(hosts);
         puppet_free(new_hosts);
+        puppet_free(aliases);
 
         print_resource_change("Host", hostname, "ensure", "created (%s)", ip);
         return APPLY_CHANGED;

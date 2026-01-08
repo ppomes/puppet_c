@@ -22,8 +22,8 @@
 - [x] Virtual resources (`@resource` syntax)
 - [x] `realize()` function
 - [x] Virtual resource collectors (`<| |>` with filters)
-- [~] Exported resources (`@@resource` syntax) - parsed, not stored to PuppetDB
-- [ ] Exported resource collectors from PuppetDB (`<<| |>>`)
+- [x] Exported resources (`@@resource` syntax) - stored to PuppetDB
+- [x] Exported resource collectors from PuppetDB (`<<| |>>`)
 
 ### Resource Relationships
 - [x] `require` metaparameter (ordering)
@@ -103,8 +103,8 @@
 - [x] Query nodes (`/pdb/query/v4/nodes`)
 - [x] Query facts (`/pdb/query/v4/facts/<certname>`)
 - [x] Query catalogs (`/pdb/query/v4/catalogs/<certname>`)
-- [ ] Store/query exported resources
-- [ ] Exported resource collectors (`<<| |>>`)
+- [x] Store/query exported resources
+- [x] Exported resource collectors (`<<| |>>`)
 
 ### Environments
 - [ ] Multiple environment support

@@ -553,6 +553,11 @@ static char *compile_catalog(const char *certname, const char *environment,
         puppet_env_set_loader(env, loader);
     }
 
+    /* Set PuppetDB for exported resources */
+    if (pdb) {
+        puppet_env_set_puppetdb(env, pdb);
+    }
+
     /* Configure Hiera */
     if (hiera_datadir) {
         puppet_hiera_register_provider(env, hiera_datadir);
