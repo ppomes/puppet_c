@@ -48,6 +48,7 @@ void print_info(const char *fmt, ...) {
     vprintf(fmt, args);
     va_end(args);
     printf("\n");
+    fflush(stdout);
 }
 
 void print_notice(const char *fmt, ...) {
@@ -58,6 +59,7 @@ void print_notice(const char *fmt, ...) {
     vprintf(fmt, args);
     va_end(args);
     printf("\n");
+    fflush(stdout);
 }
 
 void print_warning(const char *fmt, ...) {
@@ -68,6 +70,7 @@ void print_warning(const char *fmt, ...) {
     vprintf(fmt, args);
     va_end(args);
     printf("\n");
+    fflush(stdout);
 }
 
 void print_error(const char *fmt, ...) {
@@ -84,6 +87,7 @@ void print_error(const char *fmt, ...) {
     vfprintf(stderr, fmt, args);
     va_end(args);
     fprintf(stderr, "\n");
+    fflush(stderr);
 }
 
 void print_debug(const char *fmt, ...) {
@@ -94,6 +98,7 @@ void print_debug(const char *fmt, ...) {
     vprintf(fmt, args);
     va_end(args);
     printf("\n");
+    fflush(stdout);
 }
 
 void print_resource_change(const char *type, const char *title,
@@ -117,6 +122,7 @@ void print_resource_change(const char *type, const char *title,
     vprintf(fmt, args);
     va_end(args);
     printf("\n");
+    fflush(stdout);
 }
 
 void print_resource_noop(const char *type, const char *title,
@@ -132,6 +138,7 @@ void print_resource_noop(const char *type, const char *title,
         printf("Notice: %s[%s]/%s: %s (noop)\n",
                type, title, attribute, message);
     }
+    fflush(stdout);
 }
 
 void print_resource_error(const char *type, const char *title,
@@ -150,6 +157,7 @@ void print_resource_error(const char *type, const char *title,
     vfprintf(stderr, fmt, args);
     va_end(args);
     fprintf(stderr, "\n");
+    fflush(stderr);
 }
 
 void print_bold(const char *fmt, ...) {

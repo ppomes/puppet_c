@@ -48,6 +48,7 @@ int exec_command(const char *cmd, bool verbose) {
 
     if (verbose) {
         fprintf(stderr, "[EXEC] %s\n", cmd);
+        fflush(stderr);
     }
     return system(cmd);
 }
