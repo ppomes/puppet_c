@@ -159,6 +159,15 @@ bool facter_has(facter_ctx_t *ctx, const char *name);
  */
 const char **facter_list(facter_ctx_t *ctx, size_t *count);
 
+/**
+ * @brief Set a string fact value
+ * @param ctx Facter context
+ * @param name Fact name
+ * @param value Fact value
+ * @return 0 on success, -1 on failure
+ */
+int facter_set_string(facter_ctx_t *ctx, const char *name, const char *value);
+
 /* ============================================================================
  * Output Formats
  * ============================================================================ */

@@ -74,28 +74,33 @@ node 'db' {
   notify { 'db_start': message => 'Configuring database server using mysql module' }
 
   # Use the official puppetlabs/mysql module
-  # Note: mysql::db and some features use Deferred which isn't supported yet
+  # Skip root user/my.cnf creation (MariaDB on Debian uses socket auth for root)
   class { 'mysql::server':
-    override_options => {
+    root_password          => 'UNSET',
+    create_root_user       => false,
+    create_root_my_cnf     => false,
+    override_options       => {
       'mysqld' => {
         'bind-address' => '0.0.0.0',
       },
     },
   }
 
-  # Test Ruby providers - mysql_database and mysql_user
+  # Test Ruby providers - mysql_database
+  # Note: require => Service explicitly because Class dependency not yet fully implemented
   mysql_database { 'puppetc_demo':
     ensure  => present,
     charset => 'utf8mb4',
     collate => 'utf8mb4_general_ci',
-    require => Class['mysql::server'],
+    require => [Class['mysql::server'], Service['mysqld']],
   }
 
-  mysql_user { 'demo_user@localhost':
-    ensure        => present,
-    password_hash => '*2470C0C06DEE42FD1618BB99005ADCA2EC9D1E19',  # 'password'
-    require       => Mysql_database['puppetc_demo'],
-  }
+  # Note: mysql_user skipped - requires proper .my.cnf auth setup
+  # mysql_user { 'demo_user@localhost':
+  #   ensure        => present,
+  #   password_hash => '*2470C0C06DEE42FD1618BB99005ADCA2EC9D1E19',
+  #   require       => [Mysql_database['puppetc_demo'], Service['mysqld']],
+  # }
 
   notify { 'db_complete': message => 'Database server configured with mysql module' }
 }

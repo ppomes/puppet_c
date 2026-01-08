@@ -82,6 +82,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     cron \
     bash \
+    libruby3.1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install packages

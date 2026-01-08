@@ -1116,13 +1116,13 @@ static puppet_expr_t *convert_expression(TSNode node, const char *source) {
     if (strcmp(type, "name") == 0)
         return convert_name_to_value(node, source);
 
-    /* Handle resource references: Type[title] appearing as statement node
+    /* Handle resource references: Type[title] appearing as statement node or array_element
      * Parse tree looks like:
-     *   statement: 'Type[title]'
+     *   statement/array_element: 'Type[title]'
      *     type: 'Type'
      *     access: '[title]'
      */
-    if (strcmp(type, "statement") == 0) {
+    if (strcmp(type, "statement") == 0 || strcmp(type, "array_element") == 0) {
         TSNode type_child = find_child(node, "type");
         TSNode access_child = find_child(node, "access");
 

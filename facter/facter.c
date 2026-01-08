@@ -169,7 +169,7 @@ static int facter_set(facter_ctx_t *ctx, const char *name, facter_value_t *value
     return 0;
 }
 
-static int facter_set_string(facter_ctx_t *ctx, const char *name, const char *value) {
+int facter_set_string(facter_ctx_t *ctx, const char *name, const char *value) {
     if (!value) return -1;
     return facter_set(ctx, name, facter_value_string(value));
 }

@@ -21,13 +21,14 @@ RUN mkdir -p /packages && mv ../*.deb /packages/ 2>/dev/null || true
 FROM antmelekhin/docker-systemd:debian-12
 
 # Install runtime dependencies (including Ruby for custom types/providers)
+# Note: libruby3.1 matches the version in debian:bookworm builder stage
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4 \
     ca-certificates \
     curl \
     procps \
     ruby \
-    libruby \
+    libruby3.1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install puppetc-agent packages
