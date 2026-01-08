@@ -898,6 +898,29 @@ static resource_t *parse_resource_from_json(json_value_t *res_obj) {
                         elem_str = num_buf;
                     } else if (json_is_bool(elem)) {
                         elem_str = json_get_bool(elem) ? "true" : "false";
+                    } else if (json_is_array(elem)) {
+                        /* Handle nested array - convert to "[a, b, c]" format */
+                        static char nested_buf[1024];
+                        size_t npos = 0;
+                        nested_buf[npos++] = '[';
+                        for (size_t k = 0; k < elem->data.array.count; k++) {
+                            if (k > 0) {
+                                nested_buf[npos++] = ',';
+                                nested_buf[npos++] = ' ';
+                            }
+                            json_value_t *nelem = elem->data.array.elements[k];
+                            if (json_is_string(nelem)) {
+                                const char *ns = json_get_string(nelem);
+                                size_t ns_len = strlen(ns);
+                                if (npos + ns_len + 10 < sizeof(nested_buf)) {
+                                    strcpy(nested_buf + npos, ns);
+                                    npos += ns_len;
+                                }
+                            }
+                        }
+                        nested_buf[npos++] = ']';
+                        nested_buf[npos] = '\0';
+                        elem_str = nested_buf;
                     }
 
                     if (elem_str) {

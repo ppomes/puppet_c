@@ -115,6 +115,41 @@ static char *convert_array_command(const char *cmd) {
     return result;
 }
 
+/**
+ * Convert condition (onlyif/unless) to runnable command
+ * Handles:
+ *   - String: "test -f /file" -> "test -f /file"
+ *   - Array: ["test", "-f", "/file"] -> "test -f /file"
+ *   - Nested array: [["test", "-f", "/file"]] -> "test -f /file"
+ */
+static char *convert_condition_command(const char *cond) {
+    if (!cond || cond[0] == '\0') return NULL;
+
+    /* Check for nested array format: [[...]] */
+    if (cond[0] == '[' && cond[1] == '[') {
+        /* Find the inner array - skip outer [ */
+        const char *inner_start = cond + 1;
+        size_t inner_len = strlen(inner_start);
+        if (inner_len > 1 && inner_start[inner_len-1] == ']') {
+            /* Remove outer ] by copying inner part */
+            char *inner = puppet_malloc(inner_len);
+            strncpy(inner, inner_start, inner_len - 1);
+            inner[inner_len - 1] = '\0';
+            char *result = convert_array_command(inner);
+            puppet_free(inner);
+            return result;
+        }
+    }
+
+    /* Check for single array format: [...] */
+    if (cond[0] == '[') {
+        return convert_array_command(cond);
+    }
+
+    /* Plain string command - return copy */
+    return puppet_strdup(cond);
+}
+
 static apply_result_t exec_apply(const resource_t *resource, apply_context_t *ctx) {
     /* Get command - either from 'command' parameter or resource title */
     const char *command = resource_get_param(resource, "command");
@@ -166,30 +201,38 @@ static apply_result_t exec_apply(const resource_t *resource, apply_context_t *ct
     }
 
     /* Check 'unless' condition - skip if command succeeds (returns 0) */
-    /* Skip empty or invalid commands like "[]" */
-    if (unless_cmd && unless_cmd[0] != '\0' &&
-        strcmp(unless_cmd, "[]") != 0 && strcmp(unless_cmd, "[[]]") != 0) {
-        if (run_check_command(unless_cmd) == 0) {
-            if (ctx->verbose) {
-                print_info("Exec[%s]: Skipping because 'unless' command succeeded",
-                          resource->title);
+    if (unless_cmd && unless_cmd[0] != '\0') {
+        char *unless_converted = convert_condition_command(unless_cmd);
+        if (unless_converted && unless_converted[0] != '\0') {
+            int unless_result = run_check_command(unless_converted);
+            if (unless_result == 0) {
+                if (ctx->verbose) {
+                    print_info("Exec[%s]: Skipping because 'unless' command succeeded",
+                              resource->title);
+                }
+                puppet_free(unless_converted);
+                if (converted_cmd) puppet_free(converted_cmd);
+                return APPLY_NOOP;
             }
-            if (converted_cmd) puppet_free(converted_cmd);
-            return APPLY_NOOP;
+            puppet_free(unless_converted);
         }
     }
 
     /* Check 'onlyif' condition - skip if command fails (returns non-zero) */
-    /* Skip empty or invalid commands like "[]" */
-    if (onlyif_cmd && onlyif_cmd[0] != '\0' &&
-        strcmp(onlyif_cmd, "[]") != 0 && strcmp(onlyif_cmd, "[[]]") != 0) {
-        if (run_check_command(onlyif_cmd) != 0) {
-            if (ctx->verbose) {
-                print_info("Exec[%s]: Skipping because 'onlyif' command failed",
-                          resource->title);
+    if (onlyif_cmd && onlyif_cmd[0] != '\0') {
+        char *onlyif_converted = convert_condition_command(onlyif_cmd);
+        if (onlyif_converted && onlyif_converted[0] != '\0') {
+            int onlyif_result = run_check_command(onlyif_converted);
+            if (onlyif_result != 0) {
+                if (ctx->verbose) {
+                    print_info("Exec[%s]: Skipping because 'onlyif' command failed (%s)",
+                              resource->title, onlyif_converted);
+                }
+                puppet_free(onlyif_converted);
+                if (converted_cmd) puppet_free(converted_cmd);
+                return APPLY_NOOP;
             }
-            if (converted_cmd) puppet_free(converted_cmd);
-            return APPLY_NOOP;
+            puppet_free(onlyif_converted);
         }
     }
 
