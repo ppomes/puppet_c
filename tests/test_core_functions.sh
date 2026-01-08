@@ -1,7 +1,14 @@
 #!/bin/bash
 # Test script for Puppet core functions
 
-PUPPETC="../compiler/puppetc-compile"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Set library path (LD_LIBRARY_PATH for Linux, DYLD_LIBRARY_PATH for macOS)
+export LD_LIBRARY_PATH="../compiler/.libs:../common/.libs:../facter/.libs:$LD_LIBRARY_PATH"
+export DYLD_LIBRARY_PATH="../compiler/.libs:../common/.libs:../facter/.libs:$DYLD_LIBRARY_PATH"
+
+PUPPETC="../compiler/.libs/puppetc-compile"
 TEST_DIR="puppet"
 FAILED=0
 PASSED=0

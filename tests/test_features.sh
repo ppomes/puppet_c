@@ -10,8 +10,9 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PUPPETC="$PROJECT_DIR/compiler/puppetc-compile"
 OUTPUT_DIR="$SCRIPT_DIR/output"
 
-# Set library path
+# Set library path (LD_LIBRARY_PATH for Linux, DYLD_LIBRARY_PATH for macOS)
 export LD_LIBRARY_PATH="$PROJECT_DIR/compiler/.libs:$PROJECT_DIR/common/.libs:$PROJECT_DIR/facter/.libs:$LD_LIBRARY_PATH"
+export DYLD_LIBRARY_PATH="$PROJECT_DIR/compiler/.libs:$PROJECT_DIR/common/.libs:$PROJECT_DIR/facter/.libs:$DYLD_LIBRARY_PATH"
 
 # Colors for output
 RED='\033[0;31m'
