@@ -76,24 +76,56 @@ create_vm() {
     multipass exec "$name" -- cloud-init status --wait >/dev/null 2>&1 || true
 }
 
+build_and_install() {
+    local vm_name="$1"
+
+    info "Building and installing packages on $vm_name..."
+
+    # Mount source code (read-only for source, we build in /tmp)
+    multipass mount "$PROJECT_DIR" "$vm_name":/home/ubuntu/puppetc-src 2>/dev/null || true
+
+    multipass exec "$vm_name" -- bash -c '
+        set -e
+
+        # Check if already installed
+        if dpkg -l puppetc 2>/dev/null | grep -q "^ii"; then
+            echo "puppetc already installed"
+            exit 0
+        fi
+
+        # Copy source to local directory (avoid cross-platform binary issues)
+        echo "Copying source..."
+        rm -rf /tmp/puppetc-build
+        cp -a /home/ubuntu/puppetc-src /tmp/puppetc-build
+        cd /tmp/puppetc-build
+
+        # Clean any host binaries
+        git clean -fdx 2>/dev/null || find . -name "*.o" -o -name "*.lo" -o -name "*.la" | xargs rm -f 2>/dev/null || true
+        rm -rf compiler/.libs server/.libs agent/.libs facter/.libs common/.libs 2>/dev/null || true
+
+        # Build packages
+        echo "Building Debian packages..."
+        ./autogen.sh
+        dpkg-buildpackage -us -uc -b -j$(nproc)
+
+        # Install packages
+        echo "Installing packages..."
+        sudo dpkg -i ../*.deb || sudo apt-get -f install -y
+
+        echo "Installation complete!"
+        puppetc-compile --version 2>/dev/null || echo "puppetc installed"
+    '
+}
+
 setup_server() {
     info "Setting up server..."
 
-    # Mount source code
+    build_and_install "$VM_SERVER"
+
+    # Setup puppet directories with links to mounted manifests
     multipass mount "$PROJECT_DIR" "$VM_SERVER":/home/ubuntu/puppetc 2>/dev/null || true
 
-    # Build and install
     multipass exec "$VM_SERVER" -- bash -c '
-        cd /home/ubuntu/puppetc
-
-        # Build if needed
-        if [ ! -f compiler/.libs/puppetc-compile ]; then
-            echo "Building puppetc..."
-            ./autogen.sh
-            ./configure
-            make -j$(nproc)
-        fi
-
         # Create puppet directories
         sudo mkdir -p /etc/puppet/manifests /etc/puppet/modules /etc/puppet/hiera /var/lib/puppetc
 
@@ -113,20 +145,7 @@ setup_agent() {
 
     info "Setting up agent (server: $server_ip)..."
 
-    # Mount source code
-    multipass mount "$PROJECT_DIR" "$VM_AGENT":/home/ubuntu/puppetc 2>/dev/null || true
-
-    # Build
-    multipass exec "$VM_AGENT" -- bash -c '
-        cd /home/ubuntu/puppetc
-
-        if [ ! -f compiler/.libs/puppetc-compile ]; then
-            echo "Building puppetc..."
-            ./autogen.sh
-            ./configure
-            make -j$(nproc)
-        fi
-    '
+    build_and_install "$VM_AGENT"
 
     info "Agent ready. Server IP: $server_ip"
 }
@@ -139,11 +158,9 @@ start_server_daemon() {
     # Kill any existing server
     multipass exec "$VM_SERVER" -- pkill -f puppetc-server 2>/dev/null || true
 
-    # Start server in background
+    # Start server in background (binaries installed via deb)
     multipass exec "$VM_SERVER" -- bash -c '
-        cd /home/ubuntu/puppetc
-        export LD_LIBRARY_PATH=./compiler/.libs:./common/.libs:./facter/.libs
-        nohup ./server/.libs/puppetc-server -v -p 8140 \
+        nohup puppetc-server -v -p 8140 \
             -m /etc/puppet/modules \
             -D /etc/puppet/hiera \
             -P /var/lib/puppetc/puppetdb.sqlite \
@@ -181,9 +198,10 @@ up() {
     echo "Agent:  $agent_ip"
     echo ""
     echo "Test commands:"
-    echo "  $0 ssh agent"
-    echo "  puppetc-agent -s http://$server_ip:8140 -n   # noop"
-    echo "  puppetc-agent -s http://$server_ip:8140 -a   # apply"
+    echo "  $0 agent -n    # Run agent in noop mode"
+    echo "  $0 agent -a    # Run agent in apply mode"
+    echo "  $0 logs        # Watch server logs"
+    echo "  $0 ssh agent   # SSH into agent VM"
     echo ""
     echo "Edit puppetcode/manifests/site.pp and test!"
     echo "=========================================="
@@ -233,11 +251,8 @@ run_agent() {
         error "Agent VM not running. Run: $0 up"
     fi
 
-    multipass exec "$VM_AGENT" -- bash -c "
-        cd /home/ubuntu/puppetc
-        export LD_LIBRARY_PATH=./compiler/.libs:./common/.libs:./facter/.libs:./agent/.libs
-        ./agent/.libs/puppetc-agent -s http://$server_ip:8140 $mode -v
-    "
+    # Use installed binary
+    multipass exec "$VM_AGENT" -- puppetc-agent -s "http://$server_ip:8140" $mode -v
 }
 
 status() {
@@ -266,6 +281,37 @@ logs() {
     multipass exec "$VM_SERVER" -- tail -f /tmp/puppetc-server.log
 }
 
+rebuild() {
+    check_multipass
+
+    info "Rebuilding packages..."
+
+    # Force reinstall by removing packages first
+    for vm in "$VM_SERVER" "$VM_AGENT"; do
+        if vm_running "$vm"; then
+            info "Rebuilding on $vm..."
+            multipass exec "$vm" -- bash -c '
+                sudo dpkg -r puppetc puppetc-server puppetc-agent 2>/dev/null || true
+            '
+        fi
+    done
+
+    # Rebuild and reinstall
+    if vm_running "$VM_SERVER"; then
+        build_and_install "$VM_SERVER"
+    fi
+    if vm_running "$VM_AGENT"; then
+        build_and_install "$VM_AGENT"
+    fi
+
+    # Restart server
+    if vm_running "$VM_SERVER"; then
+        start_server_daemon
+    fi
+
+    info "Rebuild complete!"
+}
+
 usage() {
     cat <<EOF
 Multipass VM management for puppetc server/agent testing
@@ -276,6 +322,7 @@ Commands:
   up              Create and start server + agent VMs
   down            Stop VMs (preserves state)
   destroy         Destroy VMs completely
+  rebuild         Rebuild and reinstall packages after code changes
   ssh server      SSH into server VM
   ssh agent       SSH into agent VM
   agent [opts]    Run puppetc-agent (default: -n for noop)
@@ -284,14 +331,15 @@ Commands:
 
 Examples:
   $0 up                    # Start everything
-  $0 ssh agent             # SSH into agent
   $0 agent -n              # Run agent in noop mode
   $0 agent -a              # Run agent in apply mode
   $0 logs                  # Watch server logs
+  $0 rebuild               # After code changes, rebuild packages
   $0 down                  # Stop VMs
   $0 destroy               # Clean up
 
-Edit puppetcode/manifests/site.pp on your host - changes are live!
+Edit puppetcode/manifests/site.pp - changes are live (no rebuild needed)!
+For code changes, run: $0 rebuild
 EOF
 }
 
@@ -300,6 +348,7 @@ case "${1:-}" in
     up)         up ;;
     down)       down ;;
     destroy)    destroy ;;
+    rebuild)    rebuild ;;
     ssh)        ssh_vm "${2:-}" ;;
     agent)      shift; run_agent "$@" ;;
     logs)       logs ;;
