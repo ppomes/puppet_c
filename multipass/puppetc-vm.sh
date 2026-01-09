@@ -99,14 +99,24 @@ build_and_install() {
         echo "Copying source to /tmp/puppetc-build..."
         rm -rf /tmp/puppetc-build
         mkdir -p /tmp/puppetc-build
-        rsync -a --exclude=".git" --exclude="*.o" --exclude="*.lo" --exclude="*.la" \
+        rsync -a --ignore-errors \
+              --exclude=".git" \
+              --exclude="*.o" --exclude="*.lo" --exclude="*.la" \
               --exclude=".libs" --exclude="autom4te.cache" \
-              /home/ubuntu/puppetc-src/ /tmp/puppetc-build/
+              --exclude="debian/tmp/" --exclude="debian/.debhelper/" \
+              --exclude="debian/libfacter-c0/" --exclude="debian/libfacter-c-dev/" \
+              --exclude="debian/libpuppetc0/" --exclude="debian/libpuppetc-dev/" \
+              --exclude="debian/libpuppetc-common0/" --exclude="debian/libpuppetc-common-dev/" \
+              --exclude="debian/puppetc/" --exclude="debian/puppetc-server/" --exclude="debian/puppetc-agent/" \
+              --exclude="debian/debhelper-build-stamp" --exclude="debian/files" \
+              --exclude="debian/*.debhelper.log" --exclude="debian/*.substvars" \
+              --exclude="preprod/" --exclude="sample/" --exclude="compare/" \
+              /home/ubuntu/puppetc-src/ /tmp/puppetc-build/ || true
         cd /tmp/puppetc-build
 
-        # Extra clean
-        rm -rf */.*libs */.libs debian/tmp debian/*.debhelper* 2>/dev/null || true
-        rm -f config.status config.log Makefile 2>/dev/null || true
+        # Clean any leftover build artifacts
+        rm -rf */.*libs */.libs 2>/dev/null || true
+        rm -f config.status config.log Makefile */Makefile 2>/dev/null || true
 
         # Build packages
         echo "Running autogen.sh..."
