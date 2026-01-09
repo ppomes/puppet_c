@@ -88,32 +88,41 @@ build_and_install() {
         set -e
 
         # Check if already installed
-        if dpkg -l puppetc 2>/dev/null | grep -q "^ii"; then
-            echo "puppetc already installed"
+        if command -v puppetc-compile >/dev/null 2>&1; then
+            echo "puppetc already installed: $(which puppetc-compile)"
             exit 0
         fi
 
+        echo "=== Building puppetc packages ==="
+
         # Copy source to local directory (avoid cross-platform binary issues)
-        echo "Copying source..."
+        echo "Copying source to /tmp/puppetc-build..."
         rm -rf /tmp/puppetc-build
-        cp -a /home/ubuntu/puppetc-src /tmp/puppetc-build
+        mkdir -p /tmp/puppetc-build
+        rsync -a --exclude=".git" --exclude="*.o" --exclude="*.lo" --exclude="*.la" \
+              --exclude=".libs" --exclude="autom4te.cache" \
+              /home/ubuntu/puppetc-src/ /tmp/puppetc-build/
         cd /tmp/puppetc-build
 
-        # Clean any host binaries
-        git clean -fdx 2>/dev/null || find . -name "*.o" -o -name "*.lo" -o -name "*.la" | xargs rm -f 2>/dev/null || true
-        rm -rf compiler/.libs server/.libs agent/.libs facter/.libs common/.libs 2>/dev/null || true
+        # Extra clean
+        rm -rf */.*libs */.libs debian/tmp debian/*.debhelper* 2>/dev/null || true
+        rm -f config.status config.log Makefile 2>/dev/null || true
 
         # Build packages
-        echo "Building Debian packages..."
+        echo "Running autogen.sh..."
         ./autogen.sh
+
+        echo "Building Debian packages (this may take a few minutes)..."
         dpkg-buildpackage -us -uc -b -j$(nproc)
 
         # Install packages
         echo "Installing packages..."
-        sudo dpkg -i ../*.deb || sudo apt-get -f install -y
+        ls -la /tmp/*.deb
+        sudo dpkg -i /tmp/*.deb || sudo apt-get -f install -y
 
-        echo "Installation complete!"
-        puppetc-compile --version 2>/dev/null || echo "puppetc installed"
+        echo "=== Installation complete ==="
+        which puppetc-compile
+        puppetc-compile --version 2>/dev/null || true
     '
 }
 
