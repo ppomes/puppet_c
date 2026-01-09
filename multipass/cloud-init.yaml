@@ -32,6 +32,7 @@ packages:
   - git
   - curl
   - jq
+  - rsync
 
 runcmd:
   - echo "puppetc development VM ready!"

@@ -72,8 +72,9 @@ create_vm() {
         --disk 10G \
         --cloud-init "$CLOUD_INIT"
 
-    info "Waiting for cloud-init..."
-    multipass exec "$name" -- cloud-init status --wait >/dev/null 2>&1 || true
+    info "Waiting for cloud-init to complete (installing packages)..."
+    multipass exec "$name" -- cloud-init status --wait
+    info "Cloud-init complete on $name"
 }
 
 build_and_install() {
