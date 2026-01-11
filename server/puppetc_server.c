@@ -38,6 +38,7 @@
 #include "puppetdb.h"
 #include "puppet_ssl.h"
 #include "puppet_ca.h"
+#include "puppet_autosign.h"
 
 /* Default configuration */
 #define DEFAULT_PORT 8140
@@ -58,6 +59,7 @@ static char *ca_dir = NULL;
 static puppetdb_t *pdb = NULL;
 static puppet_ssl_ctx_t *ssl_ctx = NULL;
 static puppet_ca_ctx_t *ca_ctx = NULL;
+static puppet_autosign_config_t *autosign_config = NULL;
 static int verbose = 0;
 
 /**
@@ -914,6 +916,35 @@ static void handle_certificate_request(evhtp_request_t *req, void *arg) {
         fprintf(stderr, "[INFO] Certificate request for: %s\n", certname);
     }
 
+    /* Check if CSR should be auto-signed */
+    if (autosign_config) {
+        puppet_csr_info_t *csr_info = puppet_csr_info_create(certname, NULL, NULL, NULL);
+        if (!csr_info) {
+            puppet_free(csr_pem);
+            send_error(req, EVHTP_RES_SERVERR, "Failed to create CSR info");
+            return;
+        }
+
+        bool should_sign = puppet_autosign_should_sign(autosign_config, csr_info);
+        puppet_csr_info_free(csr_info);
+
+        if (!should_sign) {
+            const char *error_msg = puppet_autosign_get_error(autosign_config);
+            if (verbose) {
+                fprintf(stderr, "[INFO] CSR for %s not auto-signed: %s\n",
+                        certname, error_msg ? error_msg : "policy denied");
+            }
+            puppet_free(csr_pem);
+            send_error(req, EVHTP_RES_FORBIDDEN,
+                       "Certificate request not auto-signed. Manual approval required.");
+            return;
+        }
+
+        if (verbose) {
+            fprintf(stderr, "[INFO] CSR for %s approved for auto-signing\n", certname);
+        }
+    }
+
     /* Sign the CSR */
     char *signed_cert_pem = NULL;
     int result = puppet_ca_sign_csr(ca_ctx, csr_pem, certname,
@@ -1480,6 +1511,32 @@ static enum MHD_Result handle_certificate_request(struct MHD_Connection *connect
         fprintf(stderr, "[INFO] Certificate request for: %s\n", certname);
     }
 
+    /* Check if CSR should be auto-signed */
+    if (autosign_config) {
+        puppet_csr_info_t *csr_info = puppet_csr_info_create(certname, NULL, NULL, NULL);
+        if (!csr_info) {
+            return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                             "Failed to create CSR info");
+        }
+
+        bool should_sign = puppet_autosign_should_sign(autosign_config, csr_info);
+        puppet_csr_info_free(csr_info);
+
+        if (!should_sign) {
+            const char *error_msg = puppet_autosign_get_error(autosign_config);
+            if (verbose) {
+                fprintf(stderr, "[INFO] CSR for %s not auto-signed: %s\n",
+                        certname, error_msg ? error_msg : "policy denied");
+            }
+            return send_error(connection, MHD_HTTP_FORBIDDEN,
+                             "Certificate request not auto-signed. Manual approval required.");
+        }
+
+        if (verbose) {
+            fprintf(stderr, "[INFO] CSR for %s approved for auto-signing\n", certname);
+        }
+    }
+
     /* Sign the CSR */
     char *signed_cert_pem = NULL;
     int result = puppet_ca_sign_csr(ca_ctx, csr_pem, certname,
@@ -1858,6 +1915,20 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    /* Initialize autosign configuration */
+    const char *autosign_path = "/etc/puppetc/autosign.conf";
+    autosign_config = puppet_autosign_init(autosign_path);
+    if (!autosign_config) {
+        if (verbose) {
+            fprintf(stderr, "[WARNING] Failed to load autosign config, defaulting to manual signing\n");
+        }
+        /* Continue with manual-only mode */
+    }
+    if (autosign_config && verbose) {
+        fprintf(stderr, "[INFO] Autosign mode: %s\n",
+                puppet_autosign_mode_to_string(autosign_config->mode));
+    }
+
     /* Set up signal handlers */
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -1891,12 +1962,12 @@ int main(int argc, char *argv[]) {
         evhtp_ssl_cfg_t ssl_cfg = {
             .pemfile = NULL,
             .privfile = NULL,
-            .cafile = NULL,
+            .cafile = "/etc/puppetc/ssl/ca/ca_crt.pem",
             .capath = NULL,
             .ciphers = "HIGH:!aNULL:!MD5",
             .ssl_opts = SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3,
             .ssl_ctx = ssl_ctx->ssl_ctx,
-            .verify_peer = SSL_VERIFY_NONE, /* For now, no client cert verification */
+            .verify_peer = SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
             .verify_depth = 1,
             .x509_verify_cb = NULL,
             .x509_chk_issued_cb = NULL,
@@ -1999,6 +2070,7 @@ int main(int argc, char *argv[]) {
 
     /* Cleanup */
     if (pdb) puppetdb_close(pdb);
+    if (autosign_config) puppet_autosign_free(autosign_config);
     if (ca_ctx) puppet_ca_free(ca_ctx);
     config_free(file_config);
     puppet_ssl_cleanup();
