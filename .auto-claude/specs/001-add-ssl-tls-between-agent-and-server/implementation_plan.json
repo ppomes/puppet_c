@@ -247,7 +247,9 @@
             "command": "grep -q 'CURLOPT_SSLCERT\\|ssl_cert_path' agent/puppetc_agent.c && echo OK || echo MISSING",
             "expected": "OK"
           },
-          "status": "pending"
+          "status": "completed",
+          "notes": "Successfully added certificate storage paths and CSR workflow to agent configuration. Changes include:\n1. Added DEFAULT_SSL_DIR and DEFAULT_CA_CERT_PATH defines for SSL certificate paths\n2. Extended agent_config_t structure with SSL fields: ssl_dir, ssl_cert_path, ssl_key_path, ssl_ca_cert_path\n3. Added config file parsing support for SSL settings in [main] and [agent] sections\n4. Added environment variable support (PUPPET_SSL_DIR, PUPPET_CA_PATH)\n5. Implemented automatic SSL cert/key path building from ssl_dir and certname after certname determination\n6. Added verbose logging for SSL configuration paths\n7. Paths follow Puppet standard layout:\n   - Client cert: /var/lib/puppetc/ssl/certs/<certname>.pem\n   - Private key: /var/lib/puppetc/ssl/private_keys/<certname>.pem\n   - CA cert: /var/lib/puppetc/ssl/ca/ca_crt.pem\n8. Verification passed: grep confirms ssl_cert_path present in code\n9. Committed successfully with descriptive message",
+          "updated_at": "2026-01-11T02:23:39.473437+00:00"
         },
         {
           "id": "subtask-4-2",
@@ -774,5 +776,5 @@
   "status": "in_progress",
   "planStatus": "in_progress",
   "updated_at": "2026-01-11T01:58:20.326Z",
-  "last_updated": "2026-01-11T02:20:55.426131+00:00"
+  "last_updated": "2026-01-11T02:23:39.473455+00:00"
 }
