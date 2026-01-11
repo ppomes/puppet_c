@@ -1,0 +1,4 @@
+{
+  "task_description": "Add SSL/TLS between agent and server. Same behaviour than real puppet is expected (client auth, CA shared between agent and server, PKI on server side). On server side, a feature needs to be added to sign client certificate, and as real puppet, a custom config could allow auto signing. Docker images needs to be updated, as well as debian packages if needed, and multipass/Vagrant setup - Please note that OpenSSL is already a dependance, so do not use gnutls\"",
+  "workflow_type": "feature"
+}

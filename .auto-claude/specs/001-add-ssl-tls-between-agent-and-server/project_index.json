@@ -1,0 +1,71 @@
+{
+  "project_root": "/Users/ppomes/src/puppet_c",
+  "project_type": "single",
+  "services": {
+    "agent": {
+      "name": "puppetc-agent",
+      "path": "./agent",
+      "language": "C",
+      "framework": "libcurl",
+      "type": "client",
+      "package_manager": "autotools",
+      "key_directories": {
+        "src": {
+          "path": "agent",
+          "purpose": "Agent source code"
+        },
+        "common": {
+          "path": "common",
+          "purpose": "Shared utilities"
+        }
+      },
+      "dev_command": "puppetc-agent -n",
+      "test_command": "make check",
+      "dependencies": ["libcurl-openssl", "openssl", "facter"],
+      "test_directory": "tests"
+    },
+    "server": {
+      "name": "puppetc-server",
+      "path": "./server",
+      "language": "C",
+      "framework": "libmicrohttpd",
+      "type": "server",
+      "package_manager": "autotools",
+      "key_directories": {
+        "src": {
+          "path": "server",
+          "purpose": "Server source code"
+        },
+        "common": {
+          "path": "common",
+          "purpose": "Shared utilities"
+        }
+      },
+      "port": 8140,
+      "dev_command": "puppetc-server -v -m /etc/puppet/modules /etc/puppet",
+      "test_command": "make check",
+      "dependencies": ["libmicrohttpd", "openssl", "sqlite3"],
+      "test_directory": "tests"
+    }
+  },
+  "infrastructure": {
+    "docker": true,
+    "docker_compose": "docker-compose.yml",
+    "docker_services": ["compiler", "server", "agent", "agent-shell"],
+    "dockerfile": "Dockerfile",
+    "vagrant": true,
+    "multipass": true,
+    "debian_packaging": true
+  },
+  "build_system": {
+    "type": "autotools",
+    "configure": "configure.ac",
+    "makefile": "Makefile.am"
+  },
+  "conventions": {
+    "code_style": "GNU C",
+    "memory_management": "puppet_malloc/puppet_free wrappers",
+    "error_handling": "Return NULL/error codes with logging",
+    "ssl_api": "OpenSSL EVP API (3.0+ compatible)"
+  }
+}

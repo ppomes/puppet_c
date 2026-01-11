@@ -1,0 +1,393 @@
+{
+  "integrations_researched": [
+    {
+      "name": "OpenSSL",
+      "type": "library",
+      "current_usage": "Already a dependency - used for MD5, SHA, EVP (digest/crypto functions) in puppet_stdlib.c, puppet_pluginsync.c, and puppetc_server.c",
+      "verified_package": {
+        "name": "openssl",
+        "install_command": "apt-get install libssl-dev (Debian/Ubuntu) or pkg-config openssl",
+        "version": ">=1.1.0 recommended, 3.0+ for latest features",
+        "verified": true,
+        "already_configured": true,
+        "configure_flags": "Already in configure.ac with PKG_CHECK_MODULES([OPENSSL], [openssl])"
+      },
+      "api_patterns": {
+        "imports": [
+          "#include <openssl/ssl.h>",
+          "#include <openssl/x509.h>",
+          "#include <openssl/x509v3.h>",
+          "#include <openssl/pem.h>",
+          "#include <openssl/rsa.h>",
+          "#include <openssl/evp.h>"
+        ],
+        "initialization": "SSL_library_init(); SSL_load_error_strings(); OpenSSL_add_all_algorithms();",
+        "key_functions": [
+          "SSL_CTX_new() - Create SSL context",
+          "SSL_CTX_use_certificate_file() - Load server certificate",
+          "SSL_CTX_use_PrivateKey_file() - Load private key",
+          "SSL_CTX_load_verify_locations() - Load CA certificates",
+          "SSL_CTX_set_verify() - Set client certificate verification mode",
+          "X509_REQ_new() - Create certificate signing request",
+          "X509_new() - Create X509 certificate",
+          "X509_sign() - Sign certificate with CA key",
+          "PEM_write_X509() - Write certificate to PEM format",
+          "PEM_read_X509() - Read certificate from PEM format"
+        ],
+        "verified_against": "OpenSSL Wiki SSL/TLS Client documentation, Aticleworld tutorial, FM4DD example code"
+      },
+      "configuration": {
+        "env_vars": [],
+        "config_files": [
+          "openssl.cnf (for CA configuration)"
+        ],
+        "dependencies": [
+          "libssl-dev",
+          "libcrypto (part of OpenSSL)"
+        ]
+      },
+      "infrastructure": {
+        "requires_docker": false,
+        "embedded": true
+      },
+      "gotchas": [
+        "Must call SSL_library_init() and SSL_load_error_strings() before using SSL functions",
+        "OpenSSL 3.0+ deprecated some functions - use EVP_* APIs for future compatibility",
+        "Certificate verification requires proper CA chain setup",
+        "Thread safety requires CRYPTO_set_locking_callback in older versions",
+        "Must properly free SSL_CTX and SSL objects to avoid memory leaks"
+      ],
+      "research_sources": [
+        "https://wiki.openssl.org/index.php/SSL/TLS_Client",
+        "https://aticleworld.com/ssl-server-client-using-openssl-in-c/",
+        "https://fm4dd.com/openssl/sslconnect.shtm",
+        "https://medium.com/@nisanth.m.s/guide-setting-up-mtls-authentication-with-openssl-for-client-server-communication-38c0a5cbfa05",
+        "https://github.com/zozs/openssl-sign-by-ca"
+      ]
+    },
+    {
+      "name": "libmicrohttpd",
+      "type": "library",
+      "current_usage": "Already a dependency - used for HTTP server in puppetc_server.c",
+      "verified_package": {
+        "name": "libmicrohttpd",
+        "install_command": "apt-get install libmicrohttpd-dev",
+        "version": ">=0.9.x",
+        "verified": true,
+        "already_configured": true,
+        "configure_flags": "Already in configure.ac with PKG_CHECK_MODULES([MHD], [libmicrohttpd])"
+      },
+      "api_patterns": {
+        "imports": [
+          "#include <microhttpd.h>"
+        ],
+        "initialization": "MHD_start_daemon(MHD_USE_TLS | MHD_USE_INTERNAL_POLLING_THREAD, port, ...)",
+        "key_functions": [
+          "MHD_start_daemon() - Start HTTP(S) daemon with MHD_USE_TLS flag",
+          "MHD_OPTION_HTTPS_MEM_KEY - Set server private key",
+          "MHD_OPTION_HTTPS_MEM_CERT - Set server certificate",
+          "MHD_OPTION_HTTPS_PRIORITIES - Set GnuTLS priority string",
+          "MHD_OPTION_HTTPS_CERT_CALLBACK - Advanced certificate selection (SNI)"
+        ],
+        "verified_against": "GNU libmicrohttpd Reference Manual"
+      },
+      "configuration": {
+        "env_vars": [],
+        "config_files": [],
+        "dependencies": [
+          "libgnutls (REQUIRED for TLS support)"
+        ]
+      },
+      "infrastructure": {
+        "requires_docker": false,
+        "embedded": true
+      },
+      "gotchas": [
+        "CRITICAL: libmicrohttpd ONLY supports GnuTLS for TLS, NOT OpenSSL",
+        "This conflicts with the requirement to use OpenSSL and not GnuTLS",
+        "MHD_start_daemon returns NULL if compiled without SSL support",
+        "SNI support requires GnuTLS 3.0+",
+        "OCSP stapling requires GnuTLS 3.6.3+",
+        "Priority string is passed directly to gnutls_priority_init()",
+        "Android fork replaced GnuTLS with BoringSSL but this is not in upstream"
+      ],
+      "research_sources": [
+        "https://www.gnu.org/software/libmicrohttpd/manual/libmicrohttpd.html",
+        "https://github.com/ulion/libmicrohttpd/blob/master/doc/chapters/tlsauthentication.inc",
+        "https://libmicrohttpd.gnu.narkive.com/XFA0c37Y/anyone-wants-openssl-support-in-libmicrohttpd",
+        "https://lists.gnu.org/archive/html/libmicrohttpd/2015-11/msg00028.html"
+      ]
+    },
+    {
+      "name": "libcurl",
+      "type": "library",
+      "current_usage": "Already a dependency - used for HTTP client in puppetc_agent.c",
+      "verified_package": {
+        "name": "libcurl",
+        "install_command": "apt-get install libcurl4-openssl-dev",
+        "version": ">=7.x",
+        "verified": true,
+        "already_configured": true,
+        "configure_flags": "Already in configure.ac with PKG_CHECK_MODULES([CURL], [libcurl])",
+        "note": "Must use libcurl4-openssl-dev variant (not libcurl4-gnutls-dev)"
+      },
+      "api_patterns": {
+        "imports": [
+          "#include <curl/curl.h>"
+        ],
+        "initialization": "curl_global_init(CURL_GLOBAL_SSL); curl = curl_easy_init();",
+        "key_functions": [
+          "curl_easy_setopt(curl, CURLOPT_SSLCERT, \"client.pem\") - Set client certificate",
+          "curl_easy_setopt(curl, CURLOPT_SSLKEY, \"client-key.pem\") - Set client private key",
+          "curl_easy_setopt(curl, CURLOPT_SSLKEYPASSWD, \"password\") - Set key password",
+          "curl_easy_setopt(curl, CURLOPT_CAINFO, \"ca.pem\") - Set CA certificate for verification",
+          "curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L) - Enable peer verification",
+          "curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L) - Enable host verification",
+          "curl_easy_setopt(curl, CURLOPT_SSLCERTTYPE, \"PEM\") - Set certificate format",
+          "curl_easy_setopt(curl, CURLOPT_URL, \"https://...\") - Use HTTPS URL"
+        ],
+        "verified_against": "everything.curl.dev documentation, libcurl official docs"
+      },
+      "configuration": {
+        "env_vars": [
+          "CURL_CA_BUNDLE - Default CA bundle path"
+        ],
+        "config_files": [],
+        "dependencies": [
+          "libssl (OpenSSL) - when using libcurl4-openssl-dev"
+        ]
+      },
+      "infrastructure": {
+        "requires_docker": false,
+        "embedded": true
+      },
+      "gotchas": [
+        "Must use libcurl4-openssl-dev package variant (not gnutls variant) to ensure OpenSSL backend",
+        "Default certificate verification may fail if system CA bundle is not properly configured",
+        "Client certificate and key can be in same file or separate files",
+        "CURLOPT_SSL_VERIFYPEER=1 and CURLOPT_SSL_VERIFYHOST=2 are critical for security",
+        "Must call curl_global_init() before any other curl functions",
+        "Certificate format defaults to PEM but can be changed with CURLOPT_SSLCERTTYPE"
+      ],
+      "research_sources": [
+        "https://everything.curl.dev/usingcurl/tls/clientcert.html",
+        "https://curl.se/libcurl/c/CURLOPT_SSLCERT.html",
+        "https://curl.se/libcurl/c/simplessl.html",
+        "https://medium.com/@brucifi/working-with-tls-client-certificates-f67437a9aeb9",
+        "https://smallstep.com/hello-mtls/doc/client/curl"
+      ]
+    },
+    {
+      "name": "Puppet SSL/TLS Implementation",
+      "type": "reference",
+      "verified_package": {
+        "name": "N/A - Reference implementation",
+        "verified": true
+      },
+      "api_patterns": {
+        "certificate_workflow": [
+          "1. Agent generates private key and CSR",
+          "2. Agent submits CSR to CA (Puppet Server)",
+          "3. CA signs CSR (manually or via autosign)",
+          "4. Agent retrieves signed certificate",
+          "5. Agent uses certificate for mutual TLS"
+        ],
+        "autosign_methods": [
+          "naive: autosign = true in puppet.conf [server] section - signs ALL CSRs (INSECURE)",
+          "basic: autosign.conf file with whitelist of certnames/domain globs (INSECURE - any host can claim any certname)",
+          "policy-based: autosign = /path/to/executable - runs script to validate CSR (RECOMMENDED)"
+        ],
+        "verified_against": "Puppet official documentation"
+      },
+      "configuration": {
+        "env_vars": [],
+        "config_files": [
+          "puppet.conf - Main config with [server] section for autosign setting",
+          "autosign.conf - Whitelist for basic autosigning (one certname/glob per line)",
+          "autosign executable - Custom policy script for policy-based autosigning"
+        ],
+        "dependencies": []
+      },
+      "infrastructure": {
+        "requires_docker": false,
+        "pki_structure": {
+          "ca_cert": "Certificate authority certificate (shared)",
+          "ca_key": "CA private key (server only)",
+          "server_cert": "Server certificate",
+          "server_key": "Server private key",
+          "agent_cert": "Agent certificate (per-agent)",
+          "agent_key": "Agent private key (per-agent)"
+        }
+      },
+      "gotchas": [
+        "Naive autosigning (autosign=true) is INSECURE - should only be used in trusted/isolated networks",
+        "Basic autosigning via autosign.conf is also INSECURE - any host can provide any certname",
+        "Policy-based autosigning is the recommended secure approach",
+        "Puppet best practices recommend using the danieldreier/autosign module for policy-based autosigning",
+        "CSRs must be manually signed by default using 'puppetserver ca' command",
+        "Autosign policy executable receives CSR on stdin and returns exit code 0 for approval"
+      ],
+      "research_sources": [
+        "https://www.puppet.com/docs/puppet/8/ssl_autosign.html",
+        "https://www.puppet.com/docs/puppet/6/config_file_autosign.html",
+        "https://www.puppetcookbook.com/posts/autosigning-client-certificates.html",
+        "https://github.com/puppetlabs/best-practices/blob/master/autosigning.md",
+        "https://danieldreier.github.io/autosign/"
+      ]
+    },
+    {
+      "name": "Docker Certificate Management",
+      "type": "infrastructure",
+      "verified_package": {
+        "name": "docker",
+        "verified": true
+      },
+      "api_patterns": {
+        "approaches": [
+          "Volume mounts: Mount certificate directory from host into container",
+          "Docker secrets: Use Docker Swarm secrets for certificate distribution",
+          "Build-time: Copy CA cert and run update-ca-certificates in Dockerfile (for CA trust)",
+          "Runtime injection: Use init scripts to generate/copy certificates at container startup"
+        ],
+        "dockerfile_pattern": "COPY ca.crt /usr/local/share/ca-certificates/ && update-ca-certificates",
+        "verified_against": "Docker documentation and best practices articles"
+      },
+      "configuration": {
+        "env_vars": [],
+        "config_files": [
+          "/usr/local/share/ca-certificates/ - CA certificates directory",
+          "/etc/ssl/certs/ - System trust store"
+        ],
+        "dependencies": [
+          "ca-certificates package"
+        ]
+      },
+      "infrastructure": {
+        "requires_docker": true
+      },
+      "gotchas": [
+        "NEVER bake private keys/certificates into container images - use volumes or secrets",
+        "Certificates added at runtime don't persist if container is destroyed",
+        "Different base images have different trust store locations",
+        "ca-certificates package is standard but paths may vary across distributions",
+        "Docker has proven to be the most difficult environment for certificate automation",
+        "Use volume mounts for development, Docker secrets for production",
+        "Certificates must be readable by the application user in the container"
+      ],
+      "research_sources": [
+        "https://smallstep.com/blog/automate-docker-ssl-tls-certificates/",
+        "https://www.globalsign.com/en/blog/securing-docker-containers-ssl-tls-certificates",
+        "https://docs.docker.com/engine/network/ca-certs/",
+        "https://www.baeldung.com/ops/docker-container-import-ssl-certificate",
+        "https://smallstep.com/docs/tutorials/docker-tls-certificate-authority/"
+      ]
+    },
+    {
+      "name": "Debian Package SSL Management",
+      "type": "infrastructure",
+      "verified_package": {
+        "name": "ssl-cert",
+        "install_command": "apt-get install ssl-cert",
+        "verified": true
+      },
+      "api_patterns": {
+        "postinst_pattern": [
+          "Use ssl-cert package utilities for certificate generation",
+          "Place certificates in /etc/ssl/certs/ and keys in /etc/ssl/private/",
+          "Use deb-systemd-invoke instead of systemctl for service management",
+          "Generate certificates in postinst script if they don't exist"
+        ],
+        "verified_against": "Debian wiki and ssl-cert package documentation"
+      },
+      "configuration": {
+        "env_vars": [],
+        "config_files": [
+          "/etc/ssl/certs/ - Public certificates directory",
+          "/etc/ssl/private/ - Private keys directory (mode 700)"
+        ],
+        "dependencies": [
+          "ssl-cert - OpenSSL wrapper for certificate generation",
+          "openssl - Core SSL library"
+        ]
+      },
+      "infrastructure": {
+        "requires_docker": false
+      },
+      "gotchas": [
+        "ssl-cert package automatically creates self-signed certificate on install",
+        "Private keys in /etc/ssl/private/ should have mode 600 or 640",
+        "Use ssl-cert group for applications that need to read private keys",
+        "postinst scripts should use deb-systemd-invoke not systemctl directly",
+        "Certificate generation should be idempotent - only generate if not exists",
+        "Consider using debconf for interactive certificate configuration"
+      ],
+      "research_sources": [
+        "https://wiki.debian.org/Self-Signed_Certificate",
+        "https://packages.debian.org/sid/ssl-cert",
+        "https://wiki.debian.org/SSLkeys",
+        "https://wiki.debian.org/SslCertificateHandling",
+        "https://github.com/jordansissel/fpm/issues/1284"
+      ]
+    }
+  ],
+  "unverified_claims": [],
+  "critical_issues": [
+    {
+      "issue": "libmicrohttpd TLS backend incompatibility",
+      "description": "libmicrohttpd only supports GnuTLS for TLS/HTTPS, NOT OpenSSL. The requirements explicitly state 'OpenSSL is already a dependency, so do not use gnutls'.",
+      "impact": "HIGH - Cannot add TLS to existing server without either: (1) violating requirements by adding GnuTLS, (2) replacing libmicrohttpd with different HTTP server library, or (3) implementing custom SSL socket wrapping",
+      "risk_level": "high",
+      "possible_solutions": [
+        "Solution 1: Add GnuTLS as additional dependency alongside OpenSSL (violates 'do not use gnutls' requirement)",
+        "Solution 2: Replace libmicrohttpd with a different HTTP server library that supports OpenSSL (e.g., custom implementation using raw OpenSSL SSL_* APIs)",
+        "Solution 3: Use libmicrohttpd without TLS and wrap the socket layer manually with OpenSSL (complex, error-prone)",
+        "Solution 4: Use Android's BoringSSL fork of libmicrohttpd (unmaintained, non-upstream)",
+        "Solution 5: Implement custom HTTP server using OpenSSL BIO/SSL APIs directly"
+      ],
+      "recommendation": "Consult with project stakeholders to clarify requirements. If OpenSSL-only is firm requirement, recommend Solution 2 (custom HTTP server implementation) or Solution 5 (replace libmicrohttpd). If GnuTLS is acceptable for server-side only while using OpenSSL for agent-side and certificate operations, Solution 1 is simplest."
+    }
+  ],
+  "recommendations": [
+    "CRITICAL: Resolve libmicrohttpd/GnuTLS vs OpenSSL conflict before implementation",
+    "For agent (client) side: libcurl with OpenSSL backend is ready to use - ensure libcurl4-openssl-dev is installed (not gnutls variant)",
+    "Implement certificate generation and signing using OpenSSL X509/EVP APIs in C",
+    "Follow Puppet's certificate workflow: agent generates CSR -> submits to server -> server signs -> agent retrieves",
+    "Implement all three autosign modes (naive, basic, policy-based) matching Puppet behavior",
+    "Store CA certificate and key on server side only; distribute CA certificate to agents",
+    "Use /etc/puppetc/ssl/ directory structure similar to Puppet's ssldir",
+    "For Docker: Use volume mounts for certificate directories, never bake certs into images",
+    "For Debian packaging: Use ssl-cert utilities in postinst script to generate initial CA if not exists",
+    "Consider security: Default to manual CSR signing (no autosign), warn users about autosign security implications",
+    "Implement proper certificate validation: verify CA chain, check expiration, validate CN/SAN"
+  ],
+  "implementation_notes": {
+    "certificate_storage": {
+      "server": {
+        "ca_cert": "/etc/puppetc/ssl/ca/ca_crt.pem",
+        "ca_key": "/etc/puppetc/ssl/ca/ca_key.pem",
+        "server_cert": "/etc/puppetc/ssl/certs/server.pem",
+        "server_key": "/etc/puppetc/ssl/private/server.pem"
+      },
+      "agent": {
+        "agent_cert": "/etc/puppetc/ssl/certs/<certname>.pem",
+        "agent_key": "/etc/puppetc/ssl/private/<certname>.pem",
+        "ca_cert": "/etc/puppetc/ssl/certs/ca.pem"
+      }
+    },
+    "configuration_additions": {
+      "puppet.conf_server_section": [
+        "autosign = false (default, require manual signing)",
+        "autosign = true (naive mode)",
+        "autosign = /etc/puppetc/autosign.conf (basic mode)",
+        "autosign = /usr/local/bin/puppetc-autosign (policy mode)"
+      ]
+    },
+    "new_endpoints_needed": [
+      "POST /puppet/v4/certificate_request - Submit CSR from agent",
+      "GET /puppet/v4/certificate/<certname> - Retrieve signed certificate",
+      "GET /puppet/v4/certificate_status - List pending CSRs (for admin)",
+      "PUT /puppet/v4/certificate_status/<certname> - Sign/reject CSR (for admin)"
+    ]
+  },
+  "created_at": "2026-01-10T21:00:00Z"
+}

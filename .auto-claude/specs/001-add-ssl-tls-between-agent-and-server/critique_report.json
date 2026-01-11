@@ -1,0 +1,52 @@
+{
+  "critique_completed": true,
+  "issues_found": [
+    {
+      "severity": "medium",
+      "category": "consistency",
+      "description": "Certificate directory path inconsistency between spec and research findings. Spec used '/etc/puppetc/ca/' while research and Puppet best practices suggest '/etc/puppetc/ssl/ca/' for better organizational structure.",
+      "location": "Multiple locations: lines 236, 241, 299, 307, 383, 390, 399, 419",
+      "fix_applied": "Updated all server CA certificate paths from '/etc/puppetc/ca/' to '/etc/puppetc/ssl/ca/' throughout the document. Also updated the server directory structure diagram to show the complete hierarchy including '/etc/puppetc/autosign.conf' and nested 'ssl/ca/' subdirectories.",
+      "verified": true,
+      "rationale": "The updated path better matches real Puppet's structure (/etc/puppetlabs/puppet/ssl/) and creates consistency with agent paths which already use /var/lib/puppetc/ssl/. This improves organizational clarity and follows established Puppet conventions."
+    },
+    {
+      "severity": "low",
+      "category": "accuracy",
+      "description": "Incomplete OpenSSL header includes in initialization pattern. The pattern showed only 4 includes but research indicates 7 headers are needed for full OpenSSL functionality including EVP API, RSA operations, and X.509v3 extensions.",
+      "location": "Lines 187-190 (OpenSSL Initialization Pattern section)",
+      "fix_applied": "Added missing includes: '<openssl/x509v3.h>', '<openssl/rsa.h>', and '<openssl/evp.h>' to the OpenSSL initialization pattern code block.",
+      "verified": true,
+      "rationale": "The EVP API pattern requires <openssl/evp.h>, RSA key generation needs <openssl/rsa.h>, and X.509v3 extensions (SANs, etc.) require <openssl/x509v3.h>. These are documented in research.json lines 17-22."
+    },
+    {
+      "severity": "medium",
+      "category": "completeness",
+      "description": "Missing critical edge case: Network failures during CSR workflow. The spec did not address what happens when an agent cannot reach the server during certificate request submission or retrieval.",
+      "location": "Edge Cases section (lines 239-247)",
+      "fix_applied": "Added edge case #8: 'Network Failures During CSR Workflow - Agent should retry CSR submission if network is unreachable; clear error message if server unavailable for extended period'",
+      "verified": true,
+      "rationale": "Network failures are a common real-world scenario that could leave agents in a broken state without proper retry logic and error handling. This is critical for production deployments where network issues are inevitable."
+    },
+    {
+      "severity": "low",
+      "category": "completeness",
+      "description": "Auto-sign configuration file location not shown in server directory structure diagram. While mentioned in environment variables and elsewhere, it wasn't visualized in the directory tree.",
+      "location": "Certificate Directory Structure section (lines 307-313)",
+      "fix_applied": "Updated server directory structure to show '/etc/puppetc/autosign.conf' at the root level alongside the 'ssl/' directory, providing a complete view of the server configuration layout.",
+      "verified": true,
+      "rationale": "Completeness and clarity - the autosign.conf file is a key configuration file for the auto-signing feature and should be visible in the directory structure for implementers."
+    }
+  ],
+  "issues_fixed": true,
+  "no_issues_found": false,
+  "critique_summary": "The specification was well-written overall with strong technical accuracy and comprehensive coverage of requirements. Found and fixed 4 issues: (1) certificate path inconsistency with research recommendations, (2) incomplete OpenSSL header includes, (3) missing edge case for network failures during CSR workflow, and (4) autosign config file missing from directory structure diagram. All issues were addressed by updating the spec to align with research findings and Puppet best practices.",
+  "confidence_level": "high",
+  "recommendations": [
+    "Consider adding retry logic specifications (e.g., number of retries, backoff strategy) for the network failure edge case added in this critique.",
+    "When implementing, ensure the new '/etc/puppetc/ssl/ca/' path structure is reflected in all Debian postinst scripts and Docker initialization scripts.",
+    "Verify that the libmicrohttpd replacement decision is approved by stakeholders before implementation begins, as this is a significant architectural change.",
+    "The spec correctly follows OpenSSL EVP API patterns from research. Implementers should strictly adhere to these patterns for OpenSSL 3.0+ compatibility."
+  ],
+  "created_at": "2026-01-10T21:30:00Z"
+}

@@ -1,0 +1,74 @@
+{
+  "complexity": "complex",
+  "workflow_type": "feature",
+  "confidence": 0.90,
+  "reasoning": "Security-critical feature requiring SSL/TLS implementation across agent-server architecture. Involves PKI infrastructure, certificate signing service, multiple deployment artifacts (Docker, Debian packages, Vagrant), and must match real Puppet's behavior. Cross-cutting changes affect entire communication layer.",
+
+  "analysis": {
+    "scope": {
+      "estimated_files": 20,
+      "estimated_services": 2,
+      "is_cross_cutting": true,
+      "notes": "SSL/TLS affects all agent-server communication. Requires changes to server (certificate signing service, PKI), agent (client cert handling), Docker setup, packaging, and development environments. Estimated 15-25 files across network layer, configuration, deployment scripts, and documentation."
+    },
+    "integrations": {
+      "external_services": [],
+      "new_dependencies": [],
+      "research_needed": true,
+      "notes": "OpenSSL is already a dependency, but implementing PKI infrastructure and certificate signing requires deep understanding. Must research real Puppet's SSL/TLS behavior (CA setup, cert signing workflow, auto-sign patterns) to ensure behavioral parity. C-based SSL/TLS implementation is non-trivial."
+    },
+    "infrastructure": {
+      "docker_changes": true,
+      "database_changes": false,
+      "config_changes": true,
+      "notes": "Docker images require updates for SSL/TLS setup. Debian packages potentially need updates. Multipass/Vagrant development environments need reconfiguration. Auto-sign feature requires new configuration schema. May need persistent storage for certificate state (pending/signed certs)."
+    },
+    "knowledge": {
+      "patterns_exist": false,
+      "research_required": true,
+      "unfamiliar_tech": ["OpenSSL C API", "PKI implementation", "Puppet SSL/TLS behavior"],
+      "notes": "Need to understand: 1) How Puppet implements mutual TLS, 2) Certificate signing workflow and API design, 3) Auto-sign configuration format, 4) PKI bootstrapping process, 5) Certificate lifecycle management. No existing PKI patterns in codebase to reference."
+    },
+    "risk": {
+      "level": "high",
+      "concerns": [
+        "Security-critical authentication code",
+        "Breaking change to agent-server communication",
+        "Backward compatibility challenges",
+        "Certificate management complexity",
+        "Potential for auth bypass if implemented incorrectly",
+        "Multiple deployment artifacts must stay synchronized"
+      ],
+      "notes": "This changes the fundamental authentication model. High risk of breaking existing deployments if not carefully designed. Security vulnerabilities could compromise entire Puppet infrastructure. Requires careful testing of certificate validation, signing workflow, and auto-sign feature."
+    }
+  },
+
+  "recommended_phases": [
+    "discovery",
+    "requirements",
+    "research",
+    "context",
+    "spec_writing",
+    "self_critique",
+    "planning",
+    "validation"
+  ],
+
+  "flags": {
+    "needs_research": true,
+    "needs_self_critique": true,
+    "needs_infrastructure_setup": true
+  },
+
+  "validation_recommendations": {
+    "risk_level": "critical",
+    "skip_validation": false,
+    "minimal_mode": false,
+    "test_types_required": ["unit", "integration", "e2e", "security"],
+    "security_scan_required": true,
+    "staging_deployment_required": true,
+    "reasoning": "Authentication and security-critical code affecting the entire communication layer. Requires comprehensive testing at all levels, security scanning for SSL/TLS vulnerabilities, and staging deployment to verify certificate workflows function correctly across agent-server interactions."
+  },
+
+  "created_at": "2026-01-10T00:00:00Z"
+}

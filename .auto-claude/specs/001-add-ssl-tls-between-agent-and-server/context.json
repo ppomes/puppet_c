@@ -1,0 +1,69 @@
+{
+  "task_description": "Add SSL/TLS mutual authentication between agent and server with behavior matching real Puppet (client auth, shared CA, PKI on server side, certificate signing service, auto-signing feature). Update Docker images, Debian packages, Multipass/Vagrant setups. Use OpenSSL (already a dependency), do not use GnuTLS.",
+  "scoped_services": ["agent", "server"],
+  "files_to_modify": {
+    "agent": [
+      "agent/puppetc_agent.c"
+    ],
+    "server": [
+      "server/puppetc_server.c"
+    ],
+    "common": [],
+    "build": [
+      "configure.ac"
+    ],
+    "docker": [
+      "Dockerfile",
+      "docker-compose.yml"
+    ],
+    "debian": [
+      "debian/control"
+    ],
+    "vagrant": [
+      "vagrant/Vagrantfile"
+    ],
+    "multipass": [
+      "multipass/cloud-init.yaml"
+    ]
+  },
+  "files_to_create": [
+    "server/puppet_ca.c",
+    "server/puppet_autosign.c",
+    "common/puppet_ssl.c",
+    "include/puppet_ca.h",
+    "include/puppet_ssl.h",
+    "include/puppet_autosign.h",
+    "debian/puppetc-server.postinst",
+    "debian/puppetc-agent.postinst"
+  ],
+  "files_to_reference": [
+    "compiler/puppet_stdlib.c",
+    "agent/puppetc_agent.c",
+    "server/puppetc_server.c",
+    "common/config_parser.c",
+    "Dockerfile"
+  ],
+  "patterns": {
+    "openssl_evp_api": "compiler/puppet_stdlib.c lines 4290-4298 - EVP_MD_CTX_new/free pattern for OpenSSL 3.0+ compatibility",
+    "libcurl_config": "agent/puppetc_agent.c lines 123-139 - curl_easy_setopt pattern",
+    "http_handling": "server/puppetc_server.c lines 55-93 - MHD request handling (to be replaced)",
+    "config_parsing": "common/config_parser.c - config file parsing pattern",
+    "memory_management": "Use puppet_malloc/puppet_free/puppet_calloc wrappers",
+    "docker_multistage": "Dockerfile - multi-stage build pattern (builder → server/agent)"
+  },
+  "existing_implementations": {
+    "description": "OpenSSL already used for MD5 hashing (server/puppetc_server.c line 121), EVP API for sha1/md5 (compiler/puppet_stdlib.c). libcurl used for HTTP client (agent/puppetc_agent.c). libmicrohttpd used for HTTP server (server/puppetc_server.c) but only supports GnuTLS for HTTPS.",
+    "relevant_files": [
+      "server/puppetc_server.c",
+      "agent/puppetc_agent.c",
+      "compiler/puppet_stdlib.c"
+    ]
+  },
+  "critical_decisions": {
+    "http_server_library": "Must replace libmicrohttpd with OpenSSL-compatible HTTP server library (libmicrohttpd only supports GnuTLS for HTTPS). Options: libevhtp, libevent, or custom implementation. Recommended: libevhtp for minimal disruption.",
+    "autosign_default": "Use policy-based autosigning as recommended default (not naive or basic whitelist)",
+    "cert_storage": "Server: /etc/puppetc/ssl/ca/, Agent: /var/lib/puppetc/ssl/{certs,private_keys,ca}",
+    "tls_version": "Minimum TLS 1.2, prefer TLS 1.3"
+  },
+  "created_at": "2026-01-10T20:43:16.774421"
+}
