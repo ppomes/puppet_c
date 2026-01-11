@@ -242,8 +242,7 @@ static char *csr_to_pem(X509_REQ *req) {
 /**
  * Submit CSR to server and retrieve signed certificate
  */
-static int submit_certificate_request(const char *server_url, const char *certname,
-                                      X509_REQ *req, const char *cert_path, bool verbose) {
+static int submit_certificate_request(const agent_config_t *config, X509_REQ *req) {
     CURL *curl = NULL;
     CURLcode res;
     response_buffer_t response = {0};
@@ -266,7 +265,8 @@ static int submit_certificate_request(const char *server_url, const char *certna
 
     /* Build CSR endpoint URL */
     char url[512];
-    snprintf(url, sizeof(url), "%s/puppet-ca/v1/certificate_request/%s", server_url, certname);
+    snprintf(url, sizeof(url), "%s/puppet-ca/v1/certificate_request/%s",
+             config->server_url, config->certname);
 
     /* Set up request */
     curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -287,7 +287,10 @@ static int submit_certificate_request(const char *server_url, const char *certna
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
 
-    if (verbose) {
+    /* Configure mTLS options (CA cert only for CSR submission) */
+    configure_mtls_options(curl, config);
+
+    if (config->verbose) {
         fprintf(stderr, "[INFO] Submitting CSR to %s\n", url);
     }
 
@@ -300,25 +303,25 @@ static int submit_certificate_request(const char *server_url, const char *certna
         long http_code = 0;
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
 
-        if (verbose) {
+        if (config->verbose) {
             fprintf(stderr, "[INFO] Server response: HTTP %ld\n", http_code);
         }
 
         if (http_code == 200) {
             /* Save signed certificate to file */
-            FILE *fp = fopen(cert_path, "w");
+            FILE *fp = fopen(config->ssl_cert_path, "w");
             if (!fp) {
-                fprintf(stderr, "Error: Cannot create certificate file: %s\n", cert_path);
+                fprintf(stderr, "Error: Cannot create certificate file: %s\n", config->ssl_cert_path);
             } else {
                 /* Set permissions to 0644 */
-                chmod(cert_path, 0644);
+                chmod(config->ssl_cert_path, 0644);
 
                 if (fwrite(response.data, 1, response.size, fp) != response.size) {
                     fprintf(stderr, "Error: Failed to write certificate file\n");
                 } else {
                     result = 0;
-                    if (verbose) {
-                        fprintf(stderr, "[INFO] Certificate saved to %s\n", cert_path);
+                    if (config->verbose) {
+                        fprintf(stderr, "[INFO] Certificate saved to %s\n", config->ssl_cert_path);
                     }
                 }
                 fclose(fp);
@@ -418,8 +421,7 @@ static int ensure_certificate(agent_config_t *config) {
     }
 
     /* Submit CSR to server */
-    result = submit_certificate_request(config->server_url, config->certname, req,
-                                       config->ssl_cert_path, config->verbose);
+    result = submit_certificate_request(config, req);
 
     /* Cleanup */
     X509_REQ_free(req);
@@ -454,6 +456,42 @@ static size_t write_callback(void *contents, size_t size, size_t nmemb, void *us
     return realsize;
 }
 
+/**
+ * Configure curl with mTLS options
+ */
+static void configure_mtls_options(CURL *curl, const agent_config_t *config) {
+    if (!curl || !config) {
+        return;
+    }
+
+    /* Configure SSL/TLS verification */
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+
+    /* Configure CA certificate */
+    if (config->ssl_ca_cert_path) {
+        curl_easy_setopt(curl, CURLOPT_CAINFO, config->ssl_ca_cert_path);
+        if (config->verbose) {
+            fprintf(stderr, "[DEBUG] Using CA cert: %s\n", config->ssl_ca_cert_path);
+        }
+    }
+
+    /* Configure client certificate and key (if available) */
+    if (config->ssl_cert_path && access(config->ssl_cert_path, R_OK) == 0) {
+        curl_easy_setopt(curl, CURLOPT_SSLCERT, config->ssl_cert_path);
+        if (config->verbose) {
+            fprintf(stderr, "[DEBUG] Using client cert: %s\n", config->ssl_cert_path);
+        }
+    }
+
+    if (config->ssl_key_path && access(config->ssl_key_path, R_OK) == 0) {
+        curl_easy_setopt(curl, CURLOPT_SSLKEY, config->ssl_key_path);
+        if (config->verbose) {
+            fprintf(stderr, "[DEBUG] Using client key: %s\n", config->ssl_key_path);
+        }
+    }
+}
+
 static char *build_catalog_request(const char *certname, const char *environment,
                                    facter_ctx_t *facts) {
     /* Get facts as JSON */
@@ -484,8 +522,7 @@ static char *build_catalog_request(const char *certname, const char *environment
     return request;
 }
 
-static char *request_catalog(const char *server_url, const char *request_json,
-                            bool verbose) {
+static char *request_catalog(const agent_config_t *config, const char *request_json) {
     CURL *curl;
     CURLcode res;
     response_buffer_t response = {0};
@@ -499,7 +536,7 @@ static char *request_catalog(const char *server_url, const char *request_json,
 
     /* Build full URL */
     char url[512];
-    snprintf(url, sizeof(url), "%s/puppet/v4/catalog", server_url);
+    snprintf(url, sizeof(url), "%s/puppet/v4/catalog", config->server_url);
 
     /* Set up request */
     curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -520,7 +557,10 @@ static char *request_catalog(const char *server_url, const char *request_json,
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
 
-    if (verbose) {
+    /* Configure mTLS options */
+    configure_mtls_options(curl, config);
+
+    if (config->verbose) {
         fprintf(stderr, "[INFO] Requesting catalog from %s\n", url);
     }
 
@@ -534,7 +574,7 @@ static char *request_catalog(const char *server_url, const char *request_json,
         long http_code = 0;
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
 
-        if (verbose) {
+        if (config->verbose) {
             fprintf(stderr, "[INFO] Server response: HTTP %ld\n", http_code);
         }
 
@@ -557,7 +597,7 @@ static char *request_catalog(const char *server_url, const char *request_json,
     return result;
 }
 
-static int check_server_status(const char *server_url, bool verbose) {
+static int check_server_status(const agent_config_t *config) {
     CURL *curl;
     CURLcode res;
     response_buffer_t response = {0};
@@ -569,7 +609,7 @@ static int check_server_status(const char *server_url, bool verbose) {
     }
 
     char url[512];
-    snprintf(url, sizeof(url), "%s/status", server_url);
+    snprintf(url, sizeof(url), "%s/status", config->server_url);
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
@@ -577,7 +617,10 @@ static int check_server_status(const char *server_url, bool verbose) {
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
 
-    if (verbose) {
+    /* Configure mTLS options */
+    configure_mtls_options(curl, config);
+
+    if (config->verbose) {
         fprintf(stderr, "[INFO] Checking server status at %s\n", url);
     }
 
@@ -588,7 +631,7 @@ static int check_server_status(const char *server_url, bool verbose) {
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
         if (http_code == 200) {
             result = 0;
-            if (verbose) {
+            if (config->verbose) {
                 fprintf(stderr, "[INFO] Server status: %s\n", response.data);
             }
         }
@@ -866,7 +909,7 @@ static int run_agent(agent_config_t *config) {
     } else {
         /* Check server status */
         print_info("Connecting to server...");
-        if (check_server_status(config->server_url, config->verbose) != 0) {
+        if (check_server_status(config) != 0) {
             print_error("Cannot connect to server at %s", config->server_url);
             print_error("Make sure puppetc-server is running");
             facter_destroy(facts);
@@ -888,7 +931,7 @@ static int run_agent(agent_config_t *config) {
         }
 
         /* Request catalog from server */
-        catalog_json = request_catalog(config->server_url, request_json, config->verbose);
+        catalog_json = request_catalog(config, request_json);
         puppet_free(request_json);
 
         if (!catalog_json) {
