@@ -7,6 +7,7 @@
  * - POST /puppet/v4/catalog - Compile catalog for a node
  * - GET  /puppet/v3/file_content/* - File server
  * - GET  /puppet/v3/file_metadatas/plugins - Plugin metadata
+ * - POST /puppet-ca/v1/certificate_request/:certname - Submit CSR for signing
  * - GET  /pdb/query/v4/* - PuppetDB queries
  */
 
@@ -56,6 +57,7 @@ static char *puppetdb_path = NULL;
 static char *ca_dir = NULL;
 static puppetdb_t *pdb = NULL;
 static puppet_ssl_ctx_t *ssl_ctx = NULL;
+static puppet_ca_ctx_t *ca_ctx = NULL;
 static int verbose = 0;
 
 /**
@@ -866,6 +868,80 @@ static void handle_pdb_resources(evhtp_request_t *req, void *arg) {
 }
 
 /**
+ * @brief Handle POST /puppet-ca/v1/certificate_request/:certname
+ */
+static void handle_certificate_request(evhtp_request_t *req, void *arg) {
+    (void)arg;
+
+    if (!ca_ctx) {
+        send_error(req, EVHTP_RES_SERVUNAVAIL, "CA not initialized");
+        return;
+    }
+
+    /* Extract certname from URI */
+    const char *uri = req->uri->path->full;
+    const char *prefix = "/puppet-ca/v1/certificate_request/";
+    size_t prefix_len = strlen(prefix);
+
+    if (strncmp(uri, prefix, prefix_len) != 0) {
+        send_error(req, EVHTP_RES_BADREQ, "Invalid certificate_request URL format");
+        return;
+    }
+
+    const char *certname = uri + prefix_len;
+    if (!certname || strlen(certname) == 0) {
+        send_error(req, EVHTP_RES_BADREQ, "Missing certname");
+        return;
+    }
+
+    /* Get POST data (CSR in PEM format) */
+    size_t post_size = evbuffer_get_length(req->buffer_in);
+    if (post_size == 0) {
+        send_error(req, EVHTP_RES_BADREQ, "Missing CSR in request body");
+        return;
+    }
+
+    char *csr_pem = puppet_malloc(post_size + 1);
+    if (!csr_pem) {
+        send_error(req, EVHTP_RES_SERVERR, "Memory allocation failed");
+        return;
+    }
+
+    evbuffer_copyout(req->buffer_in, csr_pem, post_size);
+    csr_pem[post_size] = '\0';
+
+    if (verbose) {
+        fprintf(stderr, "[INFO] Certificate request for: %s\n", certname);
+    }
+
+    /* Sign the CSR */
+    char *signed_cert_pem = NULL;
+    int result = puppet_ca_sign_csr(ca_ctx, csr_pem, certname,
+                                     PUPPET_CA_CERT_VALIDITY_DAYS,
+                                     &signed_cert_pem);
+    puppet_free(csr_pem);
+
+    if (result != 0 || !signed_cert_pem) {
+        const char *error_msg = puppet_ca_get_error(ca_ctx);
+        if (verbose) {
+            fprintf(stderr, "[ERROR] Failed to sign CSR for %s: %s\n",
+                    certname, error_msg ? error_msg : "unknown error");
+        }
+        send_error(req, EVHTP_RES_SERVERR,
+                   error_msg ? error_msg : "Failed to sign CSR");
+        return;
+    }
+
+    if (verbose) {
+        fprintf(stderr, "[INFO] Successfully signed certificate for: %s\n", certname);
+    }
+
+    /* Return signed certificate */
+    send_file_response(req, EVHTP_RES_OK, signed_cert_pem, strlen(signed_cert_pem));
+    puppet_free(signed_cert_pem);
+}
+
+/**
  * @brief Handle OPTIONS requests for CORS
  */
 static void handle_options(evhtp_request_t *req, void *arg) {
@@ -1380,6 +1456,60 @@ static enum MHD_Result handle_pdb_resources(struct MHD_Connection *connection,
 }
 
 /**
+ * @brief Handle POST /puppet-ca/v1/certificate_request/:certname
+ */
+static enum MHD_Result handle_certificate_request(struct MHD_Connection *connection,
+                                                   const char *certname,
+                                                   const char *csr_pem) {
+    if (!ca_ctx) {
+        return send_error(connection, MHD_HTTP_SERVICE_UNAVAILABLE,
+                         "CA not initialized");
+    }
+
+    if (!csr_pem || strlen(csr_pem) == 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST,
+                         "Missing CSR in request body");
+    }
+
+    if (!certname || strlen(certname) == 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST,
+                         "Missing certname");
+    }
+
+    if (verbose) {
+        fprintf(stderr, "[INFO] Certificate request for: %s\n", certname);
+    }
+
+    /* Sign the CSR */
+    char *signed_cert_pem = NULL;
+    int result = puppet_ca_sign_csr(ca_ctx, csr_pem, certname,
+                                     PUPPET_CA_CERT_VALIDITY_DAYS,
+                                     &signed_cert_pem);
+
+    if (result != 0 || !signed_cert_pem) {
+        const char *error_msg = puppet_ca_get_error(ca_ctx);
+        if (verbose) {
+            fprintf(stderr, "[ERROR] Failed to sign CSR for %s: %s\n",
+                    certname, error_msg ? error_msg : "unknown error");
+        }
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                         error_msg ? error_msg : "Failed to sign CSR");
+    }
+
+    if (verbose) {
+        fprintf(stderr, "[INFO] Successfully signed certificate for: %s\n", certname);
+    }
+
+    /* Return signed certificate */
+    enum MHD_Result ret = send_file_response(connection, MHD_HTTP_OK,
+                                              signed_cert_pem,
+                                              strlen(signed_cert_pem));
+    puppet_free(signed_cert_pem);
+
+    return ret;
+}
+
+/**
  * @brief Request handler callback
  */
 static enum MHD_Result request_handler(void *cls,
@@ -1435,6 +1565,10 @@ static enum MHD_Result request_handler(void *cls,
     } else if (strcmp(method, "POST") == 0 &&
                strcmp(url, "/puppet/v4/catalog") == 0) {
         ret = handle_catalog(connection, con_info->post_data);
+    } else if (strcmp(method, "POST") == 0 &&
+               strncmp(url, "/puppet-ca/v1/certificate_request/", 34) == 0) {
+        const char *certname = url + 34;
+        ret = handle_certificate_request(connection, certname, con_info->post_data);
     } else if (strcmp(method, "GET") == 0 &&
                strcmp(url, "/pdb/query/v4/nodes") == 0) {
         ret = handle_pdb_nodes(connection);
@@ -1513,6 +1647,8 @@ static void print_usage(const char *program_name) {
     printf("\nPluginsync Endpoints:\n");
     printf("  GET  /puppet/v3/file_metadatas/plugins      List all plugin files (lib/)\n");
     printf("  GET  /puppet/v3/file_content/plugins/<path> Download plugin file\n");
+    printf("\nCertificate Authority Endpoints:\n");
+    printf("  POST /puppet-ca/v1/certificate_request/<certname>  Submit CSR for signing\n");
     printf("\nPuppetDB Endpoints:\n");
     printf("  GET  /pdb/query/v4/nodes                    List all nodes\n");
     printf("  GET  /pdb/query/v4/facts/<certname>         Get facts for node\n");
@@ -1684,6 +1820,44 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "         PuppetDB endpoints will be unavailable\n");
     }
 
+    /* Initialize CA */
+    ca_ctx = puppet_ca_init(ca_dir);
+    if (!ca_ctx) {
+        fprintf(stderr, "Warning: Failed to initialize CA at %s\n", ca_dir);
+        fprintf(stderr, "         Certificate request endpoints will be unavailable\n");
+    } else {
+        /* Try to load existing CA or generate if needed */
+        if (!puppet_ca_exists(ca_ctx)) {
+            if (verbose) {
+                fprintf(stderr, "[INFO] CA not found, generating new CA...\n");
+            }
+            char ca_subject[256];
+            snprintf(ca_subject, sizeof(ca_subject), "CN=Puppet CA: puppetc-server");
+            if (puppet_ca_generate(ca_ctx, ca_subject, PUPPET_CA_VALIDITY_DAYS) != 0) {
+                fprintf(stderr, "Warning: Failed to generate CA: %s\n",
+                        puppet_ca_get_error(ca_ctx));
+                puppet_ca_free(ca_ctx);
+                ca_ctx = NULL;
+            } else if (puppet_ca_save(ca_ctx) != 0) {
+                fprintf(stderr, "Warning: Failed to save CA: %s\n",
+                        puppet_ca_get_error(ca_ctx));
+                puppet_ca_free(ca_ctx);
+                ca_ctx = NULL;
+            } else if (verbose) {
+                fprintf(stderr, "[INFO] CA generated successfully\n");
+            }
+        } else {
+            if (puppet_ca_load(ca_ctx) != 0) {
+                fprintf(stderr, "Warning: Failed to load CA: %s\n",
+                        puppet_ca_get_error(ca_ctx));
+                puppet_ca_free(ca_ctx);
+                ca_ctx = NULL;
+            } else if (verbose) {
+                fprintf(stderr, "[INFO] CA loaded successfully\n");
+            }
+        }
+    }
+
     /* Set up signal handlers */
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -1751,6 +1925,7 @@ int main(int argc, char *argv[]) {
     evhtp_set_regex_cb(htp, "^/puppet/v3/file_content/plugins/.*", handle_plugin_content, NULL);
     evhtp_set_regex_cb(htp, "^/puppet/v3/file_content/modules/.*", handle_file_content, NULL);
     evhtp_set_cb(htp, "/puppet/v4/catalog", handle_catalog, NULL);
+    evhtp_set_regex_cb(htp, "^/puppet-ca/v1/certificate_request/.*", handle_certificate_request, NULL);
     evhtp_set_cb(htp, "/pdb/query/v4/nodes", handle_pdb_nodes, NULL);
     evhtp_set_regex_cb(htp, "^/pdb/query/v4/facts/.*", handle_pdb_facts, NULL);
     evhtp_set_regex_cb(htp, "^/pdb/query/v4/catalogs/.*", handle_pdb_catalogs, NULL);
@@ -1824,6 +1999,7 @@ int main(int argc, char *argv[]) {
 
     /* Cleanup */
     if (pdb) puppetdb_close(pdb);
+    if (ca_ctx) puppet_ca_free(ca_ctx);
     config_free(file_config);
     puppet_ssl_cleanup();
     puppet_memory_shutdown();
