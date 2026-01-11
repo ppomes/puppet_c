@@ -1,10 +1,13 @@
 /**
  * @file puppetc_server.c
- * @brief HTTP server for Puppet catalog compilation
+ * @brief HTTPS server for Puppet catalog compilation with TLS support
  *
  * Provides a REST API for compiling Puppet catalogs:
  * - GET  /status           - Health check
  * - POST /puppet/v4/catalog - Compile catalog for a node
+ * - GET  /puppet/v3/file_content/* - File server
+ * - GET  /puppet/v3/file_metadatas/plugins - Plugin metadata
+ * - GET  /pdb/query/v4/* - PuppetDB queries
  */
 
 #include <stdio.h>
@@ -12,7 +15,16 @@
 #include <string.h>
 #include <signal.h>
 #include <getopt.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <openssl/md5.h>
+
+#ifdef HAVE_EVHTP
+#include <evhtp.h>
+#include <event2/thread.h>
+#else
 #include <microhttpd.h>
+#endif
 
 #include "puppet_ast.h"
 #include "puppet_catalog.h"
@@ -23,11 +35,14 @@
 #include "puppet_hiera.h"
 #include "config_parser.h"
 #include "puppetdb.h"
+#include "puppet_ssl.h"
+#include "puppet_ca.h"
 
 /* Default configuration */
 #define DEFAULT_PORT 8140
 #define DEFAULT_ENVIRONMENT "production"
 #define DEFAULT_CONFIG_FILE "/etc/puppetc/puppet.conf"
+#define DEFAULT_CA_DIR "/etc/puppetc/ssl/ca"
 
 /* Default PuppetDB path */
 #define DEFAULT_PUPPETDB_PATH "/var/lib/puppetc/puppetdb.sqlite"
@@ -38,7 +53,9 @@ static char *manifest_path = NULL;
 static char *modules_path = NULL;
 static char *hiera_datadir = NULL;
 static char *puppetdb_path = NULL;
+static char *ca_dir = NULL;
 static puppetdb_t *pdb = NULL;
+static puppet_ssl_ctx_t *ssl_ctx = NULL;
 static int verbose = 0;
 
 /**
@@ -48,6 +65,51 @@ static void signal_handler(int sig) {
     (void)sig;
     running = 0;
 }
+
+#ifdef HAVE_EVHTP
+
+/**
+ * @brief Send a JSON response using evhtp
+ */
+static void send_json_response(evhtp_request_t *req,
+                               int status_code,
+                               const char *json) {
+    evbuffer_add_printf(req->buffer_out, "%s", json);
+    evhtp_headers_add_header(req->headers_out,
+                             evhtp_header_new("Content-Type", "application/json", 0, 0));
+    evhtp_headers_add_header(req->headers_out,
+                             evhtp_header_new("Access-Control-Allow-Origin", "*", 0, 0));
+    evhtp_send_reply(req, status_code);
+}
+
+/**
+ * @brief Send an error response
+ */
+static void send_error(evhtp_request_t *req,
+                      int status_code,
+                      const char *message) {
+    char json[512];
+    snprintf(json, sizeof(json),
+             "{\"error\": \"%s\", \"status\": %d}", message, status_code);
+    send_json_response(req, status_code, json);
+}
+
+/**
+ * @brief Send raw file content response
+ */
+static void send_file_response(evhtp_request_t *req,
+                               int status_code,
+                               const char *content,
+                               size_t content_len) {
+    evbuffer_add(req->buffer_out, content, content_len);
+    evhtp_headers_add_header(req->headers_out,
+                             evhtp_header_new("Content-Type", "application/octet-stream", 0, 0));
+    evhtp_headers_add_header(req->headers_out,
+                             evhtp_header_new("Access-Control-Allow-Origin", "*", 0, 0));
+    evhtp_send_reply(req, status_code);
+}
+
+#else /* !HAVE_EVHTP - Use libmicrohttpd */
 
 /**
  * @brief Send a JSON response
@@ -85,14 +147,6 @@ static enum MHD_Result send_error(struct MHD_Connection *connection,
 }
 
 /**
- * @brief Handle GET /status
- */
-static enum MHD_Result handle_status(struct MHD_Connection *connection) {
-    const char *json = "{\"status\": \"ok\", \"version\": \"0.0.1\"}";
-    return send_json_response(connection, MHD_HTTP_OK, json);
-}
-
-/**
  * @brief Send raw file content response
  */
 static enum MHD_Result send_file_response(struct MHD_Connection *connection,
@@ -116,9 +170,7 @@ static enum MHD_Result send_file_response(struct MHD_Connection *connection,
     return ret;
 }
 
-#include <dirent.h>
-#include <sys/stat.h>
-#include <openssl/md5.h>
+#endif /* HAVE_EVHTP */
 
 /**
  * @brief Compute MD5 checksum of a file
@@ -213,10 +265,633 @@ static void scan_lib_directory(const char *base_path, const char *rel_path,
 }
 
 /**
+ * @brief Compile a catalog for the given request
+ */
+static char *compile_catalog(const char *certname, const char *environment,
+                             json_value_t *facts_json) {
+    puppet_program_t *program = NULL;
+    puppet_loader_t *loader = NULL;
+    char *catalog_json = NULL;
+
+    /* Create loader for manifest directory */
+    if (manifest_path) {
+        loader = puppet_loader_create(manifest_path);
+        if (!loader) {
+            return puppet_strdup("{\"error\": \"Failed to create module loader\"}");
+        }
+
+        if (modules_path) {
+            puppet_loader_set_modules_path(loader, modules_path);
+        }
+
+        /* Load site.pp */
+        program = puppet_loader_load_site(loader);
+    }
+
+    if (!program) {
+        if (loader) puppet_loader_destroy(loader);
+        return puppet_strdup("{\"error\": \"No manifest found\"}");
+    }
+
+    /* Create environment */
+    puppet_env_t *env = puppet_env_create();
+    puppet_env_set_verbose(env, verbose);
+
+    if (loader) {
+        puppet_env_set_loader(env, loader);
+    }
+
+    /* Set PuppetDB for exported resources */
+    if (pdb) {
+        puppet_env_set_puppetdb(env, pdb);
+    }
+
+    /* Configure Hiera */
+    if (hiera_datadir) {
+        puppet_hiera_register_provider(env, hiera_datadir);
+    }
+
+    /* Set node name */
+    puppet_env_set_node(env, certname);
+
+    /* Enable catalog building */
+    puppet_env_enable_catalog(env, certname, environment ? environment : DEFAULT_ENVIRONMENT);
+
+    /* Set facts if provided */
+    if (facts_json && facts_json->type == JSON_VALUE_OBJECT) {
+        puppet_facts_db_t *facts_db = puppet_facts_db_create();
+        if (puppet_facts_db_load_json(facts_db, certname, facts_json) == 0) {
+            puppet_env_set_facts_db(env, facts_db);
+            if (verbose) {
+                fprintf(stderr, "[INFO] Loaded facts for node: %s\n", certname);
+            }
+        } else {
+            puppet_facts_db_destroy(facts_db);
+            if (verbose) {
+                fprintf(stderr, "[WARN] Failed to load facts for node: %s\n", certname);
+            }
+        }
+    }
+
+    /* Execute program */
+    puppet_exec_program(program, env);
+
+    /* Check for compilation failure */
+    if (env->compilation_failed) {
+        char error_json[1024];
+        snprintf(error_json, sizeof(error_json),
+                 "{\"error\": \"Catalog compilation failed: %s\"}",
+                 env->failure_message ? env->failure_message : "unknown error");
+        catalog_json = puppet_strdup(error_json);
+    } else {
+        /* Get compiled catalog */
+        puppet_catalog_t *catalog = puppet_env_get_catalog(env);
+        if (catalog) {
+            catalog_json = puppet_catalog_to_json(catalog);
+            puppet_catalog_destroy(catalog);
+        } else {
+            catalog_json = puppet_strdup("{\"error\": \"No catalog generated\"}");
+        }
+    }
+
+    /* Cleanup */
+    puppet_env_destroy(env);
+    puppet_program_destroy(program);
+    if (loader) puppet_loader_destroy(loader);
+
+    return catalog_json;
+}
+
+#ifdef HAVE_EVHTP
+
+/**
+ * @brief Handle GET /status
+ */
+static void handle_status(evhtp_request_t *req, void *arg) {
+    (void)arg;
+    const char *json = "{\"status\": \"ok\", \"version\": \"0.0.1\"}";
+    send_json_response(req, EVHTP_RES_OK, json);
+}
+
+/**
  * @brief Handle GET /puppet/v3/file_metadatas/plugins
- *
- * Returns JSON listing all files in all modules' lib/ directories.
- * Used by agents to determine what files to sync.
+ */
+static void handle_file_metadatas_plugins(evhtp_request_t *req, void *arg) {
+    (void)arg;
+
+    if (!modules_path) {
+        send_error(req, EVHTP_RES_SERVERR, "Modules path not configured");
+        return;
+    }
+
+    /* Allocate buffer for JSON response */
+    size_t buf_size = 1024 * 1024;  /* 1MB max */
+    char *json_buf = puppet_malloc(buf_size);
+    if (!json_buf) {
+        send_error(req, EVHTP_RES_SERVERR, "Memory allocation failed");
+        return;
+    }
+
+    size_t buf_pos = 0;
+    buf_pos = sprintf(json_buf, "[");
+    int first = 1;
+
+    /* Scan each module's lib/ directory */
+    DIR *modules_dir = opendir(modules_path);
+    if (!modules_dir) {
+        puppet_free(json_buf);
+        send_error(req, EVHTP_RES_SERVERR, "Cannot open modules directory");
+        return;
+    }
+
+    struct dirent *module_entry;
+    while ((module_entry = readdir(modules_dir)) != NULL) {
+        if (module_entry->d_name[0] == '.') continue;
+
+        char module_path[4096];
+        snprintf(module_path, sizeof(module_path), "%s/%s", modules_path, module_entry->d_name);
+
+        struct stat st;
+        if (stat(module_path, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+
+        /* Check for lib/ directory */
+        char lib_path[4096];
+        snprintf(lib_path, sizeof(lib_path), "%s/lib", module_path);
+        if (stat(lib_path, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+
+        if (verbose) {
+            fprintf(stderr, "[INFO] Scanning module lib: %s\n", lib_path);
+        }
+
+        /* Scan lib/ directory */
+        DIR *lib_dir = opendir(lib_path);
+        if (!lib_dir) continue;
+
+        struct dirent *lib_entry;
+        while ((lib_entry = readdir(lib_dir)) != NULL) {
+            if (lib_entry->d_name[0] == '.') continue;
+
+            char entry_path[4096];
+            snprintf(entry_path, sizeof(entry_path), "%s/%s", lib_path, lib_entry->d_name);
+
+            if (stat(entry_path, &st) != 0) continue;
+
+            char rel_prefix[512];
+            snprintf(rel_prefix, sizeof(rel_prefix), "%s", module_entry->d_name);
+
+            if (S_ISDIR(st.st_mode)) {
+                /* Recursively scan subdirectory */
+                scan_lib_directory(lib_path, lib_entry->d_name, json_buf, buf_size, &buf_pos, &first);
+            } else if (S_ISREG(st.st_mode)) {
+                /* Add file entry */
+                char *checksum = file_md5(entry_path);
+                if (checksum) {
+                    size_t needed = snprintf(NULL, 0,
+                        "%s{\"path\":\"%s/lib/%s\",\"checksum\":{\"type\":\"md5\",\"value\":\"{md5}%s\"},\"type\":\"file\"}",
+                        first ? "" : ",", module_entry->d_name, lib_entry->d_name, checksum);
+                    if (buf_pos + needed < buf_size - 1) {
+                        buf_pos += sprintf(json_buf + buf_pos,
+                            "%s{\"path\":\"%s/lib/%s\",\"checksum\":{\"type\":\"md5\",\"value\":\"{md5}%s\"},\"type\":\"file\"}",
+                            first ? "" : ",", module_entry->d_name, lib_entry->d_name, checksum);
+                        first = 0;
+                    }
+                    puppet_free(checksum);
+                }
+            }
+        }
+        closedir(lib_dir);
+    }
+    closedir(modules_dir);
+
+    buf_pos += sprintf(json_buf + buf_pos, "]");
+
+    if (verbose) {
+        fprintf(stderr, "[INFO] Returning %zu bytes of plugin metadata\n", buf_pos);
+    }
+
+    send_json_response(req, EVHTP_RES_OK, json_buf);
+    puppet_free(json_buf);
+}
+
+/**
+ * @brief Handle GET /puppet/v3/file_content/plugins/<path>
+ */
+static void handle_plugin_content(evhtp_request_t *req, void *arg) {
+    (void)arg;
+
+    const char *uri = req->uri->path->full;
+    const char *prefix = "/puppet/v3/file_content/plugins/";
+    size_t prefix_len = strlen(prefix);
+
+    if (strncmp(uri, prefix, prefix_len) != 0) {
+        send_error(req, EVHTP_RES_BADREQ, "Invalid plugin URL format");
+        return;
+    }
+
+    const char *rel_path = uri + prefix_len;
+    if (strlen(rel_path) == 0) {
+        send_error(req, EVHTP_RES_BADREQ, "Missing file path");
+        return;
+    }
+
+    /* Security: reject paths with .. */
+    if (strstr(rel_path, "..") != NULL) {
+        send_error(req, EVHTP_RES_FORBIDDEN, "Path traversal not allowed");
+        return;
+    }
+
+    if (!modules_path) {
+        send_error(req, EVHTP_RES_SERVERR, "Modules path not configured");
+        return;
+    }
+
+    /* Build full path */
+    char full_path[4096];
+    snprintf(full_path, sizeof(full_path), "%s/%s", modules_path, rel_path);
+
+    if (verbose) {
+        fprintf(stderr, "[INFO] Plugin content request: %s -> %s\n", uri, full_path);
+    }
+
+    /* Read file */
+    FILE *fp = fopen(full_path, "rb");
+    if (!fp) {
+        if (verbose) {
+            fprintf(stderr, "[WARN] Plugin file not found: %s\n", full_path);
+        }
+        send_error(req, EVHTP_RES_NOTFOUND, "File not found");
+        return;
+    }
+
+    fseek(fp, 0, SEEK_END);
+    long file_size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    if (file_size < 0 || file_size > 10 * 1024 * 1024) {
+        fclose(fp);
+        send_error(req, EVHTP_RES_SERVERR, "File too large");
+        return;
+    }
+
+    char *content = puppet_malloc(file_size + 1);
+    if (!content) {
+        fclose(fp);
+        send_error(req, EVHTP_RES_SERVERR, "Memory allocation failed");
+        return;
+    }
+
+    size_t bytes_read = fread(content, 1, file_size, fp);
+    fclose(fp);
+
+    if (bytes_read != (size_t)file_size) {
+        puppet_free(content);
+        send_error(req, EVHTP_RES_SERVERR, "Failed to read file");
+        return;
+    }
+
+    send_file_response(req, EVHTP_RES_OK, content, bytes_read);
+    puppet_free(content);
+}
+
+/**
+ * @brief Handle GET /puppet/v3/file_content/modules/<module>/<path>
+ */
+static void handle_file_content(evhtp_request_t *req, void *arg) {
+    (void)arg;
+
+    const char *uri = req->uri->path->full;
+    const char *prefix = "/puppet/v3/file_content/modules/";
+    size_t prefix_len = strlen(prefix);
+
+    if (strncmp(uri, prefix, prefix_len) != 0) {
+        send_error(req, EVHTP_RES_BADREQ, "Invalid file_content URL format");
+        return;
+    }
+
+    const char *module_and_path = uri + prefix_len;
+
+    /* Extract module name */
+    const char *slash = strchr(module_and_path, '/');
+    if (!slash || slash == module_and_path) {
+        send_error(req, EVHTP_RES_BADREQ, "Missing module name or file path");
+        return;
+    }
+
+    size_t module_len = slash - module_and_path;
+    char module_name[256];
+    if (module_len >= sizeof(module_name)) {
+        send_error(req, EVHTP_RES_BADREQ, "Module name too long");
+        return;
+    }
+    strncpy(module_name, module_and_path, module_len);
+    module_name[module_len] = '\0';
+
+    const char *file_path = slash + 1;
+    if (strlen(file_path) == 0) {
+        send_error(req, EVHTP_RES_BADREQ, "Missing file path");
+        return;
+    }
+
+    /* Security: reject paths with .. */
+    if (strstr(file_path, "..") != NULL || strstr(module_name, "..") != NULL) {
+        send_error(req, EVHTP_RES_FORBIDDEN, "Path traversal not allowed");
+        return;
+    }
+
+    if (!modules_path) {
+        send_error(req, EVHTP_RES_SERVERR, "Modules path not configured");
+        return;
+    }
+
+    char full_path[4096];
+    snprintf(full_path, sizeof(full_path), "%s/%s/files/%s",
+             modules_path, module_name, file_path);
+
+    if (verbose) {
+        fprintf(stderr, "[INFO] Fileserver request: %s -> %s\n", uri, full_path);
+    }
+
+    /* Read file */
+    FILE *fp = fopen(full_path, "rb");
+    if (!fp) {
+        if (verbose) {
+            fprintf(stderr, "[WARN] File not found: %s\n", full_path);
+        }
+        send_error(req, EVHTP_RES_NOTFOUND, "File not found");
+        return;
+    }
+
+    fseek(fp, 0, SEEK_END);
+    long file_size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    if (file_size < 0 || file_size > 100 * 1024 * 1024) {
+        fclose(fp);
+        send_error(req, EVHTP_RES_SERVERR, "File too large or invalid");
+        return;
+    }
+
+    char *content = puppet_malloc(file_size + 1);
+    if (!content) {
+        fclose(fp);
+        send_error(req, EVHTP_RES_SERVERR, "Memory allocation failed");
+        return;
+    }
+
+    size_t bytes_read = fread(content, 1, file_size, fp);
+    fclose(fp);
+
+    if (bytes_read != (size_t)file_size) {
+        puppet_free(content);
+        send_error(req, EVHTP_RES_SERVERR, "Failed to read file");
+        return;
+    }
+
+    send_file_response(req, EVHTP_RES_OK, content, bytes_read);
+    puppet_free(content);
+}
+
+/**
+ * @brief Handle POST /puppet/v4/catalog
+ */
+static void handle_catalog(evhtp_request_t *req, void *arg) {
+    (void)arg;
+
+    /* Get POST data */
+    size_t post_size = evbuffer_get_length(req->buffer_in);
+    if (post_size == 0) {
+        send_error(req, EVHTP_RES_BADREQ, "Missing request body");
+        return;
+    }
+
+    char *post_data = puppet_malloc(post_size + 1);
+    if (!post_data) {
+        send_error(req, EVHTP_RES_SERVERR, "Memory allocation failed");
+        return;
+    }
+
+    evbuffer_copyout(req->buffer_in, post_data, post_size);
+    post_data[post_size] = '\0';
+
+    /* Parse JSON */
+    json_parser_t *parser = json_parser_create(post_data);
+    puppet_free(post_data);
+
+    if (!parser) {
+        send_error(req, EVHTP_RES_SERVERR, "Failed to create JSON parser");
+        return;
+    }
+
+    json_value_t *request = json_parse_value(parser);
+    json_parser_destroy(parser);
+
+    if (!request || request->type != JSON_VALUE_OBJECT) {
+        if (request) json_value_destroy(request);
+        send_error(req, EVHTP_RES_BADREQ, "Invalid JSON in request body");
+        return;
+    }
+
+    /* Extract certname */
+    json_value_t *certname_json = json_object_get(request, "certname");
+    if (!certname_json || certname_json->type != JSON_VALUE_STRING) {
+        json_value_destroy(request);
+        send_error(req, EVHTP_RES_BADREQ, "Missing or invalid 'certname' field");
+        return;
+    }
+    const char *certname = certname_json->data.string_value;
+
+    /* Extract environment */
+    json_value_t *env_json = json_object_get(request, "environment");
+    const char *environment = NULL;
+    if (env_json && env_json->type == JSON_VALUE_STRING) {
+        environment = env_json->data.string_value;
+    }
+
+    /* Extract facts */
+    json_value_t *facts_json = json_object_get(request, "facts");
+
+    if (verbose) {
+        fprintf(stderr, "[INFO] Compiling catalog for node: %s (env: %s, facts: %s)\n",
+                certname, environment ? environment : DEFAULT_ENVIRONMENT,
+                facts_json ? "yes" : "no");
+    }
+
+    /* Compile catalog */
+    char *catalog_json = compile_catalog(certname, environment, facts_json);
+
+    if (!catalog_json) {
+        json_value_destroy(request);
+        send_error(req, EVHTP_RES_SERVERR, "Failed to compile catalog");
+        return;
+    }
+
+    /* Store in PuppetDB */
+    if (pdb) {
+        if (facts_json) {
+            char *facts_str = json_value_to_string(facts_json);
+            if (facts_str) {
+                if (puppetdb_store_facts(pdb, certname, facts_str) != 0) {
+                    if (verbose) {
+                        fprintf(stderr, "[WARN] Failed to store facts: %s\n",
+                                puppetdb_error(pdb));
+                    }
+                } else if (verbose) {
+                    fprintf(stderr, "[INFO] Stored facts for node: %s\n", certname);
+                }
+                puppet_free(facts_str);
+            }
+        }
+
+        if (puppetdb_store_catalog(pdb, certname, catalog_json) != 0) {
+            if (verbose) {
+                fprintf(stderr, "[WARN] Failed to store catalog: %s\n",
+                        puppetdb_error(pdb));
+            }
+        } else if (verbose) {
+            fprintf(stderr, "[INFO] Stored catalog for node: %s\n", certname);
+        }
+    }
+
+    json_value_destroy(request);
+    send_json_response(req, EVHTP_RES_OK, catalog_json);
+    puppet_free(catalog_json);
+}
+
+/**
+ * @brief Handle GET /pdb/query/v4/nodes
+ */
+static void handle_pdb_nodes(evhtp_request_t *req, void *arg) {
+    (void)arg;
+
+    if (!pdb) {
+        send_error(req, EVHTP_RES_SERVUNAVAIL, "PuppetDB not enabled");
+        return;
+    }
+
+    char *nodes_json = puppetdb_list_nodes(pdb);
+    if (!nodes_json) {
+        send_error(req, EVHTP_RES_SERVERR, puppetdb_error(pdb));
+        return;
+    }
+
+    send_json_response(req, EVHTP_RES_OK, nodes_json);
+    puppet_free(nodes_json);
+}
+
+/**
+ * @brief Handle GET /pdb/query/v4/facts/<certname>
+ */
+static void handle_pdb_facts(evhtp_request_t *req, void *arg) {
+    (void)arg;
+
+    if (!pdb) {
+        send_error(req, EVHTP_RES_SERVUNAVAIL, "PuppetDB not enabled");
+        return;
+    }
+
+    const char *uri = req->uri->path->full;
+    const char *certname = uri + 20; /* Skip "/pdb/query/v4/facts/" */
+
+    if (!certname || strlen(certname) == 0) {
+        send_error(req, EVHTP_RES_BADREQ, "Missing certname");
+        return;
+    }
+
+    char *facts_json = puppetdb_get_facts(pdb, certname);
+    if (!facts_json) {
+        send_error(req, EVHTP_RES_NOTFOUND, "Node not found or no facts available");
+        return;
+    }
+
+    send_json_response(req, EVHTP_RES_OK, facts_json);
+    puppet_free(facts_json);
+}
+
+/**
+ * @brief Handle GET /pdb/query/v4/catalogs/<certname>
+ */
+static void handle_pdb_catalogs(evhtp_request_t *req, void *arg) {
+    (void)arg;
+
+    if (!pdb) {
+        send_error(req, EVHTP_RES_SERVUNAVAIL, "PuppetDB not enabled");
+        return;
+    }
+
+    const char *uri = req->uri->path->full;
+    const char *certname = uri + 23; /* Skip "/pdb/query/v4/catalogs/" */
+
+    if (!certname || strlen(certname) == 0) {
+        send_error(req, EVHTP_RES_BADREQ, "Missing certname");
+        return;
+    }
+
+    char *catalog_json = puppetdb_get_catalog(pdb, certname);
+    if (!catalog_json) {
+        send_error(req, EVHTP_RES_NOTFOUND, "Node not found or no catalog available");
+        return;
+    }
+
+    send_json_response(req, EVHTP_RES_OK, catalog_json);
+    puppet_free(catalog_json);
+}
+
+/**
+ * @brief Handle GET /pdb/query/v4/resources/<type>
+ */
+static void handle_pdb_resources(evhtp_request_t *req, void *arg) {
+    (void)arg;
+
+    if (!pdb) {
+        send_error(req, EVHTP_RES_SERVUNAVAIL, "PuppetDB not enabled");
+        return;
+    }
+
+    const char *uri = req->uri->path->full;
+    const char *type = uri + 24; /* Skip "/pdb/query/v4/resources/" */
+
+    if (!type || strlen(type) == 0) {
+        send_error(req, EVHTP_RES_BADREQ, "Missing resource type");
+        return;
+    }
+
+    char *resources_json = puppetdb_query_exported(pdb, type);
+    if (!resources_json) {
+        send_error(req, EVHTP_RES_SERVERR, puppetdb_error(pdb));
+        return;
+    }
+
+    send_json_response(req, EVHTP_RES_OK, resources_json);
+    puppet_free(resources_json);
+}
+
+/**
+ * @brief Handle OPTIONS requests for CORS
+ */
+static void handle_options(evhtp_request_t *req, void *arg) {
+    (void)arg;
+
+    evhtp_headers_add_header(req->headers_out,
+                             evhtp_header_new("Access-Control-Allow-Origin", "*", 0, 0));
+    evhtp_headers_add_header(req->headers_out,
+                             evhtp_header_new("Access-Control-Allow-Methods", "GET, POST, OPTIONS", 0, 0));
+    evhtp_headers_add_header(req->headers_out,
+                             evhtp_header_new("Access-Control-Allow-Headers", "Content-Type", 0, 0));
+    evhtp_send_reply(req, EVHTP_RES_OK);
+}
+
+#else /* !HAVE_EVHTP - libmicrohttpd implementation continues below */
+
+/**
+ * @brief Handle GET /status
+ */
+static enum MHD_Result handle_status(struct MHD_Connection *connection) {
+    const char *json = "{\"status\": \"ok\", \"version\": \"0.0.1\"}";
+    return send_json_response(connection, MHD_HTTP_OK, json);
+}
+
+/**
+ * @brief Handle GET /puppet/v3/file_metadatas/plugins
  */
 static enum MHD_Result handle_file_metadatas_plugins(struct MHD_Connection *connection) {
     if (!modules_path) {
@@ -319,9 +994,6 @@ static enum MHD_Result handle_file_metadatas_plugins(struct MHD_Connection *conn
 
 /**
  * @brief Handle GET /puppet/v3/file_content/plugins/<path>
- *
- * Serves files from module lib/ directories for pluginsync.
- * Path format: <module>/lib/<subpath>
  */
 static enum MHD_Result handle_plugin_content(struct MHD_Connection *connection,
                                               const char *url) {
@@ -402,11 +1074,6 @@ static enum MHD_Result handle_plugin_content(struct MHD_Connection *connection,
 
 /**
  * @brief Handle GET /puppet/v3/file_content/modules/<module>/<path>
- *
- * Serves files from module fileserver:
- *   puppet:///modules/mymodule/myfile.txt
- *   -> GET /puppet/v3/file_content/modules/mymodule/myfile.txt
- *   -> reads <modules_path>/mymodule/files/myfile.txt
  */
 static enum MHD_Result handle_file_content(struct MHD_Connection *connection,
                                            const char *url) {
@@ -515,104 +1182,6 @@ struct connection_info {
     char *post_data;
     size_t post_data_size;
 };
-
-/**
- * @brief Compile a catalog for the given request
- */
-static char *compile_catalog(const char *certname, const char *environment,
-                             json_value_t *facts_json) {
-    puppet_program_t *program = NULL;
-    puppet_loader_t *loader = NULL;
-    char *catalog_json = NULL;
-
-    /* Create loader for manifest directory */
-    if (manifest_path) {
-        loader = puppet_loader_create(manifest_path);
-        if (!loader) {
-            return puppet_strdup("{\"error\": \"Failed to create module loader\"}");
-        }
-
-        if (modules_path) {
-            puppet_loader_set_modules_path(loader, modules_path);
-        }
-
-        /* Load site.pp */
-        program = puppet_loader_load_site(loader);
-    }
-
-    if (!program) {
-        if (loader) puppet_loader_destroy(loader);
-        return puppet_strdup("{\"error\": \"No manifest found\"}");
-    }
-
-    /* Create environment */
-    puppet_env_t *env = puppet_env_create();
-    puppet_env_set_verbose(env, verbose);
-
-    if (loader) {
-        puppet_env_set_loader(env, loader);
-    }
-
-    /* Set PuppetDB for exported resources */
-    if (pdb) {
-        puppet_env_set_puppetdb(env, pdb);
-    }
-
-    /* Configure Hiera */
-    if (hiera_datadir) {
-        puppet_hiera_register_provider(env, hiera_datadir);
-    }
-
-    /* Set node name */
-    puppet_env_set_node(env, certname);
-
-    /* Enable catalog building */
-    puppet_env_enable_catalog(env, certname, environment ? environment : DEFAULT_ENVIRONMENT);
-
-    /* Set facts if provided */
-    if (facts_json && facts_json->type == JSON_VALUE_OBJECT) {
-        puppet_facts_db_t *facts_db = puppet_facts_db_create();
-        if (puppet_facts_db_load_json(facts_db, certname, facts_json) == 0) {
-            puppet_env_set_facts_db(env, facts_db);
-            if (verbose) {
-                fprintf(stderr, "[INFO] Loaded facts for node: %s\n", certname);
-            }
-        } else {
-            puppet_facts_db_destroy(facts_db);
-            if (verbose) {
-                fprintf(stderr, "[WARN] Failed to load facts for node: %s\n", certname);
-            }
-        }
-    }
-
-    /* Execute program */
-    puppet_exec_program(program, env);
-
-    /* Check for compilation failure */
-    if (env->compilation_failed) {
-        char error_json[1024];
-        snprintf(error_json, sizeof(error_json),
-                 "{\"error\": \"Catalog compilation failed: %s\"}",
-                 env->failure_message ? env->failure_message : "unknown error");
-        catalog_json = puppet_strdup(error_json);
-    } else {
-        /* Get compiled catalog */
-        puppet_catalog_t *catalog = puppet_env_get_catalog(env);
-        if (catalog) {
-            catalog_json = puppet_catalog_to_json(catalog);
-            puppet_catalog_destroy(catalog);
-        } else {
-            catalog_json = puppet_strdup("{\"error\": \"No catalog generated\"}");
-        }
-    }
-
-    /* Cleanup */
-    puppet_env_destroy(env);
-    puppet_program_destroy(program);
-    if (loader) puppet_loader_destroy(loader);
-
-    return catalog_json;
-}
 
 /**
  * @brief Handle POST /puppet/v4/catalog
@@ -915,12 +1484,14 @@ static void request_completed(void *cls,
     *con_cls = NULL;
 }
 
+#endif /* HAVE_EVHTP */
+
 /**
  * @brief Print usage information
  */
 static void print_usage(const char *program_name) {
     printf("Usage: %s [OPTIONS] [manifest_directory]\n", program_name);
-    printf("\nPuppet catalog compilation server\n\n");
+    printf("\nPuppet catalog compilation server with TLS support\n\n");
     printf("Options:\n");
     printf("  -c, --config FILE     Config file (default: %s)\n", DEFAULT_CONFIG_FILE);
     printf("  -p, --port PORT       Listen port (default: %d)\n", DEFAULT_PORT);
@@ -928,6 +1499,8 @@ static void print_usage(const char *program_name) {
     printf("  -D, --hiera-data PATH Path to Hiera data directory\n");
     printf("  -P, --puppetdb PATH   Path to PuppetDB SQLite file\n");
     printf("                        (default: %s)\n", DEFAULT_PUPPETDB_PATH);
+    printf("  -C, --ca-dir PATH     Path to CA directory for TLS\n");
+    printf("                        (default: %s)\n", DEFAULT_CA_DIR);
     printf("  -v, --verbose         Enable verbose output\n");
     printf("  -h, --help            Show this help message\n");
     printf("\nConfig file sections:\n");
@@ -947,7 +1520,7 @@ static void print_usage(const char *program_name) {
     printf("  GET  /pdb/query/v4/resources/<type>         Query exported resources\n");
     printf("\nExample:\n");
     printf("  %s -p 8140 /etc/puppet\n", program_name);
-    printf("\n  curl -X POST http://localhost:8140/puppet/v4/catalog \\\n");
+    printf("\n  curl -X POST https://localhost:8140/puppet/v4/catalog \\\n");
     printf("       -H 'Content-Type: application/json' \\\n");
     printf("       -d '{\"certname\": \"node1.example.com\"}'\n");
 }
@@ -964,6 +1537,7 @@ int main(int argc, char *argv[]) {
         {"modules", required_argument, 0, 'm'},
         {"hiera-data", required_argument, 0, 'D'},
         {"puppetdb", required_argument, 0, 'P'},
+        {"ca-dir", required_argument, 0, 'C'},
         {"verbose", no_argument, 0, 'v'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
@@ -971,7 +1545,7 @@ int main(int argc, char *argv[]) {
 
     /* First pass: find config file option */
     optind = 1;
-    while ((opt = getopt_long(argc, argv, "c:p:m:D:P:vh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:p:m:D:P:C:vh", long_options, NULL)) != -1) {
         if (opt == 'c') {
             config_file = optarg;
             break;
@@ -1021,13 +1595,18 @@ int main(int argc, char *argv[]) {
         if (!val) val = config_get_string(file_config, "main", "puppetdb_path", NULL);
         if (val) puppetdb_path = (char *)val;
 
+        /* CA directory */
+        val = config_get_string(file_config, "server", "ca_dir", NULL);
+        if (!val) val = config_get_string(file_config, "main", "ca_dir", NULL);
+        if (val) ca_dir = (char *)val;
+
         /* Verbose */
         verbose = config_get_bool(file_config, "server", "verbose", 0);
     }
 
     /* Second pass: command-line options (highest priority) */
     optind = 1;
-    while ((opt = getopt_long(argc, argv, "c:p:m:D:P:vh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:p:m:D:P:C:vh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'c':
                 /* Already handled */
@@ -1048,6 +1627,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'P':
                 puppetdb_path = optarg;
+                break;
+            case 'C':
+                ca_dir = optarg;
                 break;
             case 'v':
                 verbose = 1;
@@ -1077,8 +1659,20 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    /* Set default CA directory if not specified */
+    if (!ca_dir) {
+        ca_dir = DEFAULT_CA_DIR;
+    }
+
     /* Initialize memory tracking */
     puppet_memory_init();
+
+    /* Initialize OpenSSL */
+    if (puppet_ssl_init() != 0) {
+        fprintf(stderr, "Error: Failed to initialize OpenSSL\n");
+        config_free(file_config);
+        return 1;
+    }
 
     /* Initialize PuppetDB */
     if (!puppetdb_path) {
@@ -1094,6 +1688,106 @@ int main(int argc, char *argv[]) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
+#ifdef HAVE_EVHTP
+    /* Initialize libevent threading */
+    evthread_use_pthreads();
+
+    /* Create event base */
+    struct event_base *evbase = event_base_new();
+    if (!evbase) {
+        fprintf(stderr, "Error: Failed to create event base\n");
+        config_free(file_config);
+        puppet_ssl_cleanup();
+        return 1;
+    }
+
+    /* Create evhtp instance */
+    evhtp_t *htp = evhtp_new(evbase, NULL);
+    if (!htp) {
+        fprintf(stderr, "Error: Failed to create evhtp instance\n");
+        event_base_free(evbase);
+        config_free(file_config);
+        puppet_ssl_cleanup();
+        return 1;
+    }
+
+    /* Set up SSL context for TLS (HTTPS) */
+    ssl_ctx = puppet_ssl_ctx_new(true); /* true = server mode */
+    if (ssl_ctx && ssl_ctx->ssl_ctx) {
+        evhtp_ssl_cfg_t ssl_cfg = {
+            .pemfile = NULL,
+            .privfile = NULL,
+            .cafile = NULL,
+            .capath = NULL,
+            .ciphers = "HIGH:!aNULL:!MD5",
+            .ssl_opts = SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3,
+            .ssl_ctx = ssl_ctx->ssl_ctx,
+            .verify_peer = SSL_VERIFY_NONE, /* For now, no client cert verification */
+            .verify_depth = 1,
+            .x509_verify_cb = NULL,
+            .x509_chk_issued_cb = NULL,
+            .scache_type = evhtp_ssl_scache_type_internal,
+            .scache_size = 1024,
+            .scache_timeout = 1024,
+            .scache_init = NULL,
+            .scache_add = NULL,
+            .scache_get = NULL,
+            .scache_del = NULL
+        };
+
+        if (evhtp_ssl_init(htp, &ssl_cfg) != 0) {
+            fprintf(stderr, "Warning: Failed to initialize SSL/TLS\n");
+            fprintf(stderr, "         Server will run without HTTPS support\n");
+            puppet_ssl_ctx_free(ssl_ctx);
+            ssl_ctx = NULL;
+        } else {
+            printf("SSL/TLS initialized successfully\n");
+        }
+    }
+
+    /* Register route callbacks */
+    evhtp_set_cb(htp, "/status", handle_status, NULL);
+    evhtp_set_cb(htp, "/puppet/v3/file_metadatas/plugins", handle_file_metadatas_plugins, NULL);
+    evhtp_set_regex_cb(htp, "^/puppet/v3/file_content/plugins/.*", handle_plugin_content, NULL);
+    evhtp_set_regex_cb(htp, "^/puppet/v3/file_content/modules/.*", handle_file_content, NULL);
+    evhtp_set_cb(htp, "/puppet/v4/catalog", handle_catalog, NULL);
+    evhtp_set_cb(htp, "/pdb/query/v4/nodes", handle_pdb_nodes, NULL);
+    evhtp_set_regex_cb(htp, "^/pdb/query/v4/facts/.*", handle_pdb_facts, NULL);
+    evhtp_set_regex_cb(htp, "^/pdb/query/v4/catalogs/.*", handle_pdb_catalogs, NULL);
+    evhtp_set_regex_cb(htp, "^/pdb/query/v4/resources/.*", handle_pdb_resources, NULL);
+    evhtp_set_gencb(htp, handle_options, NULL); /* Default handler for OPTIONS */
+
+    /* Bind to port */
+    if (evhtp_bind_socket(htp, "0.0.0.0", port, 1024) != 0) {
+        fprintf(stderr, "Error: Failed to bind to port %d\n", port);
+        evhtp_free(htp);
+        event_base_free(evbase);
+        config_free(file_config);
+        puppet_ssl_cleanup();
+        return 1;
+    }
+
+    printf("puppetc-server started on port %d (%s)\n", port, ssl_ctx ? "HTTPS" : "HTTP");
+    printf("Manifest directory: %s\n", manifest_path);
+    if (modules_path) printf("Modules directory: %s\n", modules_path);
+    if (hiera_datadir) printf("Hiera data directory: %s\n", hiera_datadir);
+    if (pdb) printf("PuppetDB: %s\n", puppetdb_path);
+    if (ssl_ctx) printf("CA directory: %s\n", ca_dir);
+    printf("\nPress Ctrl+C to stop\n");
+
+    /* Main event loop */
+    event_base_loop(evbase, 0);
+
+    printf("\nShutting down...\n");
+
+    /* Cleanup */
+    evhtp_unbind_socket(htp);
+    evhtp_free(htp);
+    event_base_free(evbase);
+    if (ssl_ctx) puppet_ssl_ctx_free(ssl_ctx);
+
+#else /* !HAVE_EVHTP - Use libmicrohttpd */
+
     /* Start HTTP server */
     struct MHD_Daemon *daemon;
     daemon = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY,
@@ -1106,10 +1800,11 @@ int main(int argc, char *argv[]) {
     if (!daemon) {
         fprintf(stderr, "Error: Failed to start HTTP server on port %d\n", port);
         config_free(file_config);
+        puppet_ssl_cleanup();
         return 1;
     }
 
-    printf("puppetc-server started on port %d\n", port);
+    printf("puppetc-server started on port %d (HTTP only - no TLS)\n", port);
     printf("Manifest directory: %s\n", manifest_path);
     if (modules_path) printf("Modules directory: %s\n", modules_path);
     if (hiera_datadir) printf("Hiera data directory: %s\n", hiera_datadir);
@@ -1125,9 +1820,12 @@ int main(int argc, char *argv[]) {
 
     MHD_stop_daemon(daemon);
 
+#endif /* HAVE_EVHTP */
+
     /* Cleanup */
     if (pdb) puppetdb_close(pdb);
     config_free(file_config);
+    puppet_ssl_cleanup();
     puppet_memory_shutdown();
 
     return 0;
