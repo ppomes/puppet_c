@@ -50,6 +50,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsqlite3-0 \
     libruby3.1 \
     curl \
+    openssl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install packages
@@ -66,6 +67,9 @@ RUN dpkg -i /tmp/libpuppetc-common0_*.deb \
 
 # Create puppet directories and PuppetDB directory
 RUN mkdir -p /etc/puppet/manifests /etc/puppet/modules /etc/puppet/hiera /var/lib/puppetc
+
+# Create SSL certificate directories
+RUN mkdir -p /etc/puppetc/ssl/ca /etc/puppetc/ssl/certs /etc/puppetc/ssl/private
 
 EXPOSE 8140
 
@@ -84,6 +88,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cron \
     bash \
     libruby3.1 \
+    openssl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install packages
@@ -95,6 +100,9 @@ RUN dpkg -i /tmp/libpuppetc-common0_*.deb \
             /tmp/libfacter-c0_*.deb \
             /tmp/puppetc-agent_*.deb && \
     rm -rf /tmp/*.deb
+
+# Create SSL certificate directories
+RUN mkdir -p /etc/puppetc/ssl/certs /etc/puppetc/ssl/private
 
 ENTRYPOINT ["puppetc-agent"]
 # Default: noop mode. Use -a to apply.
