@@ -1,0 +1,425 @@
+/**
+ * @file puppet_ca.h
+ * @brief Certificate Authority for Puppet C implementation
+ *
+ * This module provides Certificate Authority functionality for the Puppet server,
+ * including CA certificate generation, CSR signing, and certificate management.
+ *
+ * Features:
+ * - CA certificate and private key generation
+ * - Certificate signing request (CSR) handling
+ * - X.509 certificate signing with serial number management
+ * - Signed certificate storage and retrieval
+ * - Auto-signing policy support (policy-based, whitelist, naive)
+ * - OpenSSL EVP API for OpenSSL 3.0+ compatibility
+ */
+
+#ifndef PUPPET_CA_H
+#define PUPPET_CA_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <time.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/x509.h>
+#include <openssl/x509v3.h>
+#include <openssl/pem.h>
+#include <openssl/evp.h>
+#include <openssl/rsa.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/*
+ * ===========================================================================
+ * CA CONFIGURATION
+ * ===========================================================================
+ */
+
+/**
+ * @brief Default CA certificate validity period (10 years)
+ */
+#define PUPPET_CA_VALIDITY_DAYS (365 * 10)
+
+/**
+ * @brief Default signed certificate validity period (5 years)
+ */
+#define PUPPET_CA_CERT_VALIDITY_DAYS (365 * 5)
+
+/**
+ * @brief Default RSA key size for CA and certificates
+ */
+#define PUPPET_CA_KEY_SIZE 2048
+
+/**
+ * @brief Maximum path length
+ */
+#define PUPPET_CA_MAX_PATH 4096
+
+/**
+ * @brief Maximum error message length
+ */
+#define PUPPET_CA_MAX_ERROR 256
+
+/**
+ * @brief Maximum certname (common name) length
+ */
+#define PUPPET_CA_MAX_CERTNAME 256
+
+/**
+ * @brief Serial number file name
+ */
+#define PUPPET_CA_SERIAL_FILE "serial"
+
+/**
+ * @brief CA certificate file name
+ */
+#define PUPPET_CA_CERT_FILE "ca_crt.pem"
+
+/**
+ * @brief CA private key file name
+ */
+#define PUPPET_CA_KEY_FILE "ca_key.pem"
+
+/**
+ * @brief Directory for signed certificates
+ */
+#define PUPPET_CA_SIGNED_DIR "signed"
+
+/*
+ * ===========================================================================
+ * DATA STRUCTURES
+ * ===========================================================================
+ */
+
+/**
+ * @brief Certificate Authority context
+ */
+typedef struct puppet_ca_ctx {
+    char *ca_dir;               /**< CA directory path (e.g., /etc/puppetc/ssl/ca) */
+    X509 *ca_cert;              /**< CA certificate */
+    EVP_PKEY *ca_key;           /**< CA private key */
+    long serial_number;         /**< Current serial number for certificate signing */
+    char last_error[PUPPET_CA_MAX_ERROR]; /**< Last error message */
+} puppet_ca_ctx_t;
+
+/**
+ * @brief Certificate signing request information
+ */
+typedef struct puppet_csr_info {
+    char *certname;             /**< Certificate name (CN from CSR) */
+    char *subject;              /**< Full subject DN */
+    char *public_key_pem;       /**< Public key in PEM format */
+    char *fingerprint;          /**< CSR fingerprint (SHA-256) */
+    time_t request_time;        /**< When the CSR was received */
+} puppet_csr_info_t;
+
+/**
+ * @brief Auto-signing policy modes
+ */
+typedef enum {
+    PUPPET_AUTOSIGN_NONE,       /**< No auto-signing (manual approval only) */
+    PUPPET_AUTOSIGN_NAIVE,      /**< Auto-sign all CSRs (insecure, testing only) */
+    PUPPET_AUTOSIGN_WHITELIST,  /**< Auto-sign if certname in whitelist file */
+    PUPPET_AUTOSIGN_POLICY      /**< Auto-sign based on policy executable */
+} puppet_autosign_mode_t;
+
+/**
+ * @brief Auto-signing configuration
+ */
+typedef struct puppet_autosign_config {
+    puppet_autosign_mode_t mode; /**< Auto-signing mode */
+    char *policy_path;          /**< Path to policy executable (for POLICY mode) */
+    char *whitelist_path;       /**< Path to whitelist file (for WHITELIST mode) */
+    char last_error[PUPPET_CA_MAX_ERROR]; /**< Last error message */
+} puppet_autosign_config_t;
+
+/*
+ * ===========================================================================
+ * CA INITIALIZATION AND CLEANUP
+ * ===========================================================================
+ */
+
+/**
+ * @brief Initialize a Certificate Authority context
+ *
+ * Creates a new CA context and loads existing CA certificate and private key
+ * if they exist. If they don't exist, the CA must be generated using
+ * puppet_ca_generate().
+ *
+ * @param ca_dir Path to CA directory (e.g., /etc/puppetc/ssl/ca)
+ * @return New CA context, or NULL on error
+ */
+puppet_ca_ctx_t *puppet_ca_init(const char *ca_dir);
+
+/**
+ * @brief Free a Certificate Authority context
+ *
+ * Releases all resources associated with a CA context.
+ *
+ * @param ctx CA context to free
+ */
+void puppet_ca_free(puppet_ca_ctx_t *ctx);
+
+/*
+ * ===========================================================================
+ * CA GENERATION AND MANAGEMENT
+ * ===========================================================================
+ */
+
+/**
+ * @brief Generate a new Certificate Authority
+ *
+ * Generates a new CA certificate and private key with the specified validity
+ * period. The CA certificate is self-signed and can be used to sign client
+ * certificates.
+ *
+ * @param ctx CA context
+ * @param subject CA subject DN (e.g., "CN=Puppet CA: puppet-server")
+ * @param validity_days Number of days the CA certificate is valid
+ * @return 0 on success, -1 on error
+ */
+int puppet_ca_generate(puppet_ca_ctx_t *ctx, const char *subject, int validity_days);
+
+/**
+ * @brief Load existing CA certificate and private key
+ *
+ * Loads the CA certificate and private key from disk.
+ *
+ * @param ctx CA context
+ * @return 0 on success, -1 on error
+ */
+int puppet_ca_load(puppet_ca_ctx_t *ctx);
+
+/**
+ * @brief Save CA certificate and private key to disk
+ *
+ * Saves the CA certificate and private key in PEM format.
+ * The private key is saved with 0600 permissions (owner read/write only).
+ *
+ * @param ctx CA context
+ * @return 0 on success, -1 on error
+ */
+int puppet_ca_save(puppet_ca_ctx_t *ctx);
+
+/**
+ * @brief Check if CA certificate and key exist
+ *
+ * Checks whether the CA certificate and private key files exist in the
+ * CA directory.
+ *
+ * @param ctx CA context
+ * @return true if both files exist, false otherwise
+ */
+bool puppet_ca_exists(puppet_ca_ctx_t *ctx);
+
+/*
+ * ===========================================================================
+ * CERTIFICATE SIGNING
+ * ===========================================================================
+ */
+
+/**
+ * @brief Sign a certificate signing request
+ *
+ * Signs a CSR and generates a signed X.509 certificate. The certificate
+ * will be valid for the specified number of days and will include the
+ * certname as the Common Name (CN).
+ *
+ * @param ctx CA context
+ * @param csr_pem CSR in PEM format
+ * @param certname Certificate name (used for storage and validation)
+ * @param validity_days Number of days the certificate is valid
+ * @param signed_cert_pem Output buffer for signed certificate in PEM format (caller must free)
+ * @return 0 on success, -1 on error
+ */
+int puppet_ca_sign_csr(puppet_ca_ctx_t *ctx,
+                       const char *csr_pem,
+                       const char *certname,
+                       int validity_days,
+                       char **signed_cert_pem);
+
+/**
+ * @brief Parse CSR and extract information
+ *
+ * Parses a certificate signing request and extracts useful information
+ * such as the certname (CN), subject DN, and public key.
+ *
+ * @param csr_pem CSR in PEM format
+ * @param info Output CSR information structure (caller must free with puppet_csr_info_free)
+ * @return 0 on success, -1 on error
+ */
+int puppet_ca_parse_csr(const char *csr_pem, puppet_csr_info_t **info);
+
+/**
+ * @brief Free CSR information structure
+ *
+ * Releases all memory associated with a CSR information structure.
+ *
+ * @param info CSR information to free
+ */
+void puppet_csr_info_free(puppet_csr_info_t *info);
+
+/*
+ * ===========================================================================
+ * CERTIFICATE STORAGE AND RETRIEVAL
+ * ===========================================================================
+ */
+
+/**
+ * @brief Save a signed certificate to disk
+ *
+ * Saves a signed certificate to the CA's signed certificates directory.
+ * The certificate is saved as <certname>.pem.
+ *
+ * @param ctx CA context
+ * @param certname Certificate name
+ * @param cert_pem Certificate in PEM format
+ * @return 0 on success, -1 on error
+ */
+int puppet_ca_save_signed_cert(puppet_ca_ctx_t *ctx,
+                                const char *certname,
+                                const char *cert_pem);
+
+/**
+ * @brief Load a signed certificate from disk
+ *
+ * Loads a previously signed certificate from the CA's signed certificates
+ * directory.
+ *
+ * @param ctx CA context
+ * @param certname Certificate name
+ * @param cert_pem Output buffer for certificate in PEM format (caller must free)
+ * @return 0 on success, -1 on error (including if certificate doesn't exist)
+ */
+int puppet_ca_load_signed_cert(puppet_ca_ctx_t *ctx,
+                                const char *certname,
+                                char **cert_pem);
+
+/**
+ * @brief Check if a certificate has been signed
+ *
+ * Checks whether a certificate with the given certname has already been
+ * signed and stored.
+ *
+ * @param ctx CA context
+ * @param certname Certificate name
+ * @return true if certificate exists, false otherwise
+ */
+bool puppet_ca_cert_exists(puppet_ca_ctx_t *ctx, const char *certname);
+
+/*
+ * ===========================================================================
+ * SERIAL NUMBER MANAGEMENT
+ * ===========================================================================
+ */
+
+/**
+ * @brief Get the next serial number for certificate signing
+ *
+ * Retrieves the next available serial number and increments the stored
+ * serial number on disk.
+ *
+ * @param ctx CA context
+ * @return Next serial number, or -1 on error
+ */
+long puppet_ca_get_next_serial(puppet_ca_ctx_t *ctx);
+
+/**
+ * @brief Save serial number to disk
+ *
+ * Saves the current serial number to the serial file.
+ *
+ * @param ctx CA context
+ * @return 0 on success, -1 on error
+ */
+int puppet_ca_save_serial(puppet_ca_ctx_t *ctx);
+
+/**
+ * @brief Load serial number from disk
+ *
+ * Loads the serial number from the serial file. If the file doesn't exist,
+ * initializes the serial number to 1.
+ *
+ * @param ctx CA context
+ * @return 0 on success, -1 on error
+ */
+int puppet_ca_load_serial(puppet_ca_ctx_t *ctx);
+
+/*
+ * ===========================================================================
+ * AUTO-SIGNING
+ * ===========================================================================
+ */
+
+/**
+ * @brief Initialize auto-signing configuration
+ *
+ * Creates a new auto-signing configuration based on the provided config file.
+ * The config file determines the auto-signing mode and associated settings.
+ *
+ * @param config_path Path to autosign configuration file
+ * @return New auto-signing configuration, or NULL on error
+ */
+puppet_autosign_config_t *puppet_autosign_init(const char *config_path);
+
+/**
+ * @brief Free auto-signing configuration
+ *
+ * Releases all resources associated with an auto-signing configuration.
+ *
+ * @param config Auto-signing configuration to free
+ */
+void puppet_autosign_free(puppet_autosign_config_t *config);
+
+/**
+ * @brief Check if a CSR should be auto-signed
+ *
+ * Evaluates whether a CSR should be automatically signed based on the
+ * configured auto-signing policy.
+ *
+ * For POLICY mode: Executes the policy script with CSR details on stdin
+ * For WHITELIST mode: Checks if certname is in the whitelist file
+ * For NAIVE mode: Always returns true (insecure, testing only)
+ * For NONE mode: Always returns false
+ *
+ * @param config Auto-signing configuration
+ * @param csr_info CSR information to evaluate
+ * @return true if CSR should be auto-signed, false otherwise
+ */
+bool puppet_autosign_should_sign(puppet_autosign_config_t *config,
+                                  puppet_csr_info_t *csr_info);
+
+/*
+ * ===========================================================================
+ * ERROR HANDLING
+ * ===========================================================================
+ */
+
+/**
+ * @brief Get the last error message from a CA context
+ *
+ * Returns the last error message recorded by the CA context.
+ *
+ * @param ctx CA context
+ * @return Error message string (do not free)
+ */
+const char *puppet_ca_get_error(puppet_ca_ctx_t *ctx);
+
+/**
+ * @brief Get the last error message from an auto-signing configuration
+ *
+ * Returns the last error message recorded by the auto-signing configuration.
+ *
+ * @param config Auto-signing configuration
+ * @return Error message string (do not free)
+ */
+const char *puppet_autosign_get_error(puppet_autosign_config_t *config);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* PUPPET_CA_H */
