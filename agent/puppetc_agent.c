@@ -26,6 +26,8 @@
 #define DEFAULT_LIBDIR "/var/lib/puppetc/lib"
 #define DEFAULT_ENVIRONMENT "production"
 #define DEFAULT_CONFIG_FILE "/etc/puppetc/puppet.conf"
+#define DEFAULT_SSL_DIR "/var/lib/puppetc/ssl"
+#define DEFAULT_CA_CERT_PATH "/var/lib/puppetc/ssl/ca/ca_crt.pem"
 #define AGENT_VERSION "0.1.0"
 
 /* Response buffer for curl */
@@ -41,6 +43,10 @@ typedef struct {
     const char *environment;
     const char *catalog_file;  /* Local catalog file to apply (for testing) */
     const char *libdir;        /* Plugin library directory */
+    const char *ssl_dir;       /* SSL certificate directory */
+    const char *ssl_cert_path; /* Client certificate path */
+    const char *ssl_key_path;  /* Client private key path */
+    const char *ssl_ca_cert_path; /* CA certificate path */
     bool verbose;
     bool noop;           /* No-op mode - don't apply changes */
     bool apply_catalog;  /* Actually apply resources */
@@ -402,6 +408,37 @@ static int run_agent(agent_config_t *config) {
 
     print_info("Certname: %s", config->certname);
 
+    /* Build SSL certificate paths from ssl_dir and certname if not explicitly set */
+    if (!config->ssl_cert_path && config->ssl_dir && config->certname) {
+        size_t len = strlen(config->ssl_dir) + strlen(config->certname) + 32;
+        char *cert_path = puppet_malloc(len);
+        if (cert_path) {
+            snprintf(cert_path, len, "%s/certs/%s.pem", config->ssl_dir, config->certname);
+            config->ssl_cert_path = cert_path;
+        }
+    }
+
+    if (!config->ssl_key_path && config->ssl_dir && config->certname) {
+        size_t len = strlen(config->ssl_dir) + strlen(config->certname) + 32;
+        char *key_path = puppet_malloc(len);
+        if (key_path) {
+            snprintf(key_path, len, "%s/private_keys/%s.pem", config->ssl_dir, config->certname);
+            config->ssl_key_path = key_path;
+        }
+    }
+
+    if (config->verbose) {
+        if (config->ssl_cert_path) {
+            print_debug("SSL cert path: %s", config->ssl_cert_path);
+        }
+        if (config->ssl_key_path) {
+            print_debug("SSL key path: %s", config->ssl_key_path);
+        }
+        if (config->ssl_ca_cert_path) {
+            print_debug("SSL CA cert path: %s", config->ssl_ca_cert_path);
+        }
+    }
+
     size_t fact_count;
     facter_list(facts, &fact_count);
     print_info("Facts collected: %zu", fact_count);
@@ -593,6 +630,10 @@ int main(int argc, char *argv[]) {
         .environment = NULL,
         .catalog_file = NULL,
         .libdir = DEFAULT_LIBDIR,
+        .ssl_dir = DEFAULT_SSL_DIR,
+        .ssl_cert_path = NULL,
+        .ssl_key_path = NULL,
+        .ssl_ca_cert_path = DEFAULT_CA_CERT_PATH,
         .verbose = false,
         .noop = false,
         .apply_catalog = false,
@@ -677,6 +718,22 @@ int main(int argc, char *argv[]) {
         if (!val) val = config_get_string(file_config, "main", "libdir", NULL);
         if (val) config.libdir = val;
 
+        val = config_get_string(file_config, "agent", "ssldir", NULL);
+        if (!val) val = config_get_string(file_config, "main", "ssldir", NULL);
+        if (val) config.ssl_dir = val;
+
+        val = config_get_string(file_config, "agent", "ssl_cert_path", NULL);
+        if (!val) val = config_get_string(file_config, "main", "ssl_cert_path", NULL);
+        if (val) config.ssl_cert_path = val;
+
+        val = config_get_string(file_config, "agent", "ssl_key_path", NULL);
+        if (!val) val = config_get_string(file_config, "main", "ssl_key_path", NULL);
+        if (val) config.ssl_key_path = val;
+
+        val = config_get_string(file_config, "agent", "ssl_ca_cert_path", NULL);
+        if (!val) val = config_get_string(file_config, "main", "ssl_ca_cert_path", NULL);
+        if (val) config.ssl_ca_cert_path = val;
+
         config.noop = config_get_bool(file_config, "agent", "noop", false);
         config.verbose = config_get_bool(file_config, "agent", "verbose", false);
         config.use_ruby = config_get_bool(file_config, "agent", "ruby", false);
@@ -686,8 +743,12 @@ int main(int argc, char *argv[]) {
     /* Apply environment variables (medium priority) */
     const char *env_server = getenv("PUPPET_SERVER");
     const char *env_environment = getenv("PUPPET_ENVIRONMENT");
+    const char *env_ssl_dir = getenv("PUPPET_SSL_DIR");
+    const char *env_ca_cert = getenv("PUPPET_CA_PATH");
     if (env_server) config.server_url = env_server;
     if (env_environment) config.environment = env_environment;
+    if (env_ssl_dir) config.ssl_dir = env_ssl_dir;
+    if (env_ca_cert) config.ssl_ca_cert_path = env_ca_cert;
 
     /* Apply final defaults if still unset */
     if (!config.server_url) config.server_url = DEFAULT_SERVER;
