@@ -16,6 +16,13 @@
 #include <getopt.h>
 #include <unistd.h>
 #include <curl/curl.h>
+#include <sys/stat.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/x509.h>
+#include <openssl/pem.h>
+#include <openssl/evp.h>
+#include <openssl/bio.h>
 
 #include "facter.h"
 #include "puppet_provider.h"
@@ -26,6 +33,8 @@
 #define DEFAULT_LIBDIR "/var/lib/puppetc/lib"
 #define DEFAULT_ENVIRONMENT "production"
 #define DEFAULT_CONFIG_FILE "/etc/puppetc/puppet.conf"
+#define DEFAULT_SSL_DIR "/var/lib/puppetc/ssl"
+#define DEFAULT_CA_CERT_PATH "/var/lib/puppetc/ssl/ca/ca_crt.pem"
 #define AGENT_VERSION "0.1.0"
 
 /* Response buffer for curl */
@@ -41,6 +50,10 @@ typedef struct {
     const char *environment;
     const char *catalog_file;  /* Local catalog file to apply (for testing) */
     const char *libdir;        /* Plugin library directory */
+    const char *ssl_dir;       /* SSL certificate directory */
+    const char *ssl_cert_path; /* Client certificate path */
+    const char *ssl_key_path;  /* Client private key path */
+    const char *ssl_ca_cert_path; /* CA certificate path */
     bool verbose;
     bool noop;           /* No-op mode - don't apply changes */
     bool apply_catalog;  /* Actually apply resources */
@@ -49,6 +62,377 @@ typedef struct {
     bool use_ruby;       /* Enable Ruby support */
     bool pluginsync;     /* Enable pluginsync */
 } agent_config_t;
+
+/* ============================================================================
+ * Certificate Management Functions
+ * ============================================================================ */
+
+/**
+ * Generate private key and save to file
+ */
+static EVP_PKEY *generate_private_key(const char *key_path, bool verbose) {
+    EVP_PKEY *pkey = NULL;
+    EVP_PKEY_CTX *ctx = NULL;
+    FILE *fp = NULL;
+
+    /* Generate RSA key using EVP API (OpenSSL 3.0+ compatible) */
+    ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, NULL);
+    if (!ctx) {
+        fprintf(stderr, "Error: Failed to create key generation context\n");
+        return NULL;
+    }
+
+    if (EVP_PKEY_keygen_init(ctx) <= 0) {
+        fprintf(stderr, "Error: Failed to initialize key generation\n");
+        EVP_PKEY_CTX_free(ctx);
+        return NULL;
+    }
+
+    /* Set RSA key length to 2048 bits */
+    if (EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, 2048) <= 0) {
+        fprintf(stderr, "Error: Failed to set key length\n");
+        EVP_PKEY_CTX_free(ctx);
+        return NULL;
+    }
+
+    /* Generate the key */
+    if (EVP_PKEY_keygen(ctx, &pkey) <= 0) {
+        fprintf(stderr, "Error: Failed to generate private key\n");
+        EVP_PKEY_CTX_free(ctx);
+        return NULL;
+    }
+
+    EVP_PKEY_CTX_free(ctx);
+
+    if (verbose) {
+        fprintf(stderr, "[INFO] Generated 2048-bit RSA private key\n");
+    }
+
+    /* Save private key to file */
+    fp = fopen(key_path, "w");
+    if (!fp) {
+        fprintf(stderr, "Error: Cannot create private key file: %s\n", key_path);
+        EVP_PKEY_free(pkey);
+        return NULL;
+    }
+
+    /* Set restrictive permissions (0600) */
+    chmod(key_path, 0600);
+
+    if (!PEM_write_PrivateKey(fp, pkey, NULL, NULL, 0, NULL, NULL)) {
+        fprintf(stderr, "Error: Failed to write private key\n");
+        fclose(fp);
+        EVP_PKEY_free(pkey);
+        return NULL;
+    }
+
+    fclose(fp);
+
+    if (verbose) {
+        fprintf(stderr, "[INFO] Saved private key to %s\n", key_path);
+    }
+
+    return pkey;
+}
+
+/**
+ * Create Certificate Signing Request (CSR)
+ */
+static X509_REQ *create_certificate_request(EVP_PKEY *pkey, const char *certname, bool verbose) {
+    X509_REQ *req = NULL;
+    X509_NAME *name = NULL;
+
+    req = X509_REQ_new();
+    if (!req) {
+        fprintf(stderr, "Error: Failed to create CSR\n");
+        return NULL;
+    }
+
+    /* Set version (0 = v1) */
+    if (!X509_REQ_set_version(req, 0)) {
+        fprintf(stderr, "Error: Failed to set CSR version\n");
+        X509_REQ_free(req);
+        return NULL;
+    }
+
+    /* Set subject with CN=certname */
+    name = X509_NAME_new();
+    if (!name) {
+        fprintf(stderr, "Error: Failed to create X509_NAME\n");
+        X509_REQ_free(req);
+        return NULL;
+    }
+
+    if (!X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+                                     (const unsigned char *)certname, -1, -1, 0)) {
+        fprintf(stderr, "Error: Failed to set CN in CSR\n");
+        X509_NAME_free(name);
+        X509_REQ_free(req);
+        return NULL;
+    }
+
+    if (!X509_REQ_set_subject_name(req, name)) {
+        fprintf(stderr, "Error: Failed to set subject name in CSR\n");
+        X509_NAME_free(name);
+        X509_REQ_free(req);
+        return NULL;
+    }
+
+    X509_NAME_free(name);
+
+    /* Set public key */
+    if (!X509_REQ_set_pubkey(req, pkey)) {
+        fprintf(stderr, "Error: Failed to set public key in CSR\n");
+        X509_REQ_free(req);
+        return NULL;
+    }
+
+    /* Sign the CSR with the private key using SHA256 */
+    if (!X509_REQ_sign(req, pkey, EVP_sha256())) {
+        fprintf(stderr, "Error: Failed to sign CSR\n");
+        X509_REQ_free(req);
+        return NULL;
+    }
+
+    if (verbose) {
+        fprintf(stderr, "[INFO] Created CSR for certname: %s\n", certname);
+    }
+
+    return req;
+}
+
+/**
+ * Convert CSR to PEM format string
+ */
+static char *csr_to_pem(X509_REQ *req) {
+    BIO *bio = NULL;
+    char *pem_str = NULL;
+    long pem_len;
+
+    bio = BIO_new(BIO_s_mem());
+    if (!bio) {
+        return NULL;
+    }
+
+    if (!PEM_write_bio_X509_REQ(bio, req)) {
+        BIO_free(bio);
+        return NULL;
+    }
+
+    pem_len = BIO_get_mem_data(bio, &pem_str);
+    if (pem_len <= 0) {
+        BIO_free(bio);
+        return NULL;
+    }
+
+    /* Copy to puppet_malloc'd buffer */
+    char *result = puppet_malloc(pem_len + 1);
+    if (!result) {
+        BIO_free(bio);
+        return NULL;
+    }
+
+    memcpy(result, pem_str, pem_len);
+    result[pem_len] = '\0';
+
+    BIO_free(bio);
+    return result;
+}
+
+/**
+ * Submit CSR to server and retrieve signed certificate
+ */
+static int submit_certificate_request(const agent_config_t *config, X509_REQ *req) {
+    CURL *curl = NULL;
+    CURLcode res;
+    response_buffer_t response = {0};
+    char *csr_pem = NULL;
+    int result = -1;
+
+    /* Convert CSR to PEM format */
+    csr_pem = csr_to_pem(req);
+    if (!csr_pem) {
+        fprintf(stderr, "Error: Failed to convert CSR to PEM format\n");
+        return -1;
+    }
+
+    curl = curl_easy_init();
+    if (!curl) {
+        fprintf(stderr, "Error: Failed to initialize curl\n");
+        puppet_free(csr_pem);
+        return -1;
+    }
+
+    /* Build CSR endpoint URL */
+    char url[512];
+    snprintf(url, sizeof(url), "%s/puppet-ca/v1/certificate_request/%s",
+             config->server_url, config->certname);
+
+    /* Set up request */
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, csr_pem);
+
+    /* Headers */
+    struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, "Content-Type: text/plain");
+    headers = curl_slist_append(headers, "Accept: text/plain");
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+    /* Response handling */
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+    /* Timeout */
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+
+    /* Configure mTLS options (CA cert only for CSR submission) */
+    configure_mtls_options(curl, config);
+
+    if (config->verbose) {
+        fprintf(stderr, "[INFO] Submitting CSR to %s\n", url);
+    }
+
+    /* Perform request */
+    res = curl_easy_perform(curl);
+
+    if (res != CURLE_OK) {
+        fprintf(stderr, "Error: Failed to submit CSR: %s\n", curl_easy_strerror(res));
+    } else {
+        long http_code = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+        if (config->verbose) {
+            fprintf(stderr, "[INFO] Server response: HTTP %ld\n", http_code);
+        }
+
+        if (http_code == 200) {
+            /* Save signed certificate to file */
+            FILE *fp = fopen(config->ssl_cert_path, "w");
+            if (!fp) {
+                fprintf(stderr, "Error: Cannot create certificate file: %s\n", config->ssl_cert_path);
+            } else {
+                /* Set permissions to 0644 */
+                chmod(config->ssl_cert_path, 0644);
+
+                if (fwrite(response.data, 1, response.size, fp) != response.size) {
+                    fprintf(stderr, "Error: Failed to write certificate file\n");
+                } else {
+                    result = 0;
+                    if (config->verbose) {
+                        fprintf(stderr, "[INFO] Certificate saved to %s\n", config->ssl_cert_path);
+                    }
+                }
+                fclose(fp);
+            }
+        } else {
+            fprintf(stderr, "Error: Server returned HTTP %ld\n", http_code);
+            if (response.data) {
+                fprintf(stderr, "Response: %s\n", response.data);
+            }
+        }
+    }
+
+    /* Cleanup */
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    puppet_free(response.data);
+    puppet_free(csr_pem);
+
+    return result;
+}
+
+/**
+ * Ensure agent has a valid certificate (request one if needed)
+ */
+static int ensure_certificate(agent_config_t *config) {
+    EVP_PKEY *pkey = NULL;
+    X509_REQ *req = NULL;
+    int result = -1;
+
+    /* Check if certificate already exists */
+    if (config->ssl_cert_path && access(config->ssl_cert_path, R_OK) == 0) {
+        if (config->verbose) {
+            fprintf(stderr, "[INFO] Certificate already exists: %s\n", config->ssl_cert_path);
+        }
+        return 0;
+    }
+
+    if (config->verbose) {
+        fprintf(stderr, "[INFO] Certificate not found, starting CSR workflow\n");
+    }
+
+    /* Ensure directories exist */
+    if (config->ssl_key_path) {
+        char *key_dir = puppet_strdup(config->ssl_key_path);
+        char *last_slash = strrchr(key_dir, '/');
+        if (last_slash) {
+            *last_slash = '\0';
+            mkdir(key_dir, 0700);
+        }
+        puppet_free(key_dir);
+    }
+
+    if (config->ssl_cert_path) {
+        char *cert_dir = puppet_strdup(config->ssl_cert_path);
+        char *last_slash = strrchr(cert_dir, '/');
+        if (last_slash) {
+            *last_slash = '\0';
+            mkdir(cert_dir, 0755);
+        }
+        puppet_free(cert_dir);
+    }
+
+    /* Check if private key exists, generate if not */
+    if (config->ssl_key_path && access(config->ssl_key_path, R_OK) != 0) {
+        if (config->verbose) {
+            fprintf(stderr, "[INFO] Generating new private key\n");
+        }
+        pkey = generate_private_key(config->ssl_key_path, config->verbose);
+        if (!pkey) {
+            fprintf(stderr, "Error: Failed to generate private key\n");
+            return -1;
+        }
+    } else {
+        /* Load existing private key */
+        if (config->verbose) {
+            fprintf(stderr, "[INFO] Loading existing private key: %s\n", config->ssl_key_path);
+        }
+        FILE *fp = fopen(config->ssl_key_path, "r");
+        if (!fp) {
+            fprintf(stderr, "Error: Cannot open private key file: %s\n", config->ssl_key_path);
+            return -1;
+        }
+        pkey = PEM_read_PrivateKey(fp, NULL, NULL, NULL);
+        fclose(fp);
+        if (!pkey) {
+            fprintf(stderr, "Error: Failed to read private key\n");
+            return -1;
+        }
+    }
+
+    /* Create CSR */
+    req = create_certificate_request(pkey, config->certname, config->verbose);
+    if (!req) {
+        fprintf(stderr, "Error: Failed to create CSR\n");
+        EVP_PKEY_free(pkey);
+        return -1;
+    }
+
+    /* Submit CSR to server */
+    result = submit_certificate_request(config, req);
+
+    /* Cleanup */
+    X509_REQ_free(req);
+    EVP_PKEY_free(pkey);
+
+    if (result == 0 && config->verbose) {
+        fprintf(stderr, "[INFO] CSR workflow completed successfully\n");
+    }
+
+    return result;
+}
 
 /* ============================================================================
  * Helper Functions
@@ -70,6 +454,42 @@ static size_t write_callback(void *contents, size_t size, size_t nmemb, void *us
     buf->data[buf->size] = '\0';
 
     return realsize;
+}
+
+/**
+ * Configure curl with mTLS options
+ */
+static void configure_mtls_options(CURL *curl, const agent_config_t *config) {
+    if (!curl || !config) {
+        return;
+    }
+
+    /* Configure SSL/TLS verification */
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+
+    /* Configure CA certificate */
+    if (config->ssl_ca_cert_path) {
+        curl_easy_setopt(curl, CURLOPT_CAINFO, config->ssl_ca_cert_path);
+        if (config->verbose) {
+            fprintf(stderr, "[DEBUG] Using CA cert: %s\n", config->ssl_ca_cert_path);
+        }
+    }
+
+    /* Configure client certificate and key (if available) */
+    if (config->ssl_cert_path && access(config->ssl_cert_path, R_OK) == 0) {
+        curl_easy_setopt(curl, CURLOPT_SSLCERT, config->ssl_cert_path);
+        if (config->verbose) {
+            fprintf(stderr, "[DEBUG] Using client cert: %s\n", config->ssl_cert_path);
+        }
+    }
+
+    if (config->ssl_key_path && access(config->ssl_key_path, R_OK) == 0) {
+        curl_easy_setopt(curl, CURLOPT_SSLKEY, config->ssl_key_path);
+        if (config->verbose) {
+            fprintf(stderr, "[DEBUG] Using client key: %s\n", config->ssl_key_path);
+        }
+    }
 }
 
 static char *build_catalog_request(const char *certname, const char *environment,
@@ -102,8 +522,7 @@ static char *build_catalog_request(const char *certname, const char *environment
     return request;
 }
 
-static char *request_catalog(const char *server_url, const char *request_json,
-                            bool verbose) {
+static char *request_catalog(const agent_config_t *config, const char *request_json) {
     CURL *curl;
     CURLcode res;
     response_buffer_t response = {0};
@@ -117,7 +536,7 @@ static char *request_catalog(const char *server_url, const char *request_json,
 
     /* Build full URL */
     char url[512];
-    snprintf(url, sizeof(url), "%s/puppet/v4/catalog", server_url);
+    snprintf(url, sizeof(url), "%s/puppet/v4/catalog", config->server_url);
 
     /* Set up request */
     curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -138,7 +557,10 @@ static char *request_catalog(const char *server_url, const char *request_json,
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
 
-    if (verbose) {
+    /* Configure mTLS options */
+    configure_mtls_options(curl, config);
+
+    if (config->verbose) {
         fprintf(stderr, "[INFO] Requesting catalog from %s\n", url);
     }
 
@@ -152,7 +574,7 @@ static char *request_catalog(const char *server_url, const char *request_json,
         long http_code = 0;
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
 
-        if (verbose) {
+        if (config->verbose) {
             fprintf(stderr, "[INFO] Server response: HTTP %ld\n", http_code);
         }
 
@@ -175,7 +597,7 @@ static char *request_catalog(const char *server_url, const char *request_json,
     return result;
 }
 
-static int check_server_status(const char *server_url, bool verbose) {
+static int check_server_status(const agent_config_t *config) {
     CURL *curl;
     CURLcode res;
     response_buffer_t response = {0};
@@ -187,7 +609,7 @@ static int check_server_status(const char *server_url, bool verbose) {
     }
 
     char url[512];
-    snprintf(url, sizeof(url), "%s/status", server_url);
+    snprintf(url, sizeof(url), "%s/status", config->server_url);
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
@@ -195,7 +617,10 @@ static int check_server_status(const char *server_url, bool verbose) {
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
 
-    if (verbose) {
+    /* Configure mTLS options */
+    configure_mtls_options(curl, config);
+
+    if (config->verbose) {
         fprintf(stderr, "[INFO] Checking server status at %s\n", url);
     }
 
@@ -206,7 +631,7 @@ static int check_server_status(const char *server_url, bool verbose) {
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
         if (http_code == 200) {
             result = 0;
-            if (verbose) {
+            if (config->verbose) {
                 fprintf(stderr, "[INFO] Server status: %s\n", response.data);
             }
         }
@@ -402,6 +827,37 @@ static int run_agent(agent_config_t *config) {
 
     print_info("Certname: %s", config->certname);
 
+    /* Build SSL certificate paths from ssl_dir and certname if not explicitly set */
+    if (!config->ssl_cert_path && config->ssl_dir && config->certname) {
+        size_t len = strlen(config->ssl_dir) + strlen(config->certname) + 32;
+        char *cert_path = puppet_malloc(len);
+        if (cert_path) {
+            snprintf(cert_path, len, "%s/certs/%s.pem", config->ssl_dir, config->certname);
+            config->ssl_cert_path = cert_path;
+        }
+    }
+
+    if (!config->ssl_key_path && config->ssl_dir && config->certname) {
+        size_t len = strlen(config->ssl_dir) + strlen(config->certname) + 32;
+        char *key_path = puppet_malloc(len);
+        if (key_path) {
+            snprintf(key_path, len, "%s/private_keys/%s.pem", config->ssl_dir, config->certname);
+            config->ssl_key_path = key_path;
+        }
+    }
+
+    if (config->verbose) {
+        if (config->ssl_cert_path) {
+            print_debug("SSL cert path: %s", config->ssl_cert_path);
+        }
+        if (config->ssl_key_path) {
+            print_debug("SSL key path: %s", config->ssl_key_path);
+        }
+        if (config->ssl_ca_cert_path) {
+            print_debug("SSL CA cert path: %s", config->ssl_ca_cert_path);
+        }
+    }
+
     size_t fact_count;
     facter_list(facts, &fact_count);
     print_info("Facts collected: %zu", fact_count);
@@ -453,7 +909,7 @@ static int run_agent(agent_config_t *config) {
     } else {
         /* Check server status */
         print_info("Connecting to server...");
-        if (check_server_status(config->server_url, config->verbose) != 0) {
+        if (check_server_status(config) != 0) {
             print_error("Cannot connect to server at %s", config->server_url);
             print_error("Make sure puppetc-server is running");
             facter_destroy(facts);
@@ -475,7 +931,7 @@ static int run_agent(agent_config_t *config) {
         }
 
         /* Request catalog from server */
-        catalog_json = request_catalog(config->server_url, request_json, config->verbose);
+        catalog_json = request_catalog(config, request_json);
         puppet_free(request_json);
 
         if (!catalog_json) {
@@ -593,6 +1049,10 @@ int main(int argc, char *argv[]) {
         .environment = NULL,
         .catalog_file = NULL,
         .libdir = DEFAULT_LIBDIR,
+        .ssl_dir = DEFAULT_SSL_DIR,
+        .ssl_cert_path = NULL,
+        .ssl_key_path = NULL,
+        .ssl_ca_cert_path = DEFAULT_CA_CERT_PATH,
         .verbose = false,
         .noop = false,
         .apply_catalog = false,
@@ -677,6 +1137,22 @@ int main(int argc, char *argv[]) {
         if (!val) val = config_get_string(file_config, "main", "libdir", NULL);
         if (val) config.libdir = val;
 
+        val = config_get_string(file_config, "agent", "ssldir", NULL);
+        if (!val) val = config_get_string(file_config, "main", "ssldir", NULL);
+        if (val) config.ssl_dir = val;
+
+        val = config_get_string(file_config, "agent", "ssl_cert_path", NULL);
+        if (!val) val = config_get_string(file_config, "main", "ssl_cert_path", NULL);
+        if (val) config.ssl_cert_path = val;
+
+        val = config_get_string(file_config, "agent", "ssl_key_path", NULL);
+        if (!val) val = config_get_string(file_config, "main", "ssl_key_path", NULL);
+        if (val) config.ssl_key_path = val;
+
+        val = config_get_string(file_config, "agent", "ssl_ca_cert_path", NULL);
+        if (!val) val = config_get_string(file_config, "main", "ssl_ca_cert_path", NULL);
+        if (val) config.ssl_ca_cert_path = val;
+
         config.noop = config_get_bool(file_config, "agent", "noop", false);
         config.verbose = config_get_bool(file_config, "agent", "verbose", false);
         config.use_ruby = config_get_bool(file_config, "agent", "ruby", false);
@@ -686,8 +1162,12 @@ int main(int argc, char *argv[]) {
     /* Apply environment variables (medium priority) */
     const char *env_server = getenv("PUPPET_SERVER");
     const char *env_environment = getenv("PUPPET_ENVIRONMENT");
+    const char *env_ssl_dir = getenv("PUPPET_SSL_DIR");
+    const char *env_ca_cert = getenv("PUPPET_CA_PATH");
     if (env_server) config.server_url = env_server;
     if (env_environment) config.environment = env_environment;
+    if (env_ssl_dir) config.ssl_dir = env_ssl_dir;
+    if (env_ca_cert) config.ssl_ca_cert_path = env_ca_cert;
 
     /* Apply final defaults if still unset */
     if (!config.server_url) config.server_url = DEFAULT_SERVER;

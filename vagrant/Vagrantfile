@@ -94,6 +94,70 @@ Vagrant.configure("2") do |config|
       ls -la /home/vagrant/*.deb
     SHELL
 
+    server.vm.provision "shell", name: "setup-ssl-ca", inline: <<-SHELL
+      set -e
+
+      echo "Setting up SSL Certificate Authority..."
+
+      # Create SSL directories
+      mkdir -p /etc/puppetc/ssl/ca/signed
+      mkdir -p /var/lib/puppetc/ssl/certs
+      mkdir -p /var/lib/puppetc/ssl/private_keys
+
+      # Generate CA certificate and key
+      if [ ! -f /etc/puppetc/ssl/ca/ca_key.pem ]; then
+        echo "Generating CA certificate..."
+        openssl genrsa -out /etc/puppetc/ssl/ca/ca_key.pem 4096
+        openssl req -new -x509 -days 3650 -key /etc/puppetc/ssl/ca/ca_key.pem \
+          -out /etc/puppetc/ssl/ca/ca_crt.pem \
+          -subj "/CN=Puppet CA: puppet-server"
+
+        # Set restrictive permissions on CA private key
+        chmod 600 /etc/puppetc/ssl/ca/ca_key.pem
+        chmod 644 /etc/puppetc/ssl/ca/ca_crt.pem
+        chmod 700 /etc/puppetc/ssl/ca
+
+        # Initialize serial number file
+        echo "01" > /etc/puppetc/ssl/ca/serial
+
+        echo "CA certificate generated successfully."
+      else
+        echo "CA certificate already exists."
+      fi
+
+      # Generate server certificate
+      if [ ! -f /var/lib/puppetc/ssl/private_keys/puppet-server.pem ]; then
+        echo "Generating server certificate..."
+        openssl genrsa -out /var/lib/puppetc/ssl/private_keys/puppet-server.pem 2048
+        openssl req -new -key /var/lib/puppetc/ssl/private_keys/puppet-server.pem \
+          -out /tmp/puppet-server.csr \
+          -subj "/CN=puppet-server"
+
+        # Sign server certificate with CA
+        openssl x509 -req -in /tmp/puppet-server.csr \
+          -CA /etc/puppetc/ssl/ca/ca_crt.pem \
+          -CAkey /etc/puppetc/ssl/ca/ca_key.pem \
+          -CAserial /etc/puppetc/ssl/ca/serial \
+          -out /var/lib/puppetc/ssl/certs/puppet-server.pem \
+          -days 3650
+
+        # Set proper permissions
+        chmod 600 /var/lib/puppetc/ssl/private_keys/puppet-server.pem
+        chmod 644 /var/lib/puppetc/ssl/certs/puppet-server.pem
+        chmod 700 /var/lib/puppetc/ssl/private_keys
+
+        # Store signed cert in CA directory
+        cp /var/lib/puppetc/ssl/certs/puppet-server.pem /etc/puppetc/ssl/ca/signed/
+
+        rm /tmp/puppet-server.csr
+        echo "Server certificate generated and signed successfully."
+      else
+        echo "Server certificate already exists."
+      fi
+
+      echo "SSL setup complete."
+    SHELL
+
     server.vm.provision "shell", name: "install-server", inline: <<-SHELL
       set -e
       cd /home/vagrant
@@ -125,7 +189,11 @@ EOF
       echo ""
       echo "=========================================="
       echo "Puppetc server installed and started!"
-      echo "Server listening on http://192.168.56.10:8140"
+      echo "Server listening on https://192.168.56.10:8140"
+      echo ""
+      echo "SSL Certificates:"
+      echo "  CA: /etc/puppetc/ssl/ca/ca_crt.pem"
+      echo "  Server: /var/lib/puppetc/ssl/certs/puppet-server.pem"
       echo ""
       echo "Manifests: /etc/puppet/manifests (synced from puppetcode/)"
       echo "Edit puppetcode/manifests/site.pp on your host to test!"
@@ -175,6 +243,105 @@ EOF
       ls -la /home/vagrant/*.deb
     SHELL
 
+    agent.vm.provision "shell", name: "setup-agent-ssl", inline: <<-SHELL
+      set -e
+
+      echo "Setting up agent SSL certificates..."
+
+      # Create SSL directories
+      mkdir -p /var/lib/puppetc/ssl/ca
+      mkdir -p /var/lib/puppetc/ssl/certs
+      mkdir -p /var/lib/puppetc/ssl/private_keys
+
+      # Set proper permissions
+      chmod 755 /var/lib/puppetc/ssl/ca
+      chmod 755 /var/lib/puppetc/ssl/certs
+      chmod 700 /var/lib/puppetc/ssl/private_keys
+
+      # Fetch CA certificate from server
+      echo "Fetching CA certificate from server..."
+      # Use scp to copy CA cert from server (VMs can communicate via private network)
+      # This simulates the agent downloading the CA cert from the server
+      if [ ! -f /var/lib/puppetc/ssl/ca/ca_crt.pem ]; then
+        # In a real setup, agent would download CA cert via HTTPS
+        # For Vagrant, we'll copy it using shared network after server is up
+        max_attempts=30
+        attempt=0
+        while [ $attempt -lt $max_attempts ]; do
+          if curl -k -f http://192.168.56.10:8140/status >/dev/null 2>&1; then
+            # Server is up, we can proceed
+            # In production, CA cert would be fetched via a dedicated endpoint
+            # For now, use SSH to copy (Vagrant allows this)
+            break
+          fi
+          attempt=$((attempt + 1))
+          echo "Waiting for server to be ready... ($attempt/$max_attempts)"
+          sleep 2
+        done
+
+        # Copy CA certificate using vagrant SSH access
+        # In production, this would be: curl https://server:8140/puppet-ca/v1/certificate/ca
+        sshpass -p 'vagrant' scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          vagrant@192.168.56.10:/etc/puppetc/ssl/ca/ca_crt.pem \
+          /var/lib/puppetc/ssl/ca/ca_crt.pem 2>/dev/null || \
+        # Fallback: if sshpass not available, use a simpler approach
+        ( echo "Using alternative method to fetch CA cert..." && \
+          sudo -u vagrant ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          vagrant@192.168.56.10 'sudo cat /etc/puppetc/ssl/ca/ca_crt.pem' > /var/lib/puppetc/ssl/ca/ca_crt.pem )
+
+        chmod 644 /var/lib/puppetc/ssl/ca/ca_crt.pem
+        echo "CA certificate fetched successfully."
+      else
+        echo "CA certificate already exists."
+      fi
+
+      # Generate agent certificate
+      if [ ! -f /var/lib/puppetc/ssl/private_keys/puppet-agent.pem ]; then
+        echo "Generating agent certificate..."
+        openssl genrsa -out /var/lib/puppetc/ssl/private_keys/puppet-agent.pem 2048
+        openssl req -new -key /var/lib/puppetc/ssl/private_keys/puppet-agent.pem \
+          -out /tmp/puppet-agent.csr \
+          -subj "/CN=puppet-agent"
+
+        # Copy CSR to server and get it signed
+        # In production, this would be: POST to /puppet-ca/v1/certificate_request/puppet-agent
+        sshpass -p 'vagrant' scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          /tmp/puppet-agent.csr vagrant@192.168.56.10:/tmp/puppet-agent.csr 2>/dev/null || \
+        sudo -u vagrant ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          vagrant@192.168.56.10 'cat > /tmp/puppet-agent.csr' < /tmp/puppet-agent.csr
+
+        # Sign on server
+        sudo -u vagrant ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          vagrant@192.168.56.10 'sudo openssl x509 -req -in /tmp/puppet-agent.csr \
+          -CA /etc/puppetc/ssl/ca/ca_crt.pem \
+          -CAkey /etc/puppetc/ssl/ca/ca_key.pem \
+          -CAserial /etc/puppetc/ssl/ca/serial \
+          -out /tmp/puppet-agent.pem -days 3650'
+
+        # Fetch signed certificate
+        sshpass -p 'vagrant' scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          vagrant@192.168.56.10:/tmp/puppet-agent.pem \
+          /var/lib/puppetc/ssl/certs/puppet-agent.pem 2>/dev/null || \
+        sudo -u vagrant ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          vagrant@192.168.56.10 'sudo cat /tmp/puppet-agent.pem' > /var/lib/puppetc/ssl/certs/puppet-agent.pem
+
+        # Set proper permissions
+        chmod 600 /var/lib/puppetc/ssl/private_keys/puppet-agent.pem
+        chmod 644 /var/lib/puppetc/ssl/certs/puppet-agent.pem
+
+        # Clean up temp files
+        rm /tmp/puppet-agent.csr
+        sudo -u vagrant ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          vagrant@192.168.56.10 'sudo rm -f /tmp/puppet-agent.csr /tmp/puppet-agent.pem' || true
+
+        echo "Agent certificate generated and signed successfully."
+      else
+        echo "Agent certificate already exists."
+      fi
+
+      echo "SSL setup complete for agent."
+    SHELL
+
     agent.vm.provision "shell", name: "install-agent", inline: <<-SHELL
       set -e
       cd /home/vagrant
@@ -185,17 +352,21 @@ EOF
         ./libfacter-c0_*.deb \
         ./puppetc-agent_*.deb
 
-      # Configure agent to use server
-      echo 'PUPPET_SERVER="http://192.168.56.10:8140"' > /etc/default/puppetc-agent
+      # Configure agent to use server with HTTPS
+      echo 'PUPPET_SERVER="https://192.168.56.10:8140"' > /etc/default/puppetc-agent
 
       echo ""
       echo "=========================================="
       echo "Puppetc agent installed!"
       echo ""
+      echo "SSL Certificates:"
+      echo "  CA: /var/lib/puppetc/ssl/ca/ca_crt.pem"
+      echo "  Client: /var/lib/puppetc/ssl/certs/puppet-agent.pem"
+      echo ""
       echo "Test commands:"
-      echo "  puppetc-agent -s http://192.168.56.10:8140 -n    # noop mode"
-      echo "  puppetc-agent -s http://192.168.56.10:8140 -a    # apply mode"
-      echo "  puppetc-agent -s http://192.168.56.10:8140 -f    # show facts"
+      echo "  puppetc-agent -s https://192.168.56.10:8140 -n    # noop mode"
+      echo "  puppetc-agent -s https://192.168.56.10:8140 -a    # apply mode"
+      echo "  puppetc-agent -s https://192.168.56.10:8140 -f    # show facts"
       echo "=========================================="
     SHELL
   end

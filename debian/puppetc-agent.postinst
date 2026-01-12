@@ -1,0 +1,60 @@
+#!/bin/sh
+# postinst script for puppetc-agent
+# This script sets up the SSL/TLS infrastructure directories for the Puppet agent
+
+set -e
+
+case "$1" in
+    configure)
+        # Create SSL directory structure for agent client certificates
+        # The agent will store its certificates in /var/lib/puppetc/ssl/
+        # Client certificate workflow:
+        # 1. CA cert downloaded from server -> /var/lib/puppetc/ssl/ca/ca_crt.pem
+        # 2. Private key generated -> /var/lib/puppetc/ssl/private_keys/<certname>.pem
+        # 3. Signed cert from server -> /var/lib/puppetc/ssl/certs/<certname>.pem
+
+        # Create main SSL directory
+        if [ ! -d /var/lib/puppetc/ssl ]; then
+            mkdir -p /var/lib/puppetc/ssl
+            chmod 755 /var/lib/puppetc/ssl
+        fi
+
+        # Create CA certificate directory
+        if [ ! -d /var/lib/puppetc/ssl/ca ]; then
+            mkdir -p /var/lib/puppetc/ssl/ca
+            chmod 755 /var/lib/puppetc/ssl/ca
+        fi
+
+        # Create client certificates directory
+        if [ ! -d /var/lib/puppetc/ssl/certs ]; then
+            mkdir -p /var/lib/puppetc/ssl/certs
+            chmod 755 /var/lib/puppetc/ssl/certs
+        fi
+
+        # Create private keys directory with restricted permissions
+        if [ ! -d /var/lib/puppetc/ssl/private_keys ]; then
+            mkdir -p /var/lib/puppetc/ssl/private_keys
+            chmod 700 /var/lib/puppetc/ssl/private_keys
+        fi
+
+        # Ensure proper ownership (root:root)
+        chown -R root:root /var/lib/puppetc/ssl
+
+        # Note: The agent will generate its private key and CSR on first run
+        # via the ensure_certificate() function if it doesn't have a certificate.
+        # The private key will be saved with 0600 permissions automatically.
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        # Nothing to do
+        ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

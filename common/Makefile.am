@@ -9,7 +9,8 @@ libpuppetc_common_la_SOURCES = \
 	string_utils.c \
 	color_output.c \
 	config_parser.c \
-	puppetdb.c
+	puppetdb.c \
+	puppet_ssl.c
 
 # Include directories
 AM_CPPFLAGS = -I$(top_srcdir)/include
@@ -20,8 +21,8 @@ AM_CFLAGS = -Wall -Wextra -g
 # Library versioning
 libpuppetc_common_la_LDFLAGS = -version-info 0:0:0
 
-# Libraries to link (for puppetdb.c)
-libpuppetc_common_la_LIBADD = -lsqlite3
+# Libraries to link (for puppetdb.c and puppet_ssl.c)
+libpuppetc_common_la_LIBADD = -lsqlite3 -lssl -lcrypto
 
 # Install headers
 puppetcincludedir = $(includedir)/puppetc
@@ -33,4 +34,5 @@ puppetcinclude_HEADERS = \
 	$(top_srcdir)/include/string_utils.h \
 	$(top_srcdir)/include/color_output.h \
 	$(top_srcdir)/include/config_parser.h \
-	$(top_srcdir)/include/puppetdb.h
+	$(top_srcdir)/include/puppetdb.h \
+	$(top_srcdir)/include/puppet_ssl.h

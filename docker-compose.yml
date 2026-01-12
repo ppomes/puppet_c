@@ -24,6 +24,9 @@ services:
       - ./puppetcode/manifests:/etc/puppet/manifests:ro
       - ./puppetcode/modules:/etc/puppet/modules:ro
       - ./puppetcode/hiera:/etc/puppet/hiera:ro
+      - puppetc-server-ssl:/etc/puppetc/ssl
+    environment:
+      - PUPPET_CA_PATH=/etc/puppetc/ssl/ca/ca_crt.pem
     networks:
       - puppet
     healthcheck:
@@ -43,8 +46,12 @@ services:
     depends_on:
       server:
         condition: service_healthy
+    volumes:
+      - puppetc-agent-ssl:/var/lib/puppetc/ssl
     environment:
-      - PUPPET_SERVER=http://server:8140
+      - PUPPET_SERVER=https://server:8140
+      - PUPPET_CA_PATH=/var/lib/puppetc/ssl/ca/ca_crt.pem
+      - PUPPET_SSL_DIR=/var/lib/puppetc/ssl
     networks:
       - puppet
 
@@ -61,8 +68,12 @@ services:
     depends_on:
       server:
         condition: service_healthy
+    volumes:
+      - puppetc-agent-shell-ssl:/var/lib/puppetc/ssl
     environment:
-      - PUPPET_SERVER=http://server:8140
+      - PUPPET_SERVER=https://server:8140
+      - PUPPET_CA_PATH=/var/lib/puppetc/ssl/ca/ca_crt.pem
+      - PUPPET_SSL_DIR=/var/lib/puppetc/ssl
     networks:
       - puppet
     stdin_open: true
@@ -73,3 +84,11 @@ services:
 networks:
   puppet:
     driver: bridge
+
+volumes:
+  puppetc-server-ssl:
+    driver: local
+  puppetc-agent-ssl:
+    driver: local
+  puppetc-agent-shell-ssl:
+    driver: local

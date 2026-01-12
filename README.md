@@ -63,9 +63,9 @@ See [Installation](#installation) below.
 - libtree-sitter
 - Ruby 3.0-3.3 with development headers (for ERB templates)
 - libyaml (for Hiera)
-- libssl/openssl (for crypto functions)
-- libmicrohttpd (for puppetc-server)
-- libcurl (for puppetc-agent)
+- libssl/openssl (for SSL/TLS and crypto functions)
+- libevhtp or libmicrohttpd (for puppetc-server HTTPS support)
+- libcurl with OpenSSL (for puppetc-agent mTLS)
 - libsqlite3 (for PuppetDB)
 
 ### Installing Dependencies
@@ -74,7 +74,7 @@ See [Installation](#installation) below.
 ```bash
 sudo apt-get install build-essential autoconf automake libtool \
   libtree-sitter-dev ruby3.2-dev libyaml-dev libssl-dev \
-  libmicrohttpd-dev libcurl4-openssl-dev libsqlite3-dev
+  libevent-dev libmicrohttpd-dev libcurl4-openssl-dev libsqlite3-dev
 ```
 
 **macOS (Homebrew):**
@@ -170,31 +170,55 @@ facter_c -j
 
 ### Server (puppetc-server)
 
-REST API server for catalog compilation, with embedded PuppetDB.
+REST API server for catalog compilation, with embedded PuppetDB and SSL/TLS mutual authentication.
+
+**Features:**
+- HTTPS with TLS 1.2+ encryption
+- Certificate Authority (CA) for signing agent certificates
+- Automatic CA generation on first startup
+- Configurable auto-signing (policy-based, whitelist, or naive modes)
+- Mutual TLS (mTLS) authentication support
 
 ```bash
-# Start server
+# Start server (CA auto-generated on first run)
 puppetc-server -p 8140 /etc/puppet
 
-# With PuppetDB enabled
-puppetc-server -p 8140 -P /var/lib/puppetc/puppetdb.sqlite /etc/puppet
+# With PuppetDB and custom CA directory
+puppetc-server -p 8140 -P /var/lib/puppetc/puppetdb.sqlite \
+               -C /etc/puppetc/ssl/ca /etc/puppet
 
-# Compile catalog via API
-curl -X POST http://localhost:8140/puppet/v4/catalog \
+# Compile catalog via API (with mTLS)
+curl -X POST https://localhost:8140/puppet/v4/catalog \
+     --cacert /etc/puppetc/ssl/ca/ca_crt.pem \
+     --cert /var/lib/puppetc/ssl/certs/node1.pem \
+     --key /var/lib/puppetc/ssl/private_keys/node1.pem \
      -H 'Content-Type: application/json' \
      -d '{"certname": "node1.example.com", "facts": {"hostname": "node1"}}'
 
 # Query PuppetDB
-curl http://localhost:8140/pdb/query/v4/nodes
-curl http://localhost:8140/pdb/query/v4/facts/node1.example.com
+curl https://localhost:8140/pdb/query/v4/nodes --cacert /etc/puppetc/ssl/ca/ca_crt.pem
+curl https://localhost:8140/pdb/query/v4/facts/node1.example.com --cacert /etc/puppetc/ssl/ca/ca_crt.pem
 ```
+
+**Certificate Storage:**
+- CA certificate: `/etc/puppetc/ssl/ca/ca_crt.pem`
+- CA private key: `/etc/puppetc/ssl/ca/ca_key.pem` (permissions: 0600)
+- Signed certificates: `/etc/puppetc/ssl/ca/signed/`
+- Auto-sign config: `/etc/puppetc/autosign.conf`
 
 ### Agent (puppetc-agent)
 
-Basic Puppet agent for applying catalogs.
+Puppet agent with mTLS authentication for secure catalog retrieval and application.
+
+**Features:**
+- Automatic certificate request (CSR) workflow on first run
+- Client-side mTLS authentication with certificate validation
+- HTTPS-only communication with server
+- Secure certificate storage with proper permissions
 
 ```bash
-# Run agent (connects to localhost:8140)
+# Run agent (connects to localhost:8140 via HTTPS)
+# On first run: generates private key, creates CSR, submits to server
 puppetc-agent
 
 # Apply catalog resources
@@ -203,9 +227,28 @@ puppetc-agent -a
 # No-op mode (show what would change)
 puppetc-agent -n
 
-# Specify server
-puppetc-agent -s http://puppet:8140 -a
+# Specify server (HTTPS required)
+puppetc-agent -s https://puppet:8140 -a
 ```
+
+**Certificate Workflow:**
+1. Agent checks for existing certificate in `/var/lib/puppetc/ssl/certs/`
+2. If missing: generates 2048-bit RSA private key (stored with 0600 permissions)
+3. Creates Certificate Signing Request (CSR) with certname
+4. Submits CSR to server at `/puppet-ca/v1/certificate_request/:certname`
+5. Server auto-signs based on policy (or queues for manual approval)
+6. Agent receives and stores signed certificate
+7. All subsequent requests use mTLS authentication
+
+**Certificate Storage:**
+- Client certificate: `/var/lib/puppetc/ssl/certs/<certname>.pem`
+- Private key: `/var/lib/puppetc/ssl/private_keys/<certname>.pem` (permissions: 0600)
+- CA certificate: `/var/lib/puppetc/ssl/ca/ca_crt.pem`
+
+**Environment Variables:**
+- `PUPPET_SERVER`: Server URL (e.g., `https://puppet:8140`)
+- `PUPPET_SSL_DIR`: SSL directory (default: `/var/lib/puppetc/ssl`)
+- `PUPPET_CA_PATH`: CA certificate path
 
 ### Exporting Facts from PuppetDB
 
@@ -387,6 +430,80 @@ docker compose -f docker-compose.demo.yml down
 - **All-nodes mode**: ERB templates skipped for faster CI/CD validation
 - **No pluginsync**: Custom facts/functions must be pre-installed
 
+## Security
+
+Puppet-C implements production-grade security with mutual TLS authentication between agent and server.
+
+### SSL/TLS Features
+
+- **Mutual TLS (mTLS)**: Both agent and server authenticate using X.509 certificates
+- **TLS 1.2+**: Modern TLS protocol with strong cipher suites
+- **Certificate Authority**: Server acts as CA, signs agent certificates
+- **Auto-Signing Modes**:
+  - `none`: Manual approval required (most secure)
+  - `policy`: External executable validates CSR
+  - `whitelist`: Certname-based with wildcard support
+  - `naive`: Auto-sign all requests (testing only)
+- **Certificate Validation**: Full X.509 chain validation with hostname verification
+- **Secure Storage**: Private keys stored with 0600 permissions
+
+### Auto-Signing Configuration
+
+Create `/etc/puppetc/autosign.conf`:
+
+```ini
+# Disable auto-signing (manual approval required)
+autosign = none
+
+# Policy-based (recommended for production)
+autosign = policy
+autosign_policy = /usr/local/bin/autosign_policy.sh
+
+# Whitelist-based (certname patterns)
+autosign = whitelist
+autosign_whitelist = /etc/puppetc/autosign_whitelist.txt
+
+# Naive mode (testing only - signs all requests)
+autosign = naive
+```
+
+**Policy Script Example:**
+```bash
+#!/bin/bash
+# Read CSR info from stdin (JSON format)
+read -r csr_info
+
+# Extract certname
+certname=$(echo "$csr_info" | jq -r '.certname')
+
+# Approve if certname matches pattern
+if [[ "$certname" =~ ^(web|db)[0-9]+\.prod\.example\.com$ ]]; then
+    exit 0  # Approve
+else
+    exit 1  # Deny
+fi
+```
+
+**Whitelist File Example:**
+```
+# Exact certname matches
+web1.example.com
+db1.example.com
+
+# Wildcard patterns
+*.dev.example.com
+test-*.example.com
+```
+
+### Certificate Validation
+
+Agents validate server certificates against CA, and servers can validate client certificates:
+
+- **Hostname verification**: Certificate CN/SAN must match server hostname
+- **Chain validation**: Certificates must be signed by trusted CA
+- **Expiry checks**: Expired certificates rejected automatically
+- **No verification bypass**: `SSL_VERIFYPEER` always enabled
+
 ## Architecture
 
 ```
@@ -400,6 +517,8 @@ docker compose -f docker-compose.demo.yml down
 |  - Stdlib           |                                       |
 |  - Hiera            |                                       |
 |  - Catalog builder  |                                       |
+|  - SSL/TLS (OpenSSL)|                                       |
+|  - CA infrastructure|                                       |
 +---------------------+---------------------------------------+
            |                        |
            v                        v
@@ -407,10 +526,12 @@ docker compose -f docker-compose.demo.yml down
 | puppetc-server  |  | puppetc-agent    |  | puppetc-compile |
 |                 |  |                  |  |                 |
 | - REST API      |  | - Collect facts  |  | - Parse/eval    |
-| - Compile       |  | - Request catalog|  | - JSON output   |
-|   catalogs      |  | - Apply catalog  |  | - Pretty output |
-| - PuppetDB      |  |                  |  | - CI/CD mode    |
+|   (HTTPS/mTLS)  |  | - Request catalog|  | - JSON output   |
+| - Compile       |  |   (HTTPS/mTLS)   |  | - Pretty output |
+|   catalogs      |  | - Apply catalog  |  | - CI/CD mode    |
+| - PuppetDB      |  | - CSR workflow   |  |                 |
 |   (SQLite)      |  |                  |  |                 |
+| - CA signing    |  |                  |  |                 |
 +-----------------+  +------------------+  +-----------------+
 ```
 

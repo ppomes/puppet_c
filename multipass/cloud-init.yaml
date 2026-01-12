@@ -33,6 +33,12 @@ packages:
   - curl
   - jq
   - rsync
+  - openssl
 
 runcmd:
+  # Create certificate directories
+  - mkdir -p /etc/puppetc/certs
+  - mkdir -p /var/lib/puppetc/certs
+  - chmod 755 /etc/puppetc/certs
+  - chmod 700 /var/lib/puppetc/certs
   - echo "puppetc development VM ready!"
