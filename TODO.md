@@ -93,8 +93,11 @@
 ## Server Features
 
 ### Security
-- [ ] SSL/TLS encryption
-- [ ] Client certificate authentication
+- [x] SSL/TLS encryption (TLS 1.2+, HTTPS endpoints)
+- [x] Client certificate authentication (mTLS with X.509)
+- [x] Certificate Authority (CA) infrastructure
+- [x] CSR signing workflow
+- [x] Auto-signing (policy/whitelist/naive modes)
 
 ### PuppetDB (SQLite)
 - [x] SQLite database backend
@@ -111,6 +114,13 @@
 - [ ] Environment isolation
 
 ## Agent Features
+
+### Security
+- [x] mTLS client authentication with certificate validation
+- [x] Automatic CSR generation and submission workflow
+- [x] Certificate storage with secure file permissions (0600 for keys)
+- [x] HTTPS-only communication with server
+- [x] Certificate validation (hostname, chain, expiry)
 
 ### Reporting
 - [ ] Report processor
