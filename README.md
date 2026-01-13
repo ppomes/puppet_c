@@ -64,7 +64,7 @@ See [Installation](#installation) below.
 - Ruby 3.0-3.3 with development headers (for ERB templates)
 - libyaml (for Hiera)
 - libssl/openssl (for SSL/TLS and crypto functions)
-- libevhtp or libmicrohttpd (for puppetc-server HTTPS support)
+- libmicrohttpd (for puppetc-server HTTP/HTTPS support)
 - libcurl with OpenSSL (for puppetc-agent mTLS)
 - libsqlite3 (for PuppetDB)
 
@@ -74,16 +74,14 @@ See [Installation](#installation) below.
 ```bash
 sudo apt-get install build-essential autoconf automake libtool pkg-config \
   libtree-sitter-dev ruby3.2-dev libyaml-dev libssl-dev \
-  libevhtp-dev libevent-dev libmicrohttpd-dev libcurl4-openssl-dev libsqlite3-dev
+  libmicrohttpd-dev libcurl4-openssl-dev libsqlite3-dev
 ```
 
 **macOS (Homebrew):**
 ```bash
 brew install pkg-config tree-sitter ruby@3.3 libyaml openssl \
-  libevent libmicrohttpd curl sqlite3 autoconf automake libtool
+  libmicrohttpd curl sqlite3 autoconf automake libtool
 ```
-
-Note: On macOS, libevhtp may need to be built from source or use libmicrohttpd as fallback.
 
 ### Building from Source
 

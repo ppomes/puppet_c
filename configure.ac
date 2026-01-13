@@ -188,37 +188,6 @@ AC_DEFINE([HAVE_OPENSSL], [1], [Define if OpenSSL is available])
 AC_SUBST([OPENSSL_CFLAGS])
 AC_SUBST([OPENSSL_LIBS])
 
-# Check for libevhtp or libevent (required for HTTPS server)
-AC_ARG_WITH([evhtp],
-    [AS_HELP_STRING([--with-evhtp=PATH], [Path to libevhtp installation])],
-    [evhtp_prefix=$withval],
-    [evhtp_prefix=])
-
-if test -n "$evhtp_prefix"; then
-    AC_MSG_CHECKING([for libevhtp in $evhtp_prefix])
-    if test -f "$evhtp_prefix/include/evhtp.h"; then
-        EVHTP_CFLAGS="-I$evhtp_prefix/include"
-        EVHTP_LIBS="-L$evhtp_prefix/lib -levhtp -levent -levent_openssl -levent_pthreads -lpthread"
-        AC_MSG_RESULT([yes])
-    else
-        AC_MSG_RESULT([no])
-        AC_MSG_ERROR([libevhtp headers not found in $evhtp_prefix/include])
-    fi
-else
-    PKG_CHECK_MODULES([EVHTP], [evhtp], [
-        # evhtp pkg-config doesn't always include libevent, add it manually
-        EVHTP_LIBS="$EVHTP_LIBS -levent -levent_openssl -levent_pthreads -lpthread"
-    ], [
-        # Fallback to libevent if evhtp is not available
-        PKG_CHECK_MODULES([EVHTP], [libevent libevent_openssl], [], [
-            AC_MSG_ERROR([libevhtp or libevent not found. Install libevhtp-dev or libevent-dev package or use --with-evhtp=PATH])
-        ])
-    ])
-fi
-AC_DEFINE([HAVE_EVHTP], [1], [Define if libevhtp or libevent is available])
-AC_SUBST([EVHTP_CFLAGS])
-AC_SUBST([EVHTP_LIBS])
-
 # Check for libmicrohttpd (required for puppetc-server)
 AC_ARG_WITH([microhttpd],
     [AS_HELP_STRING([--with-microhttpd=PATH], [Path to libmicrohttpd installation])],
@@ -332,7 +301,6 @@ echo "  tree-sitter:      ${TREESITTER_LIBS:-not found}"
 echo "  Ruby:             ${RUBY_LIBS:-not found}"
 echo "  libyaml:          ${YAML_LIBS:-not found}"
 echo "  OpenSSL:          ${OPENSSL_LIBS:-not found}"
-echo "  libevhtp:         ${EVHTP_LIBS:-not found}"
 echo "  libmicrohttpd:    ${MHD_LIBS:-not found}"
 echo "  libcurl:          ${CURL_LIBS:-not found}"
 echo "  SQLite3:          ${SQLITE_LIBS:-not found}"
