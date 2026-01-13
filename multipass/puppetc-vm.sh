@@ -178,16 +178,30 @@ start_server_daemon() {
     # Kill any existing server
     multipass exec "$VM_SERVER" -- pkill -f puppetc-server 2>/dev/null || true
 
+    # Setup directories and autosigning for development
+    multipass exec "$VM_SERVER" -- bash -c '
+        # Create SSL/CA directory
+        sudo mkdir -p /etc/puppetc/ssl/ca
+        sudo chown -R ubuntu:ubuntu /etc/puppetc /var/lib/puppetc
+
+        # Enable naive autosigning for development (auto-signs all CSRs)
+        mkdir -p /etc/puppetc
+        echo -e "[autosign]\nmode = naive" > /etc/puppetc/autosign.conf
+    '
+
     # Start server in background (binaries installed via deb)
     multipass exec "$VM_SERVER" -- bash -c '
         nohup puppetc-server -v -p 8140 \
             -m /etc/puppet/modules \
             -D /etc/puppet/hiera \
+            -C /etc/puppetc/ssl/ca \
             -P /var/lib/puppetc/puppetdb.sqlite \
             /etc/puppet > /tmp/puppetc-server.log 2>&1 &
         sleep 2
         if pgrep -f puppetc-server > /dev/null; then
             echo "Server started (PID: $(pgrep -f puppetc-server))"
+            echo "CA directory: /etc/puppetc/ssl/ca"
+            echo "Autosigning: enabled (naive mode)"
         else
             echo "Failed to start server. Check /tmp/puppetc-server.log"
             cat /tmp/puppetc-server.log
