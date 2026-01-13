@@ -1959,14 +1959,22 @@ int main(int argc, char *argv[]) {
     /* Set up SSL context for TLS (HTTPS) */
     ssl_ctx = puppet_ssl_ctx_new(true); /* true = server mode */
     if (ssl_ctx && ssl_ctx->ssl_ctx) {
+        /* Build certificate paths */
+        char server_cert[PUPPET_CA_MAX_PATH];
+        char server_key[PUPPET_CA_MAX_PATH];
+        char ca_cert[PUPPET_CA_MAX_PATH];
+        snprintf(server_cert, sizeof(server_cert), "%s/server_crt.pem", ca_dir ? ca_dir : DEFAULT_CA_DIR);
+        snprintf(server_key, sizeof(server_key), "%s/server_key.pem", ca_dir ? ca_dir : DEFAULT_CA_DIR);
+        snprintf(ca_cert, sizeof(ca_cert), "%s/ca_crt.pem", ca_dir ? ca_dir : DEFAULT_CA_DIR);
+
         evhtp_ssl_cfg_t ssl_cfg = {
-            .pemfile = NULL,
-            .privfile = NULL,
-            .cafile = "/etc/puppetc/ssl/ca/ca_crt.pem",
+            .pemfile = server_cert,
+            .privfile = server_key,
+            .cafile = ca_cert,
             .capath = NULL,
             .ciphers = "HIGH:!aNULL:!MD5",
             .ssl_opts = SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3,
-            .ssl_ctx = ssl_ctx->ssl_ctx,
+            .ssl_ctx_timeout = 0,
             .verify_peer = SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
             .verify_depth = 1,
             .x509_verify_cb = NULL,

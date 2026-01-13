@@ -198,14 +198,17 @@ if test -n "$evhtp_prefix"; then
     AC_MSG_CHECKING([for libevhtp in $evhtp_prefix])
     if test -f "$evhtp_prefix/include/evhtp.h"; then
         EVHTP_CFLAGS="-I$evhtp_prefix/include"
-        EVHTP_LIBS="-L$evhtp_prefix/lib -levhtp -levent -levent_openssl"
+        EVHTP_LIBS="-L$evhtp_prefix/lib -levhtp -levent -levent_openssl -levent_pthreads -lpthread"
         AC_MSG_RESULT([yes])
     else
         AC_MSG_RESULT([no])
         AC_MSG_ERROR([libevhtp headers not found in $evhtp_prefix/include])
     fi
 else
-    PKG_CHECK_MODULES([EVHTP], [evhtp], [], [
+    PKG_CHECK_MODULES([EVHTP], [evhtp], [
+        # evhtp pkg-config doesn't always include libevent, add it manually
+        EVHTP_LIBS="$EVHTP_LIBS -levent -levent_openssl -levent_pthreads -lpthread"
+    ], [
         # Fallback to libevent if evhtp is not available
         PKG_CHECK_MODULES([EVHTP], [libevent libevent_openssl], [], [
             AC_MSG_ERROR([libevhtp or libevent not found. Install libevhtp-dev or libevent-dev package or use --with-evhtp=PATH])

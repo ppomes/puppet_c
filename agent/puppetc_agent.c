@@ -63,6 +63,10 @@ typedef struct {
     bool pluginsync;     /* Enable pluginsync */
 } agent_config_t;
 
+/* Forward declarations */
+static size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp);
+static void configure_mtls_options(CURL *curl, const agent_config_t *config);
+
 /* ============================================================================
  * Certificate Management Functions
  * ============================================================================ */

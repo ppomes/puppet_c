@@ -812,20 +812,7 @@ int puppet_ca_parse_csr(const char *csr_pem, puppet_csr_info_t **info) {
     return 0;
 }
 
-/**
- * Free CSR information structure
- */
-void puppet_csr_info_free(puppet_csr_info_t *info) {
-    if (!info) {
-        return;
-    }
-
-    puppet_free(info->certname);
-    puppet_free(info->subject);
-    puppet_free(info->public_key_pem);
-    puppet_free(info->fingerprint);
-    puppet_free(info);
-}
+/* puppet_csr_info_free is implemented in puppet_autosign.c */
 
 /*
  * ===========================================================================
@@ -1081,78 +1068,9 @@ int puppet_ca_load_serial(puppet_ca_ctx_t *ctx) {
     return 0;
 }
 
-/*
- * ===========================================================================
- * AUTO-SIGNING (stub implementations)
- * ===========================================================================
- */
-
-/**
- * Initialize auto-signing configuration
- */
-puppet_autosign_config_t *puppet_autosign_init(const char *config_path) {
-    if (!config_path) {
-        return NULL;
-    }
-
-    puppet_autosign_config_t *config = puppet_malloc(sizeof(puppet_autosign_config_t));
-    if (!config) {
-        return NULL;
-    }
-
-    memset(config, 0, sizeof(puppet_autosign_config_t));
-
-    /* Default to no auto-signing */
-    config->mode = PUPPET_AUTOSIGN_NONE;
-
-    /* TODO: Parse config file to determine mode and paths */
-    /* This is a stub implementation - will be fully implemented in puppet_autosign.c */
-
-    return config;
-}
-
-/**
- * Free auto-signing configuration
- */
-void puppet_autosign_free(puppet_autosign_config_t *config) {
-    if (!config) {
-        return;
-    }
-
-    puppet_free(config->policy_path);
-    puppet_free(config->whitelist_path);
-    puppet_free(config);
-}
-
-/**
- * Check if a CSR should be auto-signed
- */
-bool puppet_autosign_should_sign(puppet_autosign_config_t *config,
-                                  puppet_csr_info_t *csr_info) {
-    if (!config || !csr_info) {
-        return false;
-    }
-
-    /* TODO: Implement auto-signing logic based on mode */
-    /* This is a stub implementation - will be fully implemented in puppet_autosign.c */
-
-    switch (config->mode) {
-        case PUPPET_AUTOSIGN_NAIVE:
-            return true;
-
-        case PUPPET_AUTOSIGN_WHITELIST:
-            /* TODO: Check whitelist file */
-            return false;
-
-        case PUPPET_AUTOSIGN_POLICY:
-            /* TODO: Execute policy script */
-            return false;
-
-        case PUPPET_AUTOSIGN_NONE:
-        default:
-            return false;
-    }
-}
+/* Auto-signing functions (puppet_autosign_init, puppet_autosign_free,
+ * puppet_autosign_should_sign, puppet_autosign_get_error) are implemented
+ * in puppet_autosign.c */
 
 /*
  * ===========================================================================
@@ -1168,14 +1086,4 @@ const char *puppet_ca_get_error(puppet_ca_ctx_t *ctx) {
         return "Invalid CA context";
     }
     return ctx->last_error;
-}
-
-/**
- * Get the last error message from an auto-signing configuration
- */
-const char *puppet_autosign_get_error(puppet_autosign_config_t *config) {
-    if (!config) {
-        return "Invalid autosign configuration";
-    }
-    return config->last_error;
 }

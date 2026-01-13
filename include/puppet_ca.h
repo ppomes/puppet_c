@@ -28,6 +28,8 @@
 #include <openssl/evp.h>
 #include <openssl/rsa.h>
 
+#include "puppet_autosign.h"  /* For puppet_csr_info_t, puppet_autosign_config_t */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -105,36 +107,8 @@ typedef struct puppet_ca_ctx {
     char last_error[PUPPET_CA_MAX_ERROR]; /**< Last error message */
 } puppet_ca_ctx_t;
 
-/**
- * @brief Certificate signing request information
- */
-typedef struct puppet_csr_info {
-    char *certname;             /**< Certificate name (CN from CSR) */
-    char *subject;              /**< Full subject DN */
-    char *public_key_pem;       /**< Public key in PEM format */
-    char *fingerprint;          /**< CSR fingerprint (SHA-256) */
-    time_t request_time;        /**< When the CSR was received */
-} puppet_csr_info_t;
-
-/**
- * @brief Auto-signing policy modes
- */
-typedef enum {
-    PUPPET_AUTOSIGN_NONE,       /**< No auto-signing (manual approval only) */
-    PUPPET_AUTOSIGN_NAIVE,      /**< Auto-sign all CSRs (insecure, testing only) */
-    PUPPET_AUTOSIGN_WHITELIST,  /**< Auto-sign if certname in whitelist file */
-    PUPPET_AUTOSIGN_POLICY      /**< Auto-sign based on policy executable */
-} puppet_autosign_mode_t;
-
-/**
- * @brief Auto-signing configuration
- */
-typedef struct puppet_autosign_config {
-    puppet_autosign_mode_t mode; /**< Auto-signing mode */
-    char *policy_path;          /**< Path to policy executable (for POLICY mode) */
-    char *whitelist_path;       /**< Path to whitelist file (for WHITELIST mode) */
-    char last_error[PUPPET_CA_MAX_ERROR]; /**< Last error message */
-} puppet_autosign_config_t;
+/* puppet_csr_info_t, puppet_autosign_mode_t, puppet_autosign_config_t
+ * are defined in puppet_autosign.h */
 
 /*
  * ===========================================================================
@@ -253,14 +227,7 @@ int puppet_ca_sign_csr(puppet_ca_ctx_t *ctx,
  */
 int puppet_ca_parse_csr(const char *csr_pem, puppet_csr_info_t **info);
 
-/**
- * @brief Free CSR information structure
- *
- * Releases all memory associated with a CSR information structure.
- *
- * @param info CSR information to free
- */
-void puppet_csr_info_free(puppet_csr_info_t *info);
+/* puppet_csr_info_free is declared in puppet_autosign.h */
 
 /*
  * ===========================================================================
@@ -348,49 +315,9 @@ int puppet_ca_save_serial(puppet_ca_ctx_t *ctx);
  */
 int puppet_ca_load_serial(puppet_ca_ctx_t *ctx);
 
-/*
- * ===========================================================================
- * AUTO-SIGNING
- * ===========================================================================
- */
-
-/**
- * @brief Initialize auto-signing configuration
- *
- * Creates a new auto-signing configuration based on the provided config file.
- * The config file determines the auto-signing mode and associated settings.
- *
- * @param config_path Path to autosign configuration file
- * @return New auto-signing configuration, or NULL on error
- */
-puppet_autosign_config_t *puppet_autosign_init(const char *config_path);
-
-/**
- * @brief Free auto-signing configuration
- *
- * Releases all resources associated with an auto-signing configuration.
- *
- * @param config Auto-signing configuration to free
- */
-void puppet_autosign_free(puppet_autosign_config_t *config);
-
-/**
- * @brief Check if a CSR should be auto-signed
- *
- * Evaluates whether a CSR should be automatically signed based on the
- * configured auto-signing policy.
- *
- * For POLICY mode: Executes the policy script with CSR details on stdin
- * For WHITELIST mode: Checks if certname is in the whitelist file
- * For NAIVE mode: Always returns true (insecure, testing only)
- * For NONE mode: Always returns false
- *
- * @param config Auto-signing configuration
- * @param csr_info CSR information to evaluate
- * @return true if CSR should be auto-signed, false otherwise
- */
-bool puppet_autosign_should_sign(puppet_autosign_config_t *config,
-                                  puppet_csr_info_t *csr_info);
+/* Auto-signing functions (puppet_autosign_init, puppet_autosign_free,
+ * puppet_autosign_should_sign, puppet_autosign_get_error) are declared
+ * in puppet_autosign.h */
 
 /*
  * ===========================================================================
@@ -407,16 +334,6 @@ bool puppet_autosign_should_sign(puppet_autosign_config_t *config,
  * @return Error message string (do not free)
  */
 const char *puppet_ca_get_error(puppet_ca_ctx_t *ctx);
-
-/**
- * @brief Get the last error message from an auto-signing configuration
- *
- * Returns the last error message recorded by the auto-signing configuration.
- *
- * @param config Auto-signing configuration
- * @return Error message string (do not free)
- */
-const char *puppet_autosign_get_error(puppet_autosign_config_t *config);
 
 #ifdef __cplusplus
 }
