@@ -72,7 +72,7 @@ RUN mkdir -p /etc/puppet/manifests /etc/puppet/modules /etc/puppet/hiera /var/li
 RUN mkdir -p /etc/puppetc/ssl/ca /etc/puppetc/ssl/certs /etc/puppetc/ssl/private
 
 # Enable naive autosigning for development (auto-signs all CSRs)
-RUN mkdir -p /etc/puppetc && echo -e "[autosign]\nmode = naive" > /etc/puppetc/autosign.conf
+RUN mkdir -p /etc/puppetc && printf '[autosign]\nmode = naive\n' > /etc/puppetc/autosign.conf
 
 EXPOSE 8140
 
