@@ -72,16 +72,18 @@ See [Installation](#installation) below.
 
 **Debian/Ubuntu:**
 ```bash
-sudo apt-get install build-essential autoconf automake libtool \
+sudo apt-get install build-essential autoconf automake libtool pkg-config \
   libtree-sitter-dev ruby3.2-dev libyaml-dev libssl-dev \
-  libevent-dev libmicrohttpd-dev libcurl4-openssl-dev libsqlite3-dev
+  libevhtp-dev libevent-dev libmicrohttpd-dev libcurl4-openssl-dev libsqlite3-dev
 ```
 
 **macOS (Homebrew):**
 ```bash
 brew install pkg-config tree-sitter ruby@3.3 libyaml openssl \
-  libmicrohttpd curl sqlite3 autoconf automake libtool
+  libevent libmicrohttpd curl sqlite3 autoconf automake libtool
 ```
+
+Note: On macOS, libevhtp may need to be built from source or use libmicrohttpd as fallback.
 
 ### Building from Source
 
