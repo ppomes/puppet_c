@@ -50,6 +50,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsqlite3-0 \
     libruby3.1 \
     curl \
+    openssl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install packages
@@ -67,10 +68,16 @@ RUN dpkg -i /tmp/libpuppetc-common0_*.deb \
 # Create puppet directories and PuppetDB directory
 RUN mkdir -p /etc/puppet/manifests /etc/puppet/modules /etc/puppet/hiera /var/lib/puppetc
 
+# Create SSL certificate directories
+RUN mkdir -p /etc/puppetc/ssl/ca /etc/puppetc/ssl/certs /etc/puppetc/ssl/private
+
+# Enable naive autosigning for development (auto-signs all CSRs)
+RUN mkdir -p /etc/puppetc && printf '[autosign]\nmode = naive\n' > /etc/puppetc/autosign.conf
+
 EXPOSE 8140
 
 ENTRYPOINT ["puppetc-server"]
-CMD ["-v", "-m", "/etc/puppet/modules", "-D", "/etc/puppet/hiera", "/etc/puppet"]
+CMD ["-v", "-m", "/etc/puppet/modules", "-D", "/etc/puppet/hiera", "-C", "/etc/puppetc/ssl/ca", "/etc/puppet"]
 
 # =============================================================================
 # Agent image
@@ -84,6 +91,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cron \
     bash \
     libruby3.1 \
+    openssl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install packages
@@ -95,6 +103,9 @@ RUN dpkg -i /tmp/libpuppetc-common0_*.deb \
             /tmp/libfacter-c0_*.deb \
             /tmp/puppetc-agent_*.deb && \
     rm -rf /tmp/*.deb
+
+# Create SSL certificate directories
+RUN mkdir -p /var/lib/puppetc/ssl/ca /var/lib/puppetc/ssl/certs /var/lib/puppetc/ssl/private_keys
 
 ENTRYPOINT ["puppetc-agent"]
 # Default: noop mode. Use -a to apply.

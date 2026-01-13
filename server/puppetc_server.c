@@ -1,10 +1,14 @@
 /**
  * @file puppetc_server.c
- * @brief HTTP server for Puppet catalog compilation
+ * @brief HTTPS server for Puppet catalog compilation with TLS support
  *
  * Provides a REST API for compiling Puppet catalogs:
  * - GET  /status           - Health check
  * - POST /puppet/v4/catalog - Compile catalog for a node
+ * - GET  /puppet/v3/file_content/* - File server
+ * - GET  /puppet/v3/file_metadatas/plugins - Plugin metadata
+ * - POST /puppet-ca/v1/certificate_request/:certname - Submit CSR for signing
+ * - GET  /pdb/query/v4/* - PuppetDB queries
  */
 
 #include <stdio.h>
@@ -12,6 +16,10 @@
 #include <string.h>
 #include <signal.h>
 #include <getopt.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <openssl/md5.h>
+
 #include <microhttpd.h>
 
 #include "puppet_ast.h"
@@ -23,11 +31,15 @@
 #include "puppet_hiera.h"
 #include "config_parser.h"
 #include "puppetdb.h"
+#include "puppet_ssl.h"
+#include "puppet_ca.h"
+#include "puppet_autosign.h"
 
 /* Default configuration */
 #define DEFAULT_PORT 8140
 #define DEFAULT_ENVIRONMENT "production"
 #define DEFAULT_CONFIG_FILE "/etc/puppetc/puppet.conf"
+#define DEFAULT_CA_DIR "/etc/puppetc/ssl/ca"
 
 /* Default PuppetDB path */
 #define DEFAULT_PUPPETDB_PATH "/var/lib/puppetc/puppetdb.sqlite"
@@ -38,7 +50,11 @@ static char *manifest_path = NULL;
 static char *modules_path = NULL;
 static char *hiera_datadir = NULL;
 static char *puppetdb_path = NULL;
+static char *ca_dir = NULL;
 static puppetdb_t *pdb = NULL;
+static puppet_ssl_ctx_t *ssl_ctx = NULL;
+static puppet_ca_ctx_t *ca_ctx = NULL;
+static puppet_autosign_config_t *autosign_config = NULL;
 static int verbose = 0;
 
 /**
@@ -85,14 +101,6 @@ static enum MHD_Result send_error(struct MHD_Connection *connection,
 }
 
 /**
- * @brief Handle GET /status
- */
-static enum MHD_Result handle_status(struct MHD_Connection *connection) {
-    const char *json = "{\"status\": \"ok\", \"version\": \"0.0.1\"}";
-    return send_json_response(connection, MHD_HTTP_OK, json);
-}
-
-/**
  * @brief Send raw file content response
  */
 static enum MHD_Result send_file_response(struct MHD_Connection *connection,
@@ -115,10 +123,6 @@ static enum MHD_Result send_file_response(struct MHD_Connection *connection,
 
     return ret;
 }
-
-#include <dirent.h>
-#include <sys/stat.h>
-#include <openssl/md5.h>
 
 /**
  * @brief Compute MD5 checksum of a file
@@ -213,10 +217,114 @@ static void scan_lib_directory(const char *base_path, const char *rel_path,
 }
 
 /**
+ * @brief Compile a catalog for the given request
+ */
+static char *compile_catalog(const char *certname, const char *environment,
+                             json_value_t *facts_json) {
+    puppet_program_t *program = NULL;
+    puppet_loader_t *loader = NULL;
+    char *catalog_json = NULL;
+
+    /* Create loader for manifest directory */
+    if (manifest_path) {
+        loader = puppet_loader_create(manifest_path);
+        if (!loader) {
+            return puppet_strdup("{\"error\": \"Failed to create module loader\"}");
+        }
+
+        if (modules_path) {
+            puppet_loader_set_modules_path(loader, modules_path);
+        }
+
+        /* Load site.pp */
+        program = puppet_loader_load_site(loader);
+    }
+
+    if (!program) {
+        if (loader) puppet_loader_destroy(loader);
+        return puppet_strdup("{\"error\": \"No manifest found\"}");
+    }
+
+    /* Create environment */
+    puppet_env_t *env = puppet_env_create();
+    puppet_env_set_verbose(env, verbose);
+
+    if (loader) {
+        puppet_env_set_loader(env, loader);
+    }
+
+    /* Set PuppetDB for exported resources */
+    if (pdb) {
+        puppet_env_set_puppetdb(env, pdb);
+    }
+
+    /* Configure Hiera */
+    if (hiera_datadir) {
+        puppet_hiera_register_provider(env, hiera_datadir);
+    }
+
+    /* Set node name */
+    puppet_env_set_node(env, certname);
+
+    /* Enable catalog building */
+    puppet_env_enable_catalog(env, certname, environment ? environment : DEFAULT_ENVIRONMENT);
+
+    /* Set facts if provided */
+    if (facts_json && facts_json->type == JSON_VALUE_OBJECT) {
+        puppet_facts_db_t *facts_db = puppet_facts_db_create();
+        if (puppet_facts_db_load_json(facts_db, certname, facts_json) == 0) {
+            puppet_env_set_facts_db(env, facts_db);
+            if (verbose) {
+                fprintf(stderr, "[INFO] Loaded facts for node: %s\n", certname);
+            }
+        } else {
+            puppet_facts_db_destroy(facts_db);
+            if (verbose) {
+                fprintf(stderr, "[WARN] Failed to load facts for node: %s\n", certname);
+            }
+        }
+    }
+
+    /* Execute program */
+    puppet_exec_program(program, env);
+
+    /* Check for compilation failure */
+    if (env->compilation_failed) {
+        char error_json[1024];
+        snprintf(error_json, sizeof(error_json),
+                 "{\"error\": \"Catalog compilation failed: %s\"}",
+                 env->failure_message ? env->failure_message : "unknown error");
+        catalog_json = puppet_strdup(error_json);
+    } else {
+        /* Get compiled catalog */
+        puppet_catalog_t *catalog = puppet_env_get_catalog(env);
+        if (catalog) {
+            catalog_json = puppet_catalog_to_json(catalog);
+            puppet_catalog_destroy(catalog);
+        } else {
+            catalog_json = puppet_strdup("{\"error\": \"No catalog generated\"}");
+        }
+    }
+
+    /* Cleanup */
+    puppet_env_destroy(env);
+    puppet_program_destroy(program);
+    if (loader) puppet_loader_destroy(loader);
+
+    return catalog_json;
+}
+
+
+/**
+ * @brief Handle GET /status
+ */
+static enum MHD_Result handle_status(struct MHD_Connection *connection) {
+    const char *json = "{\"status\": \"ok\", \"version\": \"0.0.1\"}";
+    return send_json_response(connection, MHD_HTTP_OK, json);
+}
+
+/**
  * @brief Handle GET /puppet/v3/file_metadatas/plugins
- *
- * Returns JSON listing all files in all modules' lib/ directories.
- * Used by agents to determine what files to sync.
  */
 static enum MHD_Result handle_file_metadatas_plugins(struct MHD_Connection *connection) {
     if (!modules_path) {
@@ -319,9 +427,6 @@ static enum MHD_Result handle_file_metadatas_plugins(struct MHD_Connection *conn
 
 /**
  * @brief Handle GET /puppet/v3/file_content/plugins/<path>
- *
- * Serves files from module lib/ directories for pluginsync.
- * Path format: <module>/lib/<subpath>
  */
 static enum MHD_Result handle_plugin_content(struct MHD_Connection *connection,
                                               const char *url) {
@@ -402,11 +507,6 @@ static enum MHD_Result handle_plugin_content(struct MHD_Connection *connection,
 
 /**
  * @brief Handle GET /puppet/v3/file_content/modules/<module>/<path>
- *
- * Serves files from module fileserver:
- *   puppet:///modules/mymodule/myfile.txt
- *   -> GET /puppet/v3/file_content/modules/mymodule/myfile.txt
- *   -> reads <modules_path>/mymodule/files/myfile.txt
  */
 static enum MHD_Result handle_file_content(struct MHD_Connection *connection,
                                            const char *url) {
@@ -515,104 +615,6 @@ struct connection_info {
     char *post_data;
     size_t post_data_size;
 };
-
-/**
- * @brief Compile a catalog for the given request
- */
-static char *compile_catalog(const char *certname, const char *environment,
-                             json_value_t *facts_json) {
-    puppet_program_t *program = NULL;
-    puppet_loader_t *loader = NULL;
-    char *catalog_json = NULL;
-
-    /* Create loader for manifest directory */
-    if (manifest_path) {
-        loader = puppet_loader_create(manifest_path);
-        if (!loader) {
-            return puppet_strdup("{\"error\": \"Failed to create module loader\"}");
-        }
-
-        if (modules_path) {
-            puppet_loader_set_modules_path(loader, modules_path);
-        }
-
-        /* Load site.pp */
-        program = puppet_loader_load_site(loader);
-    }
-
-    if (!program) {
-        if (loader) puppet_loader_destroy(loader);
-        return puppet_strdup("{\"error\": \"No manifest found\"}");
-    }
-
-    /* Create environment */
-    puppet_env_t *env = puppet_env_create();
-    puppet_env_set_verbose(env, verbose);
-
-    if (loader) {
-        puppet_env_set_loader(env, loader);
-    }
-
-    /* Set PuppetDB for exported resources */
-    if (pdb) {
-        puppet_env_set_puppetdb(env, pdb);
-    }
-
-    /* Configure Hiera */
-    if (hiera_datadir) {
-        puppet_hiera_register_provider(env, hiera_datadir);
-    }
-
-    /* Set node name */
-    puppet_env_set_node(env, certname);
-
-    /* Enable catalog building */
-    puppet_env_enable_catalog(env, certname, environment ? environment : DEFAULT_ENVIRONMENT);
-
-    /* Set facts if provided */
-    if (facts_json && facts_json->type == JSON_VALUE_OBJECT) {
-        puppet_facts_db_t *facts_db = puppet_facts_db_create();
-        if (puppet_facts_db_load_json(facts_db, certname, facts_json) == 0) {
-            puppet_env_set_facts_db(env, facts_db);
-            if (verbose) {
-                fprintf(stderr, "[INFO] Loaded facts for node: %s\n", certname);
-            }
-        } else {
-            puppet_facts_db_destroy(facts_db);
-            if (verbose) {
-                fprintf(stderr, "[WARN] Failed to load facts for node: %s\n", certname);
-            }
-        }
-    }
-
-    /* Execute program */
-    puppet_exec_program(program, env);
-
-    /* Check for compilation failure */
-    if (env->compilation_failed) {
-        char error_json[1024];
-        snprintf(error_json, sizeof(error_json),
-                 "{\"error\": \"Catalog compilation failed: %s\"}",
-                 env->failure_message ? env->failure_message : "unknown error");
-        catalog_json = puppet_strdup(error_json);
-    } else {
-        /* Get compiled catalog */
-        puppet_catalog_t *catalog = puppet_env_get_catalog(env);
-        if (catalog) {
-            catalog_json = puppet_catalog_to_json(catalog);
-            puppet_catalog_destroy(catalog);
-        } else {
-            catalog_json = puppet_strdup("{\"error\": \"No catalog generated\"}");
-        }
-    }
-
-    /* Cleanup */
-    puppet_env_destroy(env);
-    puppet_program_destroy(program);
-    if (loader) puppet_loader_destroy(loader);
-
-    return catalog_json;
-}
 
 /**
  * @brief Handle POST /puppet/v4/catalog
@@ -811,6 +813,86 @@ static enum MHD_Result handle_pdb_resources(struct MHD_Connection *connection,
 }
 
 /**
+ * @brief Handle POST /puppet-ca/v1/certificate_request/:certname
+ */
+static enum MHD_Result handle_certificate_request(struct MHD_Connection *connection,
+                                                   const char *certname,
+                                                   const char *csr_pem) {
+    if (!ca_ctx) {
+        return send_error(connection, MHD_HTTP_SERVICE_UNAVAILABLE,
+                         "CA not initialized");
+    }
+
+    if (!csr_pem || strlen(csr_pem) == 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST,
+                         "Missing CSR in request body");
+    }
+
+    if (!certname || strlen(certname) == 0) {
+        return send_error(connection, MHD_HTTP_BAD_REQUEST,
+                         "Missing certname");
+    }
+
+    if (verbose) {
+        fprintf(stderr, "[INFO] Certificate request for: %s\n", certname);
+    }
+
+    /* Check if CSR should be auto-signed */
+    if (autosign_config) {
+        puppet_csr_info_t *csr_info = puppet_csr_info_create(certname, NULL, NULL, NULL);
+        if (!csr_info) {
+            return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                             "Failed to create CSR info");
+        }
+
+        bool should_sign = puppet_autosign_should_sign(autosign_config, csr_info);
+        puppet_csr_info_free(csr_info);
+
+        if (!should_sign) {
+            const char *error_msg = puppet_autosign_get_error(autosign_config);
+            if (verbose) {
+                fprintf(stderr, "[INFO] CSR for %s not auto-signed: %s\n",
+                        certname, error_msg ? error_msg : "policy denied");
+            }
+            return send_error(connection, MHD_HTTP_FORBIDDEN,
+                             "Certificate request not auto-signed. Manual approval required.");
+        }
+
+        if (verbose) {
+            fprintf(stderr, "[INFO] CSR for %s approved for auto-signing\n", certname);
+        }
+    }
+
+    /* Sign the CSR */
+    char *signed_cert_pem = NULL;
+    int result = puppet_ca_sign_csr(ca_ctx, csr_pem, certname,
+                                     PUPPET_CA_CERT_VALIDITY_DAYS,
+                                     &signed_cert_pem);
+
+    if (result != 0 || !signed_cert_pem) {
+        const char *error_msg = puppet_ca_get_error(ca_ctx);
+        if (verbose) {
+            fprintf(stderr, "[ERROR] Failed to sign CSR for %s: %s\n",
+                    certname, error_msg ? error_msg : "unknown error");
+        }
+        return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                         error_msg ? error_msg : "Failed to sign CSR");
+    }
+
+    if (verbose) {
+        fprintf(stderr, "[INFO] Successfully signed certificate for: %s\n", certname);
+    }
+
+    /* Return signed certificate */
+    enum MHD_Result ret = send_file_response(connection, MHD_HTTP_OK,
+                                              signed_cert_pem,
+                                              strlen(signed_cert_pem));
+    puppet_free(signed_cert_pem);
+
+    return ret;
+}
+
+/**
  * @brief Request handler callback
  */
 static enum MHD_Result request_handler(void *cls,
@@ -866,6 +948,10 @@ static enum MHD_Result request_handler(void *cls,
     } else if (strcmp(method, "POST") == 0 &&
                strcmp(url, "/puppet/v4/catalog") == 0) {
         ret = handle_catalog(connection, con_info->post_data);
+    } else if (strcmp(method, "POST") == 0 &&
+               strncmp(url, "/puppet-ca/v1/certificate_request/", 34) == 0) {
+        const char *certname = url + 34;
+        ret = handle_certificate_request(connection, certname, con_info->post_data);
     } else if (strcmp(method, "GET") == 0 &&
                strcmp(url, "/pdb/query/v4/nodes") == 0) {
         ret = handle_pdb_nodes(connection);
@@ -920,7 +1006,7 @@ static void request_completed(void *cls,
  */
 static void print_usage(const char *program_name) {
     printf("Usage: %s [OPTIONS] [manifest_directory]\n", program_name);
-    printf("\nPuppet catalog compilation server\n\n");
+    printf("\nPuppet catalog compilation server with TLS support\n\n");
     printf("Options:\n");
     printf("  -c, --config FILE     Config file (default: %s)\n", DEFAULT_CONFIG_FILE);
     printf("  -p, --port PORT       Listen port (default: %d)\n", DEFAULT_PORT);
@@ -928,6 +1014,8 @@ static void print_usage(const char *program_name) {
     printf("  -D, --hiera-data PATH Path to Hiera data directory\n");
     printf("  -P, --puppetdb PATH   Path to PuppetDB SQLite file\n");
     printf("                        (default: %s)\n", DEFAULT_PUPPETDB_PATH);
+    printf("  -C, --ca-dir PATH     Path to CA directory for TLS\n");
+    printf("                        (default: %s)\n", DEFAULT_CA_DIR);
     printf("  -v, --verbose         Enable verbose output\n");
     printf("  -h, --help            Show this help message\n");
     printf("\nConfig file sections:\n");
@@ -940,6 +1028,8 @@ static void print_usage(const char *program_name) {
     printf("\nPluginsync Endpoints:\n");
     printf("  GET  /puppet/v3/file_metadatas/plugins      List all plugin files (lib/)\n");
     printf("  GET  /puppet/v3/file_content/plugins/<path> Download plugin file\n");
+    printf("\nCertificate Authority Endpoints:\n");
+    printf("  POST /puppet-ca/v1/certificate_request/<certname>  Submit CSR for signing\n");
     printf("\nPuppetDB Endpoints:\n");
     printf("  GET  /pdb/query/v4/nodes                    List all nodes\n");
     printf("  GET  /pdb/query/v4/facts/<certname>         Get facts for node\n");
@@ -947,7 +1037,7 @@ static void print_usage(const char *program_name) {
     printf("  GET  /pdb/query/v4/resources/<type>         Query exported resources\n");
     printf("\nExample:\n");
     printf("  %s -p 8140 /etc/puppet\n", program_name);
-    printf("\n  curl -X POST http://localhost:8140/puppet/v4/catalog \\\n");
+    printf("\n  curl -X POST https://localhost:8140/puppet/v4/catalog \\\n");
     printf("       -H 'Content-Type: application/json' \\\n");
     printf("       -d '{\"certname\": \"node1.example.com\"}'\n");
 }
@@ -964,6 +1054,7 @@ int main(int argc, char *argv[]) {
         {"modules", required_argument, 0, 'm'},
         {"hiera-data", required_argument, 0, 'D'},
         {"puppetdb", required_argument, 0, 'P'},
+        {"ca-dir", required_argument, 0, 'C'},
         {"verbose", no_argument, 0, 'v'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
@@ -971,7 +1062,7 @@ int main(int argc, char *argv[]) {
 
     /* First pass: find config file option */
     optind = 1;
-    while ((opt = getopt_long(argc, argv, "c:p:m:D:P:vh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:p:m:D:P:C:vh", long_options, NULL)) != -1) {
         if (opt == 'c') {
             config_file = optarg;
             break;
@@ -1021,13 +1112,18 @@ int main(int argc, char *argv[]) {
         if (!val) val = config_get_string(file_config, "main", "puppetdb_path", NULL);
         if (val) puppetdb_path = (char *)val;
 
+        /* CA directory */
+        val = config_get_string(file_config, "server", "ca_dir", NULL);
+        if (!val) val = config_get_string(file_config, "main", "ca_dir", NULL);
+        if (val) ca_dir = (char *)val;
+
         /* Verbose */
         verbose = config_get_bool(file_config, "server", "verbose", 0);
     }
 
     /* Second pass: command-line options (highest priority) */
     optind = 1;
-    while ((opt = getopt_long(argc, argv, "c:p:m:D:P:vh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:p:m:D:P:C:vh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'c':
                 /* Already handled */
@@ -1048,6 +1144,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'P':
                 puppetdb_path = optarg;
+                break;
+            case 'C':
+                ca_dir = optarg;
                 break;
             case 'v':
                 verbose = 1;
@@ -1077,8 +1176,20 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    /* Set default CA directory if not specified */
+    if (!ca_dir) {
+        ca_dir = DEFAULT_CA_DIR;
+    }
+
     /* Initialize memory tracking */
     puppet_memory_init();
+
+    /* Initialize OpenSSL */
+    if (puppet_ssl_init() != 0) {
+        fprintf(stderr, "Error: Failed to initialize OpenSSL\n");
+        config_free(file_config);
+        return 1;
+    }
 
     /* Initialize PuppetDB */
     if (!puppetdb_path) {
@@ -1088,6 +1199,58 @@ int main(int argc, char *argv[]) {
     if (!pdb) {
         fprintf(stderr, "Warning: Failed to open PuppetDB at %s\n", puppetdb_path);
         fprintf(stderr, "         PuppetDB endpoints will be unavailable\n");
+    }
+
+    /* Initialize CA */
+    ca_ctx = puppet_ca_init(ca_dir);
+    if (!ca_ctx) {
+        fprintf(stderr, "Warning: Failed to initialize CA at %s\n", ca_dir);
+        fprintf(stderr, "         Certificate request endpoints will be unavailable\n");
+    } else {
+        /* Try to load existing CA or generate if needed */
+        if (!puppet_ca_exists(ca_ctx)) {
+            if (verbose) {
+                fprintf(stderr, "[INFO] CA not found, generating new CA...\n");
+            }
+            char ca_subject[256];
+            snprintf(ca_subject, sizeof(ca_subject), "CN=Puppet CA: puppetc-server");
+            if (puppet_ca_generate(ca_ctx, ca_subject, PUPPET_CA_VALIDITY_DAYS) != 0) {
+                fprintf(stderr, "Warning: Failed to generate CA: %s\n",
+                        puppet_ca_get_error(ca_ctx));
+                puppet_ca_free(ca_ctx);
+                ca_ctx = NULL;
+            } else if (puppet_ca_save(ca_ctx) != 0) {
+                fprintf(stderr, "Warning: Failed to save CA: %s\n",
+                        puppet_ca_get_error(ca_ctx));
+                puppet_ca_free(ca_ctx);
+                ca_ctx = NULL;
+            } else if (verbose) {
+                fprintf(stderr, "[INFO] CA generated successfully\n");
+            }
+        } else {
+            if (puppet_ca_load(ca_ctx) != 0) {
+                fprintf(stderr, "Warning: Failed to load CA: %s\n",
+                        puppet_ca_get_error(ca_ctx));
+                puppet_ca_free(ca_ctx);
+                ca_ctx = NULL;
+            } else if (verbose) {
+                fprintf(stderr, "[INFO] CA loaded successfully\n");
+            }
+        }
+    }
+
+    /* Initialize autosign configuration */
+    const char *autosign_path = "/etc/puppetc/autosign.conf";
+    autosign_config = puppet_autosign_init(autosign_path);
+    if (!autosign_config) {
+        if (verbose) {
+            fprintf(stderr, "[WARNING] Failed to load autosign config, defaulting to manual signing\n");
+        }
+        /* Continue with manual-only mode */
+    }
+    if (autosign_config && verbose) {
+        fprintf(stderr, "[INFO] Autosign mode: %s\n",
+                puppet_autosign_mode_to_string(autosign_config->mode));
     }
 
     /* Set up signal handlers */
@@ -1106,10 +1269,11 @@ int main(int argc, char *argv[]) {
     if (!daemon) {
         fprintf(stderr, "Error: Failed to start HTTP server on port %d\n", port);
         config_free(file_config);
+        puppet_ssl_cleanup();
         return 1;
     }
 
-    printf("puppetc-server started on port %d\n", port);
+    printf("puppetc-server started on port %d (HTTP only - no TLS)\n", port);
     printf("Manifest directory: %s\n", manifest_path);
     if (modules_path) printf("Modules directory: %s\n", modules_path);
     if (hiera_datadir) printf("Hiera data directory: %s\n", hiera_datadir);
@@ -1127,7 +1291,10 @@ int main(int argc, char *argv[]) {
 
     /* Cleanup */
     if (pdb) puppetdb_close(pdb);
+    if (autosign_config) puppet_autosign_free(autosign_config);
+    if (ca_ctx) puppet_ca_free(ca_ctx);
     config_free(file_config);
+    puppet_ssl_cleanup();
     puppet_memory_shutdown();
 
     return 0;

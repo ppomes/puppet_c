@@ -94,6 +94,28 @@ Vagrant.configure("2") do |config|
       ls -la /home/vagrant/*.deb
     SHELL
 
+    server.vm.provision "shell", name: "setup-ssl-ca", inline: <<-SHELL
+      set -e
+
+      echo "Setting up SSL/CA directories..."
+
+      # Create SSL directories - puppetc-server will auto-generate CA
+      mkdir -p /etc/puppetc/ssl/ca/signed
+      mkdir -p /var/lib/puppetc
+      chmod 755 /etc/puppetc/ssl/ca
+
+      # Enable naive autosigning for development (auto-signs all CSRs)
+      mkdir -p /etc/puppetc
+      cat > /etc/puppetc/autosign.conf << 'AUTOSIGN'
+[autosign]
+mode = naive
+AUTOSIGN
+
+      echo "SSL directories created."
+      echo "Autosigning: enabled (naive mode for development)"
+      echo "CA will be auto-generated on first server start."
+    SHELL
+
     server.vm.provision "shell", name: "install-server", inline: <<-SHELL
       set -e
       cd /home/vagrant
@@ -109,7 +131,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/puppetc-server -p 8140 -m /etc/puppet/modules -D /etc/puppet/hiera /etc/puppet
+ExecStart=/usr/bin/puppetc-server -v -p 8140 -m /etc/puppet/modules -D /etc/puppet/hiera -C /etc/puppetc/ssl/ca /etc/puppet
 Restart=always
 RestartSec=5
 Environment=LD_LIBRARY_PATH=/usr/lib
@@ -125,7 +147,11 @@ EOF
       echo ""
       echo "=========================================="
       echo "Puppetc server installed and started!"
-      echo "Server listening on http://192.168.56.10:8140"
+      echo "Server listening on https://192.168.56.10:8140"
+      echo ""
+      echo "SSL Certificates:"
+      echo "  CA: /etc/puppetc/ssl/ca/ca_crt.pem"
+      echo "  Server: /var/lib/puppetc/ssl/certs/puppet-server.pem"
       echo ""
       echo "Manifests: /etc/puppet/manifests (synced from puppetcode/)"
       echo "Edit puppetcode/manifests/site.pp on your host to test!"
@@ -175,6 +201,80 @@ EOF
       ls -la /home/vagrant/*.deb
     SHELL
 
+    agent.vm.provision "shell", name: "setup-agent-ssl", inline: <<-SHELL
+      set -e
+
+      echo "Setting up agent SSL certificates..."
+
+      # Create SSL directories
+      mkdir -p /var/lib/puppetc/ssl/ca
+      mkdir -p /var/lib/puppetc/ssl/certs
+      mkdir -p /var/lib/puppetc/ssl/private_keys
+
+      # Set proper permissions
+      chmod 755 /var/lib/puppetc/ssl/ca
+      chmod 755 /var/lib/puppetc/ssl/certs
+      chmod 700 /var/lib/puppetc/ssl/private_keys
+
+      # Wait for server to be ready
+      echo "Waiting for server to be ready..."
+      max_attempts=60
+      attempt=0
+      while [ $attempt -lt $max_attempts ]; do
+        if curl -sf http://192.168.56.10:8140/status >/dev/null 2>&1; then
+          echo "Server is ready!"
+          break
+        fi
+        attempt=$((attempt + 1))
+        echo "Waiting... ($attempt/$max_attempts)"
+        sleep 2
+      done
+
+      if [ $attempt -eq $max_attempts ]; then
+        echo "ERROR: Server did not become ready in time"
+        exit 1
+      fi
+
+      # Fetch CA certificate from server (via SSH for simplicity)
+      if [ ! -f /var/lib/puppetc/ssl/ca/ca_crt.pem ]; then
+        echo "Fetching CA certificate from server..."
+        sudo -u vagrant ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          vagrant@192.168.56.10 'sudo cat /etc/puppetc/ssl/ca/ca_crt.pem' > /var/lib/puppetc/ssl/ca/ca_crt.pem
+        chmod 644 /var/lib/puppetc/ssl/ca/ca_crt.pem
+        echo "CA certificate fetched."
+      fi
+
+      # Generate agent key and CSR, submit to server CA API
+      if [ ! -f /var/lib/puppetc/ssl/certs/puppet-agent.pem ]; then
+        echo "Generating agent certificate..."
+        openssl genrsa -out /var/lib/puppetc/ssl/private_keys/puppet-agent.pem 2048 2>/dev/null
+        openssl req -new -key /var/lib/puppetc/ssl/private_keys/puppet-agent.pem \
+          -out /tmp/puppet-agent.csr -subj "/CN=puppet-agent" 2>/dev/null
+
+        # Submit CSR to server CA API (autosigning is enabled, will return signed cert)
+        echo "Submitting CSR to server CA API..."
+        curl -sf -X POST "http://192.168.56.10:8140/puppet-ca/v1/certificate_request/puppet-agent" \
+          -H "Content-Type: text/plain" \
+          -d "$(cat /tmp/puppet-agent.csr)" > /var/lib/puppetc/ssl/certs/puppet-agent.pem
+
+        # Verify we got a certificate
+        if grep -q "BEGIN CERTIFICATE" /var/lib/puppetc/ssl/certs/puppet-agent.pem; then
+          echo "Certificate signed successfully!"
+        else
+          echo "ERROR: Failed to get signed certificate"
+          cat /var/lib/puppetc/ssl/certs/puppet-agent.pem
+          exit 1
+        fi
+
+        # Set proper permissions
+        chmod 600 /var/lib/puppetc/ssl/private_keys/puppet-agent.pem
+        chmod 644 /var/lib/puppetc/ssl/certs/puppet-agent.pem
+        rm /tmp/puppet-agent.csr
+      fi
+
+      echo "SSL setup complete for agent."
+    SHELL
+
     agent.vm.provision "shell", name: "install-agent", inline: <<-SHELL
       set -e
       cd /home/vagrant
@@ -185,17 +285,21 @@ EOF
         ./libfacter-c0_*.deb \
         ./puppetc-agent_*.deb
 
-      # Configure agent to use server
-      echo 'PUPPET_SERVER="http://192.168.56.10:8140"' > /etc/default/puppetc-agent
+      # Configure agent to use server with HTTPS
+      echo 'PUPPET_SERVER="https://192.168.56.10:8140"' > /etc/default/puppetc-agent
 
       echo ""
       echo "=========================================="
       echo "Puppetc agent installed!"
       echo ""
+      echo "SSL Certificates:"
+      echo "  CA: /var/lib/puppetc/ssl/ca/ca_crt.pem"
+      echo "  Client: /var/lib/puppetc/ssl/certs/puppet-agent.pem"
+      echo ""
       echo "Test commands:"
-      echo "  puppetc-agent -s http://192.168.56.10:8140 -n    # noop mode"
-      echo "  puppetc-agent -s http://192.168.56.10:8140 -a    # apply mode"
-      echo "  puppetc-agent -s http://192.168.56.10:8140 -f    # show facts"
+      echo "  puppetc-agent -s https://192.168.56.10:8140 -n    # noop mode"
+      echo "  puppetc-agent -s https://192.168.56.10:8140 -a    # apply mode"
+      echo "  puppetc-agent -s https://192.168.56.10:8140 -f    # show facts"
       echo "=========================================="
     SHELL
   end
