@@ -3388,9 +3388,11 @@ void puppet_exec_program(puppet_program_t *program, puppet_env_t *env) {
         /* Fallback to default node if specific node was requested but not found */
         if (env->node_name && !env->node_matched && env->default_node) {
             puppet_debug("Node '%s' not found, falling back to 'default' node", env->node_name);
-            /* Temporarily allow default node execution */
+            /* Temporarily allow default node execution while preserving certname for facts */
             char *saved_node_name = env->node_name;
             env->node_name = NULL;
+            /* Pre-set current_node_certname so facts lookup uses the original certname */
+            env->current_node_certname = saved_node_name;
             puppet_exec_node(env->default_node, env);
             env->node_name = saved_node_name;
         }
@@ -3888,8 +3890,11 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
         /* Track node processing for CI validation */
         env->nodes_processed++;
         /* Use actual node name from -n option when available (for regex matches),
-         * otherwise use node_name from the node block */
-        env->current_node_certname = (char*)(env->node_name ? env->node_name : node_name);
+         * otherwise use node_name from the node block.
+         * Don't overwrite if already set (e.g., for default node fallback) */
+        if (!env->current_node_certname) {
+            env->current_node_certname = (char*)(env->node_name ? env->node_name : node_name);
+        }
         env->current_node_failed = false;
 
         /* Print node name for CI tracking */
@@ -3981,10 +3986,12 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
 
         /* Switch to node-specific facts if available (skip in parallel mode - uses env->current_node_certname) */
         if (env->facts_db && !env->parallel_nodes) {
-            if (puppet_facts_db_set_current_node(env->facts_db, node_name) == 0) {
-                puppet_debug("Using facts for node: %s", node_name);
+            /* Use the actual certname (from -n option) rather than node block name (e.g., "default") */
+            const char *facts_node = env->current_node_certname ? env->current_node_certname : node_name;
+            if (puppet_facts_db_set_current_node(env->facts_db, facts_node) == 0) {
+                puppet_debug("Using facts for node: %s", facts_node);
             } else {
-                puppet_debug("No facts found for node %s, using default facts", node_name);
+                puppet_debug("No facts found for node %s, using default facts", facts_node);
             }
         }
 
