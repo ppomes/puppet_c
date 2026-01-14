@@ -285,8 +285,8 @@ run_agent() {
         error "Agent VM not running. Run: $0 up"
     fi
 
-    # Use installed binary
-    multipass exec "$VM_AGENT" -- puppetc-agent -s "http://$server_ip:8140" $mode -v
+    # Use installed binary (run as root to manage system files)
+    multipass exec "$VM_AGENT" -- sudo puppetc-agent -s "http://$server_ip:8140" $mode -v
 }
 
 status() {
