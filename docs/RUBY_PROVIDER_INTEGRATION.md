@@ -268,10 +268,9 @@ ruby_apply_result_t apply_ruby_provider(...) {
 
 ## Limitations
 
-1. **No pluginsync**: Module libs must be pre-installed on agents
-2. **Limited Puppet API**: Only essential stubs implemented
-3. **No catalog functions**: `create_resources()` in Ruby not supported
-4. **Single provider**: Only one provider per type supported
+1. **Limited Puppet API**: Only essential stubs implemented
+2. **No catalog functions**: `create_resources()` in Ruby not supported
+3. **Single provider**: Only one provider per type supported
 
 ## Example: MySQL Module
 
