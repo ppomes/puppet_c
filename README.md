@@ -372,12 +372,15 @@ docker compose -f docker-compose.demo.yml down
 - Conditionals: if/elsif/else, unless, case, ternary, selector
 - Variable scoping, string interpolation, heredocs
 - ERB templates (via embedded Ruby)
+- EPP templates (native Puppet templating)
 - Hiera lookups (YAML backend)
 - Module autoloading
 - Virtual resources (`@resource`), `realize()`, collectors (`<| |>`)
 - Exported resources (`@@resource`), exported collectors (`<<| |>>`) with PuppetDB
 - Resource overrides (`Type['title'] { attr => value }`)
 - Iterator functions: `each()`, `map()`, `filter()`, `reduce()`
+- Deferred functions (`Deferred()` with agent-side evaluation)
+- Pluginsync (server serves module plugins to agents)
 - ~50 stdlib functions
 
 ### Implemented Functions
@@ -424,11 +427,9 @@ docker compose -f docker-compose.demo.yml down
 
 ### Known Limitations
 
-- **Deferred functions**: `Deferred()` for runtime evaluation not supported
 - **Type matching**: `=~ Type` syntax parsed but not evaluated
-- **Resource chains**: `->`, `~>` have limited support
+- **Resource chains**: `->`, `~>` parsed but ordering not enforced
 - **All-nodes mode**: ERB templates skipped for faster CI/CD validation
-- **No pluginsync**: Custom facts/functions must be pre-installed
 
 ## Security
 
