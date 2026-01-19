@@ -251,7 +251,7 @@ up() {
     echo "=========================================="
     echo -e "${GREEN}VMs ready!${NC}"
     echo ""
-    echo "Server: https://$server_ip:8140"
+    echo "Server: http://$server_ip:8140"
     echo "Agent:  $agent_ip"
     echo ""
     echo "Test commands:"
@@ -309,8 +309,8 @@ run_agent() {
     fi
 
     # Use installed binary (run as root to manage system files)
-    # Uses HTTPS with mTLS - agent will auto-enroll certificate on first run
-    multipass exec "$VM_AGENT" -- sudo puppetc-agent -s "https://$server_ip:8140" $mode -v
+    # Note: Server uses HTTP - TLS not yet implemented in puppetc-server
+    multipass exec "$VM_AGENT" -- sudo puppetc-agent -s "http://$server_ip:8140" $mode -v
 }
 
 status() {
@@ -321,7 +321,7 @@ status() {
 
     if vm_running "$VM_SERVER"; then
         local server_ip=$(get_vm_ip "$VM_SERVER")
-        echo "Server: https://$server_ip:8140"
+        echo "Server: http://$server_ip:8140"
         echo "  Logs: multipass exec $VM_SERVER -- tail -f /tmp/puppetc-server.log"
     fi
 
