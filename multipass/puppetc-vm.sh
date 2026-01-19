@@ -167,7 +167,29 @@ setup_agent() {
 
     build_and_install "$VM_AGENT"
 
+    # Create SSL directories for agent
+    multipass exec "$VM_AGENT" -- bash -c '
+        sudo mkdir -p /var/lib/puppetc/ssl/ca /var/lib/puppetc/ssl/certs /var/lib/puppetc/ssl/private_keys
+        sudo chown -R root:root /var/lib/puppetc
+    '
+
     info "Agent ready. Server IP: $server_ip"
+}
+
+copy_ca_to_agent() {
+    info "Copying CA certificate to agent..."
+
+    # Get CA cert from server and copy to agent
+    local ca_cert=$(multipass exec "$VM_SERVER" -- sudo cat /etc/puppetc/ssl/ca/ca_crt.pem 2>/dev/null)
+    if [ -z "$ca_cert" ]; then
+        warn "CA certificate not found on server yet. Agent will fetch it on first run."
+        return
+    fi
+
+    # Write CA cert to agent
+    echo "$ca_cert" | multipass exec "$VM_AGENT" -- sudo tee /var/lib/puppetc/ssl/ca/ca_crt.pem > /dev/null
+    multipass exec "$VM_AGENT" -- sudo chmod 644 /var/lib/puppetc/ssl/ca/ca_crt.pem
+    info "CA certificate copied to agent"
 }
 
 start_server_daemon() {
@@ -220,6 +242,7 @@ up() {
     setup_server
     setup_agent
     start_server_daemon
+    copy_ca_to_agent
 
     local server_ip=$(get_vm_ip "$VM_SERVER")
     local agent_ip=$(get_vm_ip "$VM_AGENT")
@@ -228,7 +251,7 @@ up() {
     echo "=========================================="
     echo -e "${GREEN}VMs ready!${NC}"
     echo ""
-    echo "Server: $server_ip:8140"
+    echo "Server: https://$server_ip:8140"
     echo "Agent:  $agent_ip"
     echo ""
     echo "Test commands:"
@@ -286,7 +309,8 @@ run_agent() {
     fi
 
     # Use installed binary (run as root to manage system files)
-    multipass exec "$VM_AGENT" -- sudo puppetc-agent -s "http://$server_ip:8140" $mode -v
+    # Uses HTTPS with mTLS - agent will auto-enroll certificate on first run
+    multipass exec "$VM_AGENT" -- sudo puppetc-agent -s "https://$server_ip:8140" $mode -v
 }
 
 status() {
@@ -297,7 +321,7 @@ status() {
 
     if vm_running "$VM_SERVER"; then
         local server_ip=$(get_vm_ip "$VM_SERVER")
-        echo "Server: $server_ip:8140"
+        echo "Server: https://$server_ip:8140"
         echo "  Logs: multipass exec $VM_SERVER -- tail -f /tmp/puppetc-server.log"
     fi
 
@@ -338,9 +362,12 @@ rebuild() {
         build_and_install "$VM_AGENT"
     fi
 
-    # Restart server
+    # Restart server and refresh CA cert on agent
     if vm_running "$VM_SERVER"; then
         start_server_daemon
+        if vm_running "$VM_AGENT"; then
+            copy_ca_to_agent
+        fi
     fi
 
     info "Rebuild complete!"
