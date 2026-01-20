@@ -61,6 +61,7 @@ static puppet_autosign_config_t *autosign_config = NULL;
 static int verbose = 0;
 static char *server_cert_pem = NULL;  /* Server certificate for TLS */
 static char *server_key_pem = NULL;   /* Server private key for TLS */
+static char *ca_cert_pem = NULL;      /* CA certificate for mTLS client verification */
 
 /**
  * @brief Signal handler for graceful shutdown
@@ -97,17 +98,19 @@ static char *read_file_to_string(const char *path) {
 }
 
 /**
- * @brief Load server certificate and key from CA directory for TLS
+ * @brief Load server certificate, key, and CA certificate from CA directory for TLS
  * @param ca_directory CA directory path
  * @return 0 on success, -1 on error
  */
 static int load_server_tls_credentials(const char *ca_directory) {
     char cert_path[PUPPET_CA_MAX_PATH];
     char key_path[PUPPET_CA_MAX_PATH];
+    char ca_path[PUPPET_CA_MAX_PATH];
 
-    /* Use server certificate (not CA certificate) for TLS */
+    /* Load server certificate for TLS */
     snprintf(cert_path, sizeof(cert_path), "%s/server_crt.pem", ca_directory);
     snprintf(key_path, sizeof(key_path), "%s/server_key.pem", ca_directory);
+    snprintf(ca_path, sizeof(ca_path), "%s/ca_crt.pem", ca_directory);
 
     server_cert_pem = read_file_to_string(cert_path);
     if (!server_cert_pem) {
@@ -120,6 +123,17 @@ static int load_server_tls_credentials(const char *ca_directory) {
         fprintf(stderr, "Error: Failed to load server key from %s\n", key_path);
         free(server_cert_pem);
         server_cert_pem = NULL;
+        return -1;
+    }
+
+    /* Load CA certificate for mTLS client verification */
+    ca_cert_pem = read_file_to_string(ca_path);
+    if (!ca_cert_pem) {
+        fprintf(stderr, "Error: Failed to load CA certificate from %s\n", ca_path);
+        free(server_cert_pem);
+        free(server_key_pem);
+        server_cert_pem = NULL;
+        server_key_pem = NULL;
         return -1;
     }
 
@@ -1393,12 +1407,18 @@ int main(int argc, char *argv[]) {
     int use_tls = (server_cert_pem && server_key_pem);
 
     if (use_tls) {
+        /* Start HTTPS server with mTLS (mutual TLS)
+         * - MHD_USE_TLS: Enable TLS
+         * - MHD_OPTION_HTTPS_MEM_TRUST: CA certificate for verifying client certificates
+         * Note: Client certs are optional for CSR submission endpoint
+         */
         daemon = MHD_start_daemon(MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG | MHD_USE_TLS,
                                    port,
                                    NULL, NULL,
                                    &request_handler, NULL,
                                    MHD_OPTION_HTTPS_MEM_KEY, server_key_pem,
                                    MHD_OPTION_HTTPS_MEM_CERT, server_cert_pem,
+                                   MHD_OPTION_HTTPS_MEM_TRUST, ca_cert_pem,
                                    MHD_OPTION_NOTIFY_COMPLETED, &request_completed, NULL,
                                    MHD_OPTION_END);
     } else {
@@ -1440,6 +1460,7 @@ int main(int argc, char *argv[]) {
     if (ca_ctx) puppet_ca_free(ca_ctx);
     if (server_cert_pem) free(server_cert_pem);
     if (server_key_pem) free(server_key_pem);
+    if (ca_cert_pem) free(ca_cert_pem);
     config_free(file_config);
     puppet_ssl_cleanup();
     puppet_memory_shutdown();

@@ -862,6 +862,16 @@ static int run_agent(agent_config_t *config) {
         }
     }
 
+    /* Ensure we have a valid certificate for mTLS (skip if loading local catalog) */
+    if (!config->catalog_file) {
+        if (ensure_certificate(config) != 0) {
+            print_error("Failed to obtain certificate from server");
+            print_error("Check server connectivity and autosign configuration");
+            facter_destroy(facts);
+            return 1;
+        }
+    }
+
     size_t fact_count;
     facter_list(facts, &fact_count);
     print_info("Facts collected: %zu", fact_count);
