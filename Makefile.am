@@ -1,5 +1,16 @@
 SUBDIRS = common facter compiler server agent tests
 
+# Man pages
+dist_man1_MANS = \
+    man/man1/puppetc-compile.1 \
+    man/man1/puppetc-server.1 \
+    man/man1/puppetc-agent.1 \
+    man/man1/puppetc-ca.1 \
+    man/man1/facter_c.1
+
+dist_man5_MANS = \
+    man/man5/puppet.conf.5
+
 # Additional files to distribute
 EXTRA_DIST = README.md scripts/dump_puppetdb_facts.py
 

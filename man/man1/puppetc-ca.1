@@ -1,0 +1,121 @@
+.TH PUPPETC-CA 1 "January 2026" "puppetc 0.0.1" "User Commands"
+.SH NAME
+puppetc-ca \- Certificate Authority management for puppetc
+.SH SYNOPSIS
+.B puppetc-ca
+[\fIOPTIONS\fR] <\fIcommand\fR> [\fIargs\fR]
+.SH DESCRIPTION
+.B puppetc-ca
+is a command-line tool for managing the puppetc Certificate Authority.
+It allows administrators to list, sign, revoke, and inspect certificates
+and certificate signing requests (CSRs).
+.PP
+This tool is primarily used when autosigning is disabled on the server
+and manual certificate approval is required.
+.SH OPTIONS
+.TP
+.BR \-C ", " \-\-ca\-dir " " \fIPATH\fR
+Path to CA directory. Default: \fB/etc/puppetc/ssl/ca\fR
+.TP
+.BR \-v ", " \-\-verbose
+Enable verbose output.
+.TP
+.BR \-h ", " \-\-help
+Show help message and exit.
+.SH COMMANDS
+.TP
+.B list
+List all certificates (both pending CSRs and signed certificates).
+.TP
+.B list \-\-pending
+List only pending Certificate Signing Requests.
+.TP
+.B list \-\-signed
+List only signed certificates.
+.TP
+.B sign \fIcertname\fR
+Sign a pending CSR for the specified certname.
+.TP
+.B sign \-\-all
+Sign all pending CSRs.
+.TP
+.B revoke \fIcertname\fR
+Revoke (delete) a signed certificate.
+.TP
+.B clean \fIcertname\fR
+Remove a pending CSR without signing it.
+.TP
+.B print \fIcertname\fR
+Print the contents of a certificate or CSR in PEM format.
+.SH FILES
+The CA directory contains the following structure:
+.TP
+.I ca_crt.pem
+CA certificate
+.TP
+.I ca_key.pem
+CA private key
+.TP
+.I serial
+Serial number counter for signed certificates
+.TP
+.I requests/
+Directory containing pending CSRs (\fI<certname>.pem\fR)
+.TP
+.I signed/
+Directory containing signed certificates (\fI<certname>.pem\fR)
+.SH EXAMPLES
+List all certificates:
+.PP
+.RS
+puppetc-ca list
+.RE
+.PP
+List only pending CSRs:
+.PP
+.RS
+puppetc-ca list \-\-pending
+.RE
+.PP
+Sign a specific certificate request:
+.PP
+.RS
+puppetc-ca sign webserver1.example.com
+.RE
+.PP
+Sign all pending requests:
+.PP
+.RS
+puppetc-ca sign \-\-all
+.RE
+.PP
+Revoke a certificate:
+.PP
+.RS
+puppetc-ca revoke old\-server.example.com
+.RE
+.PP
+View certificate details:
+.PP
+.RS
+puppetc-ca print webserver1.example.com
+.RE
+.PP
+Use a custom CA directory:
+.PP
+.RS
+puppetc-ca \-C /opt/puppet/ssl/ca list
+.RE
+.SH EXIT STATUS
+.TP
+.B 0
+Success
+.TP
+.B 1
+Error (certificate not found, signing failed, etc.)
+.SH SEE ALSO
+.BR puppetc-server (1),
+.BR puppetc-agent (1),
+.BR openssl (1)
+.SH AUTHORS
+Pierre Pomes <pierre.pomes@gmail.com>

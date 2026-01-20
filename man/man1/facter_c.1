@@ -1,0 +1,157 @@
+.TH FACTER_C 1 "January 2026" "puppetc 0.0.1" "User Commands"
+.SH NAME
+facter_c \- Native system fact collection tool
+.SH SYNOPSIS
+.B facter_c
+[\fIOPTIONS\fR] [\fIFACT\fR...]
+.SH DESCRIPTION
+.B facter_c
+is a native fact collection tool that gathers system information and
+outputs it in various formats. It is compatible with Puppet's facter
+and can be used standalone or integrated with puppetc-agent.
+.PP
+Facts include information about the operating system, hardware, network
+configuration, and more.
+.SH OPTIONS
+.TP
+.BR \-j ", " \-\-json
+Output facts in JSON format.
+.TP
+.BR \-y ", " \-\-yaml
+Output facts in YAML format.
+.TP
+.BR \-l ", " \-\-list
+List all available fact names without values.
+.TP
+.BR \-h ", " \-\-help
+Show help message and exit.
+.SH ARGUMENTS
+.TP
+.I FACT
+One or more fact names to display. If no facts are specified,
+all facts are displayed.
+.SH AVAILABLE FACTS
+The following facts are collected:
+.SS System Information
+.TP
+.B hostname
+System hostname
+.TP
+.B fqdn
+Fully qualified domain name
+.TP
+.B kernel
+Kernel name (e.g., Linux)
+.TP
+.B kernelrelease
+Kernel version
+.TP
+.B uptime_seconds
+System uptime in seconds
+.TP
+.B uptime_hours
+System uptime in hours
+.TP
+.B uptime_days
+System uptime in days
+.SS Operating System
+.TP
+.B operatingsystem
+Operating system name (e.g., Ubuntu, Debian)
+.TP
+.B operatingsystemrelease
+Operating system version
+.TP
+.B osfamily
+Operating system family (e.g., Debian, RedHat)
+.TP
+.B os
+Structured fact with OS details
+.SS Hardware
+.TP
+.B architecture
+CPU architecture (e.g., x86_64)
+.TP
+.B processorcount
+Number of CPU cores
+.TP
+.B memorysize_mb
+Total memory in megabytes
+.TP
+.B memoryfree_mb
+Available memory in megabytes
+.TP
+.B is_virtual
+Whether the system is a virtual machine
+.SS Network
+.TP
+.B ipaddress
+Primary IP address
+.TP
+.B macaddress
+Primary MAC address
+.TP
+.B networking
+Structured fact with network interface details
+.SH OUTPUT FORMATS
+By default, facts are output in a human-readable text format:
+.PP
+.RS
+.nf
+hostname => myserver
+ipaddress => 192.168.1.100
+.fi
+.RE
+.PP
+With \fB\-j\fR, facts are output as JSON:
+.PP
+.RS
+.nf
+{
+  "hostname": "myserver",
+  "ipaddress": "192.168.1.100"
+}
+.fi
+.RE
+.SH EXAMPLES
+Show all facts:
+.PP
+.RS
+facter_c
+.RE
+.PP
+Show specific facts:
+.PP
+.RS
+facter_c hostname ipaddress osfamily
+.RE
+.PP
+Output as JSON:
+.PP
+.RS
+facter_c \-j
+.RE
+.PP
+List available fact names:
+.PP
+.RS
+facter_c \-l
+.RE
+.PP
+Get a single fact value for scripting:
+.PP
+.RS
+facter_c hostname
+.RE
+.SH EXIT STATUS
+.TP
+.B 0
+Success
+.TP
+.B 1
+Error
+.SH SEE ALSO
+.BR puppetc-agent (1),
+.BR puppetc-compile (1)
+.SH AUTHORS
+Pierre Pomes <pierre.pomes@gmail.com>

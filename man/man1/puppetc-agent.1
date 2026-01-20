@@ -1,0 +1,156 @@
+.TH PUPPETC-AGENT 1 "January 2026" "puppetc 0.0.1" "User Commands"
+.SH NAME
+puppetc-agent \- Puppet agent client with mTLS support
+.SH SYNOPSIS
+.B puppetc-agent
+[\fIOPTIONS\fR]
+.SH DESCRIPTION
+.B puppetc-agent
+is a Puppet agent that connects to a puppetc-server, requests a catalog,
+and applies resources to bring the system into the desired state. It supports
+mutual TLS (mTLS) authentication and automatic certificate enrollment.
+.PP
+On first run, the agent automatically generates a keypair, submits a
+Certificate Signing Request (CSR) to the server, and stores the signed
+certificate for future connections.
+.SH OPTIONS
+.TP
+.BR \-c ", " \-\-config " " \fIFILE\fR
+Path to configuration file. Default: \fB/etc/puppetc/puppet.conf\fR
+.TP
+.BR \-s ", " \-\-server " " \fIURL\fR
+Server URL. Default: \fBhttp://localhost:8140\fR
+.TP
+.BR \-\-certname " " \fINAME\fR
+Node certificate name. Default: system hostname.
+.TP
+.BR \-e ", " \-\-environment " " \fIENV\fR
+Puppet environment. Default: \fBproduction\fR
+.TP
+.BR \-F ", " \-\-catalog\-file " " \fIFILE\fR
+Apply a local catalog JSON file instead of requesting from server.
+.TP
+.BR \-L ", " \-\-libdir " " \fIPATH\fR
+Plugin library directory for custom types and facts.
+Default: \fB/var/lib/puppetc/lib\fR
+.TP
+.BR \-a ", " \-\-apply
+Apply catalog resources. Some resources require root privileges.
+.TP
+.BR \-n ", " \-\-noop
+No-op mode. Simulate changes without applying them.
+.TP
+.BR \-f ", " \-\-facts
+Show collected facts and exit.
+.TP
+.BR \-C ", " \-\-catalog
+Show the full catalog JSON and exit.
+.TP
+.BR \-\-ruby
+Enable Ruby support for custom types and facts.
+.TP
+.BR \-\-no\-ruby
+Disable Ruby support. This is the default.
+.TP
+.BR \-\-pluginsync
+Enable pluginsync to fetch modules' \fBlib/\fR files from the server.
+.TP
+.BR \-\-no\-pluginsync
+Disable pluginsync. This is the default.
+.TP
+.BR \-v ", " \-\-verbose
+Enable verbose output.
+.TP
+.BR \-h ", " \-\-help
+Show help message and exit.
+.SH CERTIFICATE MANAGEMENT
+On first connection, the agent performs the following steps:
+.IP 1. 3
+Generates a 2048-bit RSA keypair
+.IP 2. 3
+Creates a Certificate Signing Request (CSR) with the certname
+.IP 3. 3
+Submits the CSR to the server
+.IP 4. 3
+Receives and stores the signed certificate
+.IP 5. 3
+Uses the certificate for mTLS on all subsequent requests
+.PP
+Certificate files are stored in the SSL directory:
+.TP
+.I /var/lib/puppetc/ssl/certs/<certname>.pem
+Signed client certificate
+.TP
+.I /var/lib/puppetc/ssl/private_keys/<certname>.pem
+Client private key (mode 0600)
+.TP
+.I /var/lib/puppetc/ssl/ca/ca_crt.pem
+CA certificate for server verification
+.SH ENVIRONMENT VARIABLES
+.TP
+.B PUPPET_SERVER
+Server URL (overrides config file, overridden by \fB\-s\fR option)
+.TP
+.B PUPPET_SSL_DIR
+SSL certificate directory
+.SH FILES
+.TP
+.I /etc/puppetc/puppet.conf
+Main configuration file. See \fBpuppet.conf\fR(5).
+.TP
+.I /var/lib/puppetc/ssl/
+SSL certificate directory.
+.TP
+.I /var/lib/puppetc/lib/
+Plugin library directory for custom types and facts.
+.SH EXIT STATUS
+.TP
+.B 0
+Success (catalog applied successfully or no changes needed)
+.TP
+.B 1
+Error (connection failure, catalog error, or resource failures)
+.SH EXAMPLES
+Run agent in no-op mode (show what would change):
+.PP
+.RS
+puppetc-agent \-n
+.RE
+.PP
+Apply catalog from server:
+.PP
+.RS
+sudo puppetc-agent \-a
+.RE
+.PP
+Connect to a specific server:
+.PP
+.RS
+puppetc-agent \-s https://puppet.example.com:8140 \-a
+.RE
+.PP
+Apply a local catalog file:
+.PP
+.RS
+puppetc-agent \-F catalog.json \-a
+.RE
+.PP
+Show collected facts:
+.PP
+.RS
+puppetc-agent \-f
+.RE
+.PP
+Enable Ruby support and pluginsync:
+.PP
+.RS
+puppetc-agent \-\-ruby \-\-pluginsync \-a
+.RE
+.SH SEE ALSO
+.BR puppetc-server (1),
+.BR puppetc-compile (1),
+.BR puppetc-ca (1),
+.BR facter_c (1),
+.BR puppet.conf (5)
+.SH AUTHORS
+Pierre Pomes <pierre.pomes@gmail.com>

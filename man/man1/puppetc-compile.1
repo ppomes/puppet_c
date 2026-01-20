@@ -1,0 +1,114 @@
+.TH PUPPETC-COMPILE 1 "January 2026" "puppetc 0.0.1" "User Commands"
+.SH NAME
+puppetc-compile \- Puppet manifest compiler and validator
+.SH SYNOPSIS
+.B puppetc-compile
+[\fIOPTIONS\fR] <\fIpuppet_file_or_directory\fR>
+.SH DESCRIPTION
+.B puppetc-compile
+is a native Puppet manifest compiler that parses Puppet DSL files, evaluates
+manifests, and generates catalogs. It can be used for syntax validation,
+catalog compilation, and CI/CD integration.
+.PP
+When a directory is provided, \fBsite.pp\fR will be loaded from the
+\fBmanifests/\fR subdirectory and modules will be loaded from the
+\fBmodules/\fR subdirectory.
+.SH OPTIONS
+.TP
+.BR \-j ", " \-\-json
+Output the parsed AST (Abstract Syntax Tree) as JSON.
+.TP
+.BR \-e ", " \-\-eval
+Evaluate the manifest and compile the catalog.
+.TP
+.BR \-c ", " \-\-catalog
+Output the compiled catalog as JSON. Implies \fB\-e\fR.
+.TP
+.BR \-p ", " \-\-pretty
+Output the catalog in human-readable format with colors. Implies \fB\-e\fR.
+.TP
+.BR \-o ", " \-\-output " " \fIFILE\fR
+Write output to FILE instead of stdout.
+.TP
+.BR \-m ", " \-\-modules " " \fIPATH\fR
+Path to modules directory. Default: \fB./modules\fR
+.TP
+.BR \-n ", " \-\-node " " \fINAME\fR
+Execute only the specified node definition. Supports regex node matching.
+.TP
+.BR \-a ", " \-\-all\-nodes
+Execute all literal node definitions. Regex nodes are skipped.
+Useful for CI/CD validation.
+.TP
+.BR \-f ", " \-\-facts " " \fIFILE\fR
+Load facts from a JSON file. Supports both facter and PuppetDB formats.
+.TP
+.BR \-t ", " \-\-template " " \fITITLE\fR
+Display the template output for a file resource with the specified title.
+.TP
+.BR \-D ", " \-\-hiera\-data " " \fIPATH\fR
+Path to Hiera data directory. Default: \fB./data\fR
+.TP
+.BR \-s ", " \-\-summary
+Print a validation summary suitable for CI/CD. Implies \fB\-e\fR.
+Exit code: 0 = all nodes OK, 1 = errors found.
+.TP
+.BR \-P ", " \-\-parallel
+Process nodes in parallel for faster execution. Requires \fB\-\-all\-nodes\fR.
+.TP
+.BR \-v ", " \-\-verbose
+Enable verbose/debug output.
+.TP
+.BR \-h ", " \-\-help
+Show help message and exit.
+.SH NODE EXECUTION
+By default, only the \fBdefault\fR node is executed. Use \fB\-\-node\fR to
+execute a specific node (supports regex matching), or \fB\-\-all\-nodes\fR
+to execute all literal node definitions.
+.SH EXIT STATUS
+.TP
+.B 0
+Success (or all nodes validated successfully in CI mode)
+.TP
+.B 1
+Error (syntax error, compilation failure, or validation errors in CI mode)
+.SH EXAMPLES
+Validate a manifest file:
+.PP
+.RS
+puppetc-compile \-e site.pp
+.RE
+.PP
+Compile a catalog for a specific node:
+.PP
+.RS
+puppetc-compile \-c \-n webserver1 /etc/puppet
+.RE
+.PP
+Validate all nodes for CI:
+.PP
+.RS
+puppetc-compile \-\-all\-nodes \-\-summary /etc/puppet
+.RE
+.PP
+Output catalog as JSON:
+.PP
+.RS
+puppetc-compile \-c \-o catalog.json /etc/puppet
+.RE
+.SH FILES
+.TP
+.I manifests/site.pp
+Main manifest file when using directory mode.
+.TP
+.I modules/
+Modules directory containing Puppet modules.
+.TP
+.I data/
+Default Hiera data directory.
+.SH SEE ALSO
+.BR puppetc-server (1),
+.BR puppetc-agent (1),
+.BR puppet.conf (5)
+.SH AUTHORS
+Pierre Pomes <pierre.pomes@gmail.com>

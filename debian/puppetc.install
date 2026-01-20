@@ -1,2 +1,5 @@
 usr/bin/puppetc-compile
 usr/bin/facter_c
+usr/share/man/man1/puppetc-compile.1
+usr/share/man/man1/facter_c.1
+usr/share/man/man5/puppet.conf.5

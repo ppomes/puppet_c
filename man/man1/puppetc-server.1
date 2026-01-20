@@ -1,0 +1,152 @@
+.TH PUPPETC-SERVER 1 "January 2026" "puppetc 0.0.1" "User Commands"
+.SH NAME
+puppetc-server \- Puppet catalog compilation server with mTLS support
+.SH SYNOPSIS
+.B puppetc-server
+[\fIOPTIONS\fR] [\fImanifest_directory\fR]
+.SH DESCRIPTION
+.B puppetc-server
+is an HTTPS server that provides a REST API for Puppet catalog compilation,
+file serving, pluginsync, certificate authority operations, and PuppetDB
+queries. It supports mutual TLS (mTLS) authentication for secure
+agent-server communication.
+.SH OPTIONS
+.TP
+.BR \-c ", " \-\-config " " \fIFILE\fR
+Path to configuration file. Default: \fB/etc/puppetc/puppet.conf\fR
+.TP
+.BR \-p ", " \-\-port " " \fIPORT\fR
+TCP port to listen on. Default: \fB8140\fR
+.TP
+.BR \-m ", " \-\-modules " " \fIPATH\fR
+Path to modules directory.
+.TP
+.BR \-D ", " \-\-hiera\-data " " \fIPATH\fR
+Path to Hiera data directory.
+.TP
+.BR \-P ", " \-\-puppetdb " " \fIPATH\fR
+Path to PuppetDB SQLite file.
+Default: \fB/var/lib/puppetc/puppetdb.sqlite\fR
+.TP
+.BR \-C ", " \-\-ca\-dir " " \fIPATH\fR
+Path to Certificate Authority directory for TLS.
+Default: \fB/etc/puppetc/ssl/ca\fR
+.TP
+.BR \-v ", " \-\-verbose
+Enable verbose output.
+.TP
+.BR \-h ", " \-\-help
+Show help message and exit.
+.SH API ENDPOINTS
+.SS Catalog Compilation
+.TP
+.B POST /puppet/v4/catalog
+Compile a catalog for a node. Request body should be JSON containing
+\fBcertname\fR, \fBenvironment\fR, and \fBfacts\fR.
+.SS File Server
+.TP
+.B GET /puppet/v3/file_content/modules/<module>/<path>
+Serve a file from a module's \fBfiles/\fR directory.
+.SS Pluginsync
+.TP
+.B GET /puppet/v3/file_metadatas/plugins
+List all plugin files from modules' \fBlib/\fR directories.
+.TP
+.B GET /puppet/v3/file_content/plugins/<path>
+Download a specific plugin file.
+.SS Certificate Authority
+.TP
+.B POST /puppet-ca/v1/certificate_request/<certname>
+Submit a Certificate Signing Request (CSR) for signing.
+.SS PuppetDB
+.TP
+.B GET /pdb/query/v4/nodes
+List all known nodes.
+.TP
+.B GET /pdb/query/v4/facts/<certname>
+Get facts for a specific node.
+.TP
+.B GET /pdb/query/v4/catalogs/<certname>
+Get the last compiled catalog for a node.
+.TP
+.B GET /pdb/query/v4/resources/<type>
+Query exported resources by type.
+.SS Health Check
+.TP
+.B GET /status
+Returns server status as JSON.
+.SH TLS AND AUTHENTICATION
+The server automatically generates a CA certificate and server certificate
+on first run if they don't exist. When a CA is configured, the server
+enables HTTPS with mutual TLS (mTLS), requiring clients to present valid
+certificates signed by the CA.
+.PP
+Certificate files in the CA directory:
+.TP
+.I ca_crt.pem
+CA certificate (used to verify client certificates)
+.TP
+.I ca_key.pem
+CA private key (used to sign certificates)
+.TP
+.I server_crt.pem
+Server certificate (presented to clients)
+.TP
+.I server_key.pem
+Server private key
+.TP
+.I signed/
+Directory containing signed client certificates
+.TP
+.I requests/
+Directory containing pending CSRs
+.SH AUTOSIGNING
+Certificate signing behavior is controlled by \fB/etc/puppetc/autosign.conf\fR:
+.PP
+.RS
+.nf
+[autosign]
+mode = naive    # Auto-sign all CSRs (testing only!)
+mode = none     # Require manual signing
+.fi
+.RE
+.PP
+Use \fBpuppetc-ca\fR(1) to manage certificates when autosigning is disabled.
+.SH FILES
+.TP
+.I /etc/puppetc/puppet.conf
+Main configuration file. See \fBpuppet.conf\fR(5).
+.TP
+.I /etc/puppetc/autosign.conf
+Autosigning policy configuration.
+.TP
+.I /etc/puppetc/ssl/ca/
+Certificate Authority directory.
+.TP
+.I /var/lib/puppetc/puppetdb.sqlite
+PuppetDB SQLite database.
+.SH EXAMPLES
+Start server with default settings:
+.PP
+.RS
+puppetc-server /etc/puppet
+.RE
+.PP
+Start server on a custom port:
+.PP
+.RS
+puppetc-server \-p 8080 \-m /etc/puppet/modules /etc/puppet
+.RE
+.PP
+Test the server status:
+.PP
+.RS
+curl \-k https://localhost:8140/status
+.RE
+.SH SEE ALSO
+.BR puppetc-agent (1),
+.BR puppetc-compile (1),
+.BR puppetc-ca (1),
+.BR puppet.conf (5)
+.SH AUTHORS
+Pierre Pomes <pierre.pomes@gmail.com>

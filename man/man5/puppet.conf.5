@@ -1,0 +1,135 @@
+.TH PUPPET.CONF 5 "January 2026" "puppetc 0.0.1" "File Formats"
+.SH NAME
+puppet.conf \- puppetc configuration file
+.SH SYNOPSIS
+.I /etc/puppetc/puppet.conf
+.SH DESCRIPTION
+The \fBpuppet.conf\fR file is the main configuration file for puppetc
+components (server, agent, and compiler). It uses an INI-style format
+with sections for different components.
+.SH FILE FORMAT
+The file consists of sections, each starting with a section name in
+square brackets, followed by key-value pairs:
+.PP
+.RS
+.nf
+[section]
+key = value
+another_key = another value
+.fi
+.RE
+.PP
+Comments start with \fB#\fR or \fB;\fR.
+.SH SECTIONS
+.SS [main]
+Common settings shared by all components.
+.TP
+.B server
+Server hostname or URL. Default: \fBlocalhost\fR
+.TP
+.B environment
+Puppet environment. Default: \fBproduction\fR
+.TP
+.B certname
+Certificate name for this node. Default: system hostname
+.TP
+.B ssl_dir
+SSL certificate directory. Default: \fB/var/lib/puppetc/ssl\fR
+.SS [server]
+Settings specific to puppetc-server.
+.TP
+.B port
+TCP port to listen on. Default: \fB8140\fR
+.TP
+.B manifest_dir
+Path to manifest directory.
+.TP
+.B modules_dir
+Path to modules directory.
+.TP
+.B hiera_datadir
+Path to Hiera data directory.
+.TP
+.B ca_dir
+Path to Certificate Authority directory.
+Default: \fB/etc/puppetc/ssl/ca\fR
+.TP
+.B puppetdb_path
+Path to PuppetDB SQLite file.
+Default: \fB/var/lib/puppetc/puppetdb.sqlite\fR
+.SS [agent]
+Settings specific to puppetc-agent.
+.TP
+.B server
+Server URL. Default: \fBhttp://localhost:8140\fR
+.TP
+.B certname
+Certificate name for this agent. Default: system hostname
+.TP
+.B environment
+Puppet environment. Default: \fBproduction\fR
+.TP
+.B ssl_dir
+SSL certificate directory. Default: \fB/var/lib/puppetc/ssl\fR
+.TP
+.B ssl_cert_path
+Path to client certificate (overrides ssl_dir default).
+.TP
+.B ssl_key_path
+Path to client private key (overrides ssl_dir default).
+.TP
+.B ssl_ca_cert_path
+Path to CA certificate (overrides ssl_dir default).
+.TP
+.B libdir
+Plugin library directory. Default: \fB/var/lib/puppetc/lib\fR
+.TP
+.B pluginsync
+Enable/disable pluginsync. Values: \fBtrue\fR, \fBfalse\fR
+.TP
+.B use_ruby
+Enable/disable Ruby support. Values: \fBtrue\fR, \fBfalse\fR
+.SH EXAMPLES
+Basic server configuration:
+.PP
+.RS
+.nf
+[main]
+environment = production
+
+[server]
+port = 8140
+manifest_dir = /etc/puppet/manifests
+modules_dir = /etc/puppet/modules
+hiera_datadir = /etc/puppet/hiera
+ca_dir = /etc/puppetc/ssl/ca
+.fi
+.RE
+.PP
+Agent configuration:
+.PP
+.RS
+.nf
+[main]
+server = https://puppet.example.com:8140
+environment = production
+
+[agent]
+certname = webserver1.example.com
+pluginsync = true
+.fi
+.RE
+.SH FILES
+.TP
+.I /etc/puppetc/puppet.conf
+Default configuration file location.
+.TP
+.I /etc/puppetc/autosign.conf
+Autosigning policy configuration for the server.
+.SH SEE ALSO
+.BR puppetc-server (1),
+.BR puppetc-agent (1),
+.BR puppetc-compile (1),
+.BR puppetc-ca (1)
+.SH AUTHORS
+Pierre Pomes <pierre.pomes@gmail.com>

@@ -1,2 +1,4 @@
 usr/bin/puppetc-server
 usr/bin/puppetc-ca
+usr/share/man/man1/puppetc-server.1
+usr/share/man/man1/puppetc-ca.1
