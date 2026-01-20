@@ -915,8 +915,20 @@ static enum MHD_Result handle_certificate_request(struct MHD_Connection *connect
                 fprintf(stderr, "[INFO] CSR for %s not auto-signed: %s\n",
                         certname, error_msg ? error_msg : "policy denied");
             }
-            return send_error(connection, MHD_HTTP_FORBIDDEN,
-                             "Certificate request not auto-signed. Manual approval required.");
+
+            /* Save CSR for manual signing */
+            if (puppet_ca_save_csr(ca_ctx, certname, csr_pem) == 0) {
+                if (verbose) {
+                    fprintf(stderr, "[INFO] CSR for %s saved for manual signing\n", certname);
+                }
+                return send_error(connection, MHD_HTTP_ACCEPTED,
+                                 "Certificate request saved. Awaiting manual approval.");
+            } else {
+                fprintf(stderr, "[ERROR] Failed to save CSR for %s: %s\n",
+                        certname, puppet_ca_get_error(ca_ctx));
+                return send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                                 "Failed to save certificate request");
+            }
         }
 
         if (verbose) {

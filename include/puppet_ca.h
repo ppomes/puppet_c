@@ -347,6 +347,94 @@ int puppet_ca_load_serial(puppet_ca_ctx_t *ctx);
 
 /*
  * ===========================================================================
+ * CSR (CERTIFICATE SIGNING REQUEST) MANAGEMENT
+ * ===========================================================================
+ */
+
+/**
+ * @brief Directory for pending CSRs
+ */
+#define PUPPET_CA_REQUESTS_DIR "requests"
+
+/**
+ * @brief Save a pending CSR to disk
+ *
+ * Saves a CSR to the CA's requests directory for later manual signing.
+ *
+ * @param ctx CA context
+ * @param certname Certificate name
+ * @param csr_pem CSR in PEM format
+ * @return 0 on success, -1 on error
+ */
+int puppet_ca_save_csr(puppet_ca_ctx_t *ctx,
+                       const char *certname,
+                       const char *csr_pem);
+
+/**
+ * @brief Load a pending CSR from disk
+ *
+ * @param ctx CA context
+ * @param certname Certificate name
+ * @param csr_pem Output buffer for CSR in PEM format (caller must free)
+ * @return 0 on success, -1 on error
+ */
+int puppet_ca_load_csr(puppet_ca_ctx_t *ctx,
+                       const char *certname,
+                       char **csr_pem);
+
+/**
+ * @brief Check if a pending CSR exists
+ *
+ * @param ctx CA context
+ * @param certname Certificate name
+ * @return true if CSR exists, false otherwise
+ */
+bool puppet_ca_csr_exists(puppet_ca_ctx_t *ctx, const char *certname);
+
+/**
+ * @brief Delete a pending CSR
+ *
+ * @param ctx CA context
+ * @param certname Certificate name
+ * @return 0 on success, -1 on error
+ */
+int puppet_ca_delete_csr(puppet_ca_ctx_t *ctx, const char *certname);
+
+/**
+ * @brief List all pending CSRs
+ *
+ * Returns a NULL-terminated array of certnames with pending CSRs.
+ * Caller must free the array and each string.
+ *
+ * @param ctx CA context
+ * @param count Output: number of pending CSRs
+ * @return Array of certnames, or NULL on error
+ */
+char **puppet_ca_list_pending_csrs(puppet_ca_ctx_t *ctx, int *count);
+
+/**
+ * @brief List all signed certificates
+ *
+ * Returns a NULL-terminated array of certnames with signed certificates.
+ * Caller must free the array and each string.
+ *
+ * @param ctx CA context
+ * @param count Output: number of signed certificates
+ * @return Array of certnames, or NULL on error
+ */
+char **puppet_ca_list_signed_certs(puppet_ca_ctx_t *ctx, int *count);
+
+/**
+ * @brief Delete a signed certificate
+ *
+ * @param ctx CA context
+ * @param certname Certificate name
+ * @return 0 on success, -1 on error
+ */
+int puppet_ca_delete_signed_cert(puppet_ca_ctx_t *ctx, const char *certname);
+
+/*
+ * ===========================================================================
  * ERROR HANDLING
  * ===========================================================================
  */

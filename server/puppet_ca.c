@@ -22,6 +22,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <fcntl.h>
+#include <dirent.h>
 #include <errno.h>
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
@@ -1072,6 +1073,299 @@ int puppet_ca_load_serial(puppet_ca_ctx_t *ctx) {
 /* Auto-signing functions (puppet_autosign_init, puppet_autosign_free,
  * puppet_autosign_should_sign, puppet_autosign_get_error) are implemented
  * in puppet_autosign.c */
+
+/*
+ * ===========================================================================
+ * CSR (CERTIFICATE SIGNING REQUEST) MANAGEMENT
+ * ===========================================================================
+ */
+
+/**
+ * Save a pending CSR to disk
+ */
+int puppet_ca_save_csr(puppet_ca_ctx_t *ctx,
+                       const char *certname,
+                       const char *csr_pem) {
+    if (!ctx || !ctx->ca_dir || !certname || !csr_pem) {
+        if (ctx) {
+            snprintf(ctx->last_error, sizeof(ctx->last_error),
+                    "Invalid parameters");
+        }
+        return -1;
+    }
+
+    /* Create requests directory if it doesn't exist */
+    char requests_dir[PUPPET_CA_MAX_PATH];
+    snprintf(requests_dir, sizeof(requests_dir), "%s/%s",
+             ctx->ca_dir, PUPPET_CA_REQUESTS_DIR);
+
+    struct stat st;
+    if (stat(requests_dir, &st) != 0) {
+        if (mkdir(requests_dir, 0755) != 0) {
+            snprintf(ctx->last_error, sizeof(ctx->last_error),
+                    "Failed to create requests directory: %s", strerror(errno));
+            return -1;
+        }
+    }
+
+    /* Save CSR to file */
+    char csr_path[PUPPET_CA_MAX_PATH];
+    snprintf(csr_path, sizeof(csr_path), "%s/%s.pem", requests_dir, certname);
+
+    FILE *f = fopen(csr_path, "w");
+    if (!f) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Failed to create CSR file: %s", strerror(errno));
+        return -1;
+    }
+
+    if (fputs(csr_pem, f) == EOF) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Failed to write CSR file: %s", strerror(errno));
+        fclose(f);
+        return -1;
+    }
+
+    fclose(f);
+    return 0;
+}
+
+/**
+ * Load a pending CSR from disk
+ */
+int puppet_ca_load_csr(puppet_ca_ctx_t *ctx,
+                       const char *certname,
+                       char **csr_pem) {
+    if (!ctx || !ctx->ca_dir || !certname || !csr_pem) {
+        if (ctx) {
+            snprintf(ctx->last_error, sizeof(ctx->last_error),
+                    "Invalid parameters");
+        }
+        return -1;
+    }
+
+    char csr_path[PUPPET_CA_MAX_PATH];
+    snprintf(csr_path, sizeof(csr_path), "%s/%s/%s.pem",
+             ctx->ca_dir, PUPPET_CA_REQUESTS_DIR, certname);
+
+    FILE *f = fopen(csr_path, "r");
+    if (!f) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "CSR not found: %s", certname);
+        return -1;
+    }
+
+    /* Get file size */
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (size <= 0 || size > 65536) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Invalid CSR file size");
+        fclose(f);
+        return -1;
+    }
+
+    *csr_pem = puppet_malloc(size + 1);
+    if (!*csr_pem) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Failed to allocate memory for CSR");
+        fclose(f);
+        return -1;
+    }
+
+    size_t read = fread(*csr_pem, 1, size, f);
+    (*csr_pem)[read] = '\0';
+    fclose(f);
+
+    return 0;
+}
+
+/**
+ * Check if a pending CSR exists
+ */
+bool puppet_ca_csr_exists(puppet_ca_ctx_t *ctx, const char *certname) {
+    if (!ctx || !ctx->ca_dir || !certname) return false;
+
+    char csr_path[PUPPET_CA_MAX_PATH];
+    snprintf(csr_path, sizeof(csr_path), "%s/%s/%s.pem",
+             ctx->ca_dir, PUPPET_CA_REQUESTS_DIR, certname);
+
+    struct stat st;
+    return (stat(csr_path, &st) == 0);
+}
+
+/**
+ * Delete a pending CSR
+ */
+int puppet_ca_delete_csr(puppet_ca_ctx_t *ctx, const char *certname) {
+    if (!ctx || !ctx->ca_dir || !certname) {
+        if (ctx) {
+            snprintf(ctx->last_error, sizeof(ctx->last_error),
+                    "Invalid parameters");
+        }
+        return -1;
+    }
+
+    char csr_path[PUPPET_CA_MAX_PATH];
+    snprintf(csr_path, sizeof(csr_path), "%s/%s/%s.pem",
+             ctx->ca_dir, PUPPET_CA_REQUESTS_DIR, certname);
+
+    if (unlink(csr_path) != 0) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Failed to delete CSR: %s", strerror(errno));
+        return -1;
+    }
+
+    return 0;
+}
+
+/**
+ * List all pending CSRs
+ */
+char **puppet_ca_list_pending_csrs(puppet_ca_ctx_t *ctx, int *count) {
+    if (!ctx || !ctx->ca_dir || !count) return NULL;
+
+    *count = 0;
+
+    char requests_dir[PUPPET_CA_MAX_PATH];
+    snprintf(requests_dir, sizeof(requests_dir), "%s/%s",
+             ctx->ca_dir, PUPPET_CA_REQUESTS_DIR);
+
+    DIR *dir = opendir(requests_dir);
+    if (!dir) {
+        /* Directory doesn't exist - no pending CSRs */
+        char **result = puppet_malloc(sizeof(char *));
+        if (result) result[0] = NULL;
+        return result;
+    }
+
+    /* First pass: count entries */
+    struct dirent *entry;
+    int capacity = 16;
+    char **result = puppet_malloc(capacity * sizeof(char *));
+    if (!result) {
+        closedir(dir);
+        return NULL;
+    }
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_name[0] == '.') continue;
+
+        /* Check for .pem extension */
+        size_t len = strlen(entry->d_name);
+        if (len < 5 || strcmp(entry->d_name + len - 4, ".pem") != 0) continue;
+
+        /* Grow array if needed */
+        if (*count >= capacity - 1) {
+            capacity *= 2;
+            char **new_result = puppet_realloc(result, capacity * sizeof(char *));
+            if (!new_result) {
+                for (int i = 0; i < *count; i++) puppet_free(result[i]);
+                puppet_free(result);
+                closedir(dir);
+                return NULL;
+            }
+            result = new_result;
+        }
+
+        /* Extract certname (remove .pem) */
+        char *certname = puppet_malloc(len - 3);
+        if (!certname) continue;
+        strncpy(certname, entry->d_name, len - 4);
+        certname[len - 4] = '\0';
+
+        result[(*count)++] = certname;
+    }
+
+    closedir(dir);
+    result[*count] = NULL;
+    return result;
+}
+
+/**
+ * List all signed certificates
+ */
+char **puppet_ca_list_signed_certs(puppet_ca_ctx_t *ctx, int *count) {
+    if (!ctx || !ctx->ca_dir || !count) return NULL;
+
+    *count = 0;
+
+    char signed_dir[PUPPET_CA_MAX_PATH];
+    snprintf(signed_dir, sizeof(signed_dir), "%s/%s",
+             ctx->ca_dir, PUPPET_CA_SIGNED_DIR);
+
+    DIR *dir = opendir(signed_dir);
+    if (!dir) {
+        char **result = puppet_malloc(sizeof(char *));
+        if (result) result[0] = NULL;
+        return result;
+    }
+
+    struct dirent *entry;
+    int capacity = 16;
+    char **result = puppet_malloc(capacity * sizeof(char *));
+    if (!result) {
+        closedir(dir);
+        return NULL;
+    }
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_name[0] == '.') continue;
+
+        size_t len = strlen(entry->d_name);
+        if (len < 5 || strcmp(entry->d_name + len - 4, ".pem") != 0) continue;
+
+        if (*count >= capacity - 1) {
+            capacity *= 2;
+            char **new_result = puppet_realloc(result, capacity * sizeof(char *));
+            if (!new_result) {
+                for (int i = 0; i < *count; i++) puppet_free(result[i]);
+                puppet_free(result);
+                closedir(dir);
+                return NULL;
+            }
+            result = new_result;
+        }
+
+        char *certname = puppet_malloc(len - 3);
+        if (!certname) continue;
+        strncpy(certname, entry->d_name, len - 4);
+        certname[len - 4] = '\0';
+
+        result[(*count)++] = certname;
+    }
+
+    closedir(dir);
+    result[*count] = NULL;
+    return result;
+}
+
+/**
+ * Delete a signed certificate
+ */
+int puppet_ca_delete_signed_cert(puppet_ca_ctx_t *ctx, const char *certname) {
+    if (!ctx || !ctx->ca_dir || !certname) {
+        if (ctx) {
+            snprintf(ctx->last_error, sizeof(ctx->last_error),
+                    "Invalid parameters");
+        }
+        return -1;
+    }
+
+    char cert_path[PUPPET_CA_MAX_PATH];
+    snprintf(cert_path, sizeof(cert_path), "%s/%s/%s.pem",
+             ctx->ca_dir, PUPPET_CA_SIGNED_DIR, certname);
+
+    if (unlink(cert_path) != 0) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Failed to delete certificate: %s", strerror(errno));
+        return -1;
+    }
+
+    return 0;
+}
 
 /*
  * ===========================================================================
