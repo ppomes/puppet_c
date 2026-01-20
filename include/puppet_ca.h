@@ -194,15 +194,17 @@ bool puppet_ca_exists(puppet_ca_ctx_t *ctx);
  *
  * Generates a server certificate signed by the CA, suitable for HTTPS/TLS.
  * The certificate is stored as server_crt.pem and server_key.pem in the
- * CA directory.
+ * CA directory. The SAN includes the hostname and any additional IP addresses.
  *
  * @param ctx CA context (must have loaded CA)
  * @param hostname Server hostname for the certificate CN
+ * @param ip_addresses NULL-terminated array of IP addresses to include in SAN (can be NULL)
  * @param validity_days Number of days the certificate is valid
  * @return 0 on success, -1 on error
  */
 int puppet_ca_generate_server_cert(puppet_ca_ctx_t *ctx,
                                     const char *hostname,
+                                    const char **ip_addresses,
                                     int validity_days);
 
 /**

@@ -18,6 +18,9 @@
 #include <getopt.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <openssl/md5.h>
 
 #include <microhttpd.h>
@@ -1307,11 +1310,41 @@ int main(int argc, char *argv[]) {
             if (gethostname(hostname, sizeof(hostname)) != 0) {
                 strcpy(hostname, "localhost");
             }
-            if (puppet_ca_generate_server_cert(ca_ctx, hostname, PUPPET_CA_CERT_VALIDITY_DAYS) != 0) {
+
+            /* Get server IP addresses for certificate SAN */
+            const char *ip_list[32];
+            int ip_count = 0;
+            struct ifaddrs *ifaddr, *ifa;
+            if (getifaddrs(&ifaddr) == 0) {
+                for (ifa = ifaddr; ifa != NULL && ip_count < 30; ifa = ifa->ifa_next) {
+                    if (ifa->ifa_addr == NULL) continue;
+                    if (ifa->ifa_addr->sa_family == AF_INET) {
+                        struct sockaddr_in *addr = (struct sockaddr_in *)ifa->ifa_addr;
+                        char *ip_str = strdup(inet_ntoa(addr->sin_addr));
+                        if (ip_str && strcmp(ip_str, "127.0.0.1") != 0) {
+                            ip_list[ip_count++] = ip_str;
+                            if (verbose) {
+                                fprintf(stderr, "[INFO] Adding IP to server certificate: %s\n", ip_str);
+                            }
+                        } else {
+                            free(ip_str);
+                        }
+                    }
+                }
+                freeifaddrs(ifaddr);
+            }
+            ip_list[ip_count] = NULL;
+
+            if (puppet_ca_generate_server_cert(ca_ctx, hostname, ip_list, PUPPET_CA_CERT_VALIDITY_DAYS) != 0) {
                 fprintf(stderr, "Warning: Failed to generate server certificate: %s\n",
                         puppet_ca_get_error(ca_ctx));
             } else if (verbose) {
                 fprintf(stderr, "[INFO] Server certificate generated\n");
+            }
+
+            /* Free IP strings */
+            for (int i = 0; i < ip_count; i++) {
+                free((void *)ip_list[i]);
             }
         }
 

@@ -1100,6 +1100,7 @@ bool puppet_ca_server_cert_exists(puppet_ca_ctx_t *ctx) {
  */
 int puppet_ca_generate_server_cert(puppet_ca_ctx_t *ctx,
                                     const char *hostname,
+                                    const char **ip_addresses,
                                     int validity_days) {
     if (!ctx || !ctx->ca_cert || !ctx->ca_key || !hostname) {
         if (ctx) {
@@ -1194,9 +1195,20 @@ int puppet_ca_generate_server_cert(puppet_ca_ctx_t *ctx,
         X509_EXTENSION_free(ext);
     }
 
-    /* Subject alternative name (for hostname) */
-    char san[512];
-    snprintf(san, sizeof(san), "DNS:%s", hostname);
+    /* Subject alternative name (for hostname and IP addresses) */
+    char san[1024];
+    int san_offset = snprintf(san, sizeof(san), "DNS:%s,DNS:localhost", hostname);
+
+    /* Add IP addresses if provided */
+    if (ip_addresses) {
+        for (int i = 0; ip_addresses[i] != NULL && san_offset < (int)sizeof(san) - 50; i++) {
+            san_offset += snprintf(san + san_offset, sizeof(san) - san_offset,
+                                   ",IP:%s", ip_addresses[i]);
+        }
+    }
+    /* Always add localhost IP */
+    snprintf(san + san_offset, sizeof(san) - san_offset, ",IP:127.0.0.1");
+
     ext = X509V3_EXT_conf_nid(NULL, &v3ctx, NID_subject_alt_name, san);
     if (ext) {
         X509_add_ext(x509, ext, -1);
