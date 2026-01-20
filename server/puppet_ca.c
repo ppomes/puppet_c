@@ -21,6 +21,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
@@ -1071,6 +1072,190 @@ int puppet_ca_load_serial(puppet_ca_ctx_t *ctx) {
 /* Auto-signing functions (puppet_autosign_init, puppet_autosign_free,
  * puppet_autosign_should_sign, puppet_autosign_get_error) are implemented
  * in puppet_autosign.c */
+
+/*
+ * ===========================================================================
+ * SERVER CERTIFICATE GENERATION
+ * ===========================================================================
+ */
+
+/**
+ * Check if server certificate exists
+ */
+bool puppet_ca_server_cert_exists(puppet_ca_ctx_t *ctx) {
+    if (!ctx || !ctx->ca_dir) return false;
+
+    char cert_path[PUPPET_CA_MAX_PATH];
+    char key_path[PUPPET_CA_MAX_PATH];
+
+    snprintf(cert_path, sizeof(cert_path), "%s/server_crt.pem", ctx->ca_dir);
+    snprintf(key_path, sizeof(key_path), "%s/server_key.pem", ctx->ca_dir);
+
+    struct stat st;
+    return (stat(cert_path, &st) == 0 && stat(key_path, &st) == 0);
+}
+
+/**
+ * Generate a server certificate for TLS
+ */
+int puppet_ca_generate_server_cert(puppet_ca_ctx_t *ctx,
+                                    const char *hostname,
+                                    int validity_days) {
+    if (!ctx || !ctx->ca_cert || !ctx->ca_key || !hostname) {
+        if (ctx) {
+            snprintf(ctx->last_error, sizeof(ctx->last_error),
+                    "Invalid parameters or CA not loaded");
+        }
+        return -1;
+    }
+
+    /* Generate key pair for server */
+    EVP_PKEY *pkey = NULL;
+    EVP_PKEY_CTX *pkey_ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, NULL);
+    if (!pkey_ctx) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Failed to create key context");
+        return -1;
+    }
+
+    if (EVP_PKEY_keygen_init(pkey_ctx) <= 0 ||
+        EVP_PKEY_CTX_set_rsa_keygen_bits(pkey_ctx, PUPPET_CA_KEY_SIZE) <= 0 ||
+        EVP_PKEY_keygen(pkey_ctx, &pkey) <= 0) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Failed to generate server key pair");
+        EVP_PKEY_CTX_free(pkey_ctx);
+        return -1;
+    }
+    EVP_PKEY_CTX_free(pkey_ctx);
+
+    /* Create X509 certificate */
+    X509 *x509 = X509_new();
+    if (!x509) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Failed to create X509 certificate");
+        EVP_PKEY_free(pkey);
+        return -1;
+    }
+
+    /* Set version to X509 v3 */
+    X509_set_version(x509, 2);
+
+    /* Set serial number */
+    long serial = puppet_ca_get_next_serial(ctx);
+    if (serial < 0) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Failed to get next serial number");
+        X509_free(x509);
+        EVP_PKEY_free(pkey);
+        return -1;
+    }
+    ASN1_INTEGER_set(X509_get_serialNumber(x509), serial);
+
+    /* Set validity period */
+    X509_gmtime_adj(X509_get_notBefore(x509), 0);
+    X509_gmtime_adj(X509_get_notAfter(x509), (long)60 * 60 * 24 * validity_days);
+
+    /* Set public key */
+    X509_set_pubkey(x509, pkey);
+
+    /* Set subject name */
+    X509_NAME *name = X509_get_subject_name(x509);
+    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+                                (unsigned char *)hostname, -1, -1, 0);
+
+    /* Set issuer name (CA's subject) */
+    X509_set_issuer_name(x509, X509_get_subject_name(ctx->ca_cert));
+
+    /* Add extensions for server certificate */
+    X509V3_CTX v3ctx;
+    X509V3_set_ctx(&v3ctx, ctx->ca_cert, x509, NULL, NULL, 0);
+
+    /* Basic constraints: not a CA */
+    X509_EXTENSION *ext = X509V3_EXT_conf_nid(NULL, &v3ctx,
+                                               NID_basic_constraints, "CA:FALSE");
+    if (ext) {
+        X509_add_ext(x509, ext, -1);
+        X509_EXTENSION_free(ext);
+    }
+
+    /* Key usage for server */
+    ext = X509V3_EXT_conf_nid(NULL, &v3ctx, NID_key_usage,
+                              "digitalSignature,keyEncipherment");
+    if (ext) {
+        X509_add_ext(x509, ext, -1);
+        X509_EXTENSION_free(ext);
+    }
+
+    /* Extended key usage: server authentication */
+    ext = X509V3_EXT_conf_nid(NULL, &v3ctx, NID_ext_key_usage,
+                              "serverAuth");
+    if (ext) {
+        X509_add_ext(x509, ext, -1);
+        X509_EXTENSION_free(ext);
+    }
+
+    /* Subject alternative name (for hostname) */
+    char san[512];
+    snprintf(san, sizeof(san), "DNS:%s", hostname);
+    ext = X509V3_EXT_conf_nid(NULL, &v3ctx, NID_subject_alt_name, san);
+    if (ext) {
+        X509_add_ext(x509, ext, -1);
+        X509_EXTENSION_free(ext);
+    }
+
+    /* Sign with CA key */
+    if (X509_sign(x509, ctx->ca_key, EVP_sha256()) == 0) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Failed to sign server certificate");
+        X509_free(x509);
+        EVP_PKEY_free(pkey);
+        return -1;
+    }
+
+    /* Save certificate and key */
+    char cert_path[PUPPET_CA_MAX_PATH];
+    char key_path[PUPPET_CA_MAX_PATH];
+    snprintf(cert_path, sizeof(cert_path), "%s/server_crt.pem", ctx->ca_dir);
+    snprintf(key_path, sizeof(key_path), "%s/server_key.pem", ctx->ca_dir);
+
+    /* Save certificate */
+    FILE *cert_file = fopen(cert_path, "w");
+    if (!cert_file) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Failed to create server certificate file");
+        X509_free(x509);
+        EVP_PKEY_free(pkey);
+        return -1;
+    }
+    PEM_write_X509(cert_file, x509);
+    fclose(cert_file);
+
+    /* Save private key with restricted permissions */
+    int fd = open(key_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Failed to create server key file");
+        X509_free(x509);
+        EVP_PKEY_free(pkey);
+        return -1;
+    }
+    FILE *key_file = fdopen(fd, "w");
+    if (!key_file) {
+        close(fd);
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Failed to open server key file for writing");
+        X509_free(x509);
+        EVP_PKEY_free(pkey);
+        return -1;
+    }
+    PEM_write_PrivateKey(key_file, pkey, NULL, NULL, 0, NULL, NULL);
+    fclose(key_file);
+
+    X509_free(x509);
+    EVP_PKEY_free(pkey);
+
+    return 0;
+}
 
 /*
  * ===========================================================================

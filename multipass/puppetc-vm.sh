@@ -309,8 +309,8 @@ run_agent() {
     fi
 
     # Use installed binary (run as root to manage system files)
-    # Note: Server uses HTTP - TLS not yet implemented in puppetc-server
-    multipass exec "$VM_AGENT" -- sudo puppetc-agent -s "http://$server_ip:8140" $mode -v
+    # Server now uses HTTPS with TLS
+    multipass exec "$VM_AGENT" -- sudo puppetc-agent -s "https://$server_ip:8140" $mode -v
 }
 
 status() {

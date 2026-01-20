@@ -189,6 +189,30 @@ int puppet_ca_save(puppet_ca_ctx_t *ctx);
  */
 bool puppet_ca_exists(puppet_ca_ctx_t *ctx);
 
+/**
+ * @brief Generate a server certificate for TLS
+ *
+ * Generates a server certificate signed by the CA, suitable for HTTPS/TLS.
+ * The certificate is stored as server_crt.pem and server_key.pem in the
+ * CA directory.
+ *
+ * @param ctx CA context (must have loaded CA)
+ * @param hostname Server hostname for the certificate CN
+ * @param validity_days Number of days the certificate is valid
+ * @return 0 on success, -1 on error
+ */
+int puppet_ca_generate_server_cert(puppet_ca_ctx_t *ctx,
+                                    const char *hostname,
+                                    int validity_days);
+
+/**
+ * @brief Check if server certificate exists
+ *
+ * @param ctx CA context
+ * @return true if server certificate and key exist, false otherwise
+ */
+bool puppet_ca_server_cert_exists(puppet_ca_ctx_t *ctx);
+
 /*
  * ===========================================================================
  * CERTIFICATE SIGNING

@@ -56,6 +56,8 @@ static puppet_ssl_ctx_t *ssl_ctx = NULL;
 static puppet_ca_ctx_t *ca_ctx = NULL;
 static puppet_autosign_config_t *autosign_config = NULL;
 static int verbose = 0;
+static char *server_cert_pem = NULL;  /* Server certificate for TLS */
+static char *server_key_pem = NULL;   /* Server private key for TLS */
 
 /**
  * @brief Signal handler for graceful shutdown
@@ -63,6 +65,62 @@ static int verbose = 0;
 static void signal_handler(int sig) {
     (void)sig;
     running = 0;
+}
+
+/**
+ * @brief Read file contents into a malloc'd string
+ * @param path File path
+ * @return Allocated string with file contents, or NULL on error
+ */
+static char *read_file_to_string(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return NULL;
+
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    char *content = malloc(len + 1);
+    if (!content) {
+        fclose(f);
+        return NULL;
+    }
+
+    size_t read_len = fread(content, 1, len, f);
+    fclose(f);
+
+    content[read_len] = '\0';
+    return content;
+}
+
+/**
+ * @brief Load server certificate and key from CA directory for TLS
+ * @param ca_directory CA directory path
+ * @return 0 on success, -1 on error
+ */
+static int load_server_tls_credentials(const char *ca_directory) {
+    char cert_path[PUPPET_CA_MAX_PATH];
+    char key_path[PUPPET_CA_MAX_PATH];
+
+    /* Use server certificate (not CA certificate) for TLS */
+    snprintf(cert_path, sizeof(cert_path), "%s/server_crt.pem", ca_directory);
+    snprintf(key_path, sizeof(key_path), "%s/server_key.pem", ca_directory);
+
+    server_cert_pem = read_file_to_string(cert_path);
+    if (!server_cert_pem) {
+        fprintf(stderr, "Error: Failed to load server certificate from %s\n", cert_path);
+        return -1;
+    }
+
+    server_key_pem = read_file_to_string(key_path);
+    if (!server_key_pem) {
+        fprintf(stderr, "Error: Failed to load server key from %s\n", key_path);
+        free(server_cert_pem);
+        server_cert_pem = NULL;
+        return -1;
+    }
+
+    return 0;
 }
 
 /**
@@ -1213,7 +1271,7 @@ int main(int argc, char *argv[]) {
                 fprintf(stderr, "[INFO] CA not found, generating new CA...\n");
             }
             char ca_subject[256];
-            snprintf(ca_subject, sizeof(ca_subject), "CN=Puppet CA: puppetc-server");
+            snprintf(ca_subject, sizeof(ca_subject), "Puppet CA: puppetc-server");
             if (puppet_ca_generate(ca_ctx, ca_subject, PUPPET_CA_VALIDITY_DAYS) != 0) {
                 fprintf(stderr, "Warning: Failed to generate CA: %s\n",
                         puppet_ca_get_error(ca_ctx));
@@ -1239,6 +1297,34 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    /* Generate server certificate for TLS if needed */
+    if (ca_ctx && ca_dir) {
+        if (!puppet_ca_server_cert_exists(ca_ctx)) {
+            if (verbose) {
+                fprintf(stderr, "[INFO] Generating server certificate for TLS...\n");
+            }
+            char hostname[256];
+            if (gethostname(hostname, sizeof(hostname)) != 0) {
+                strcpy(hostname, "localhost");
+            }
+            if (puppet_ca_generate_server_cert(ca_ctx, hostname, PUPPET_CA_CERT_VALIDITY_DAYS) != 0) {
+                fprintf(stderr, "Warning: Failed to generate server certificate: %s\n",
+                        puppet_ca_get_error(ca_ctx));
+            } else if (verbose) {
+                fprintf(stderr, "[INFO] Server certificate generated\n");
+            }
+        }
+
+        /* Load server TLS credentials */
+        if (load_server_tls_credentials(ca_dir) == 0) {
+            if (verbose) {
+                fprintf(stderr, "[INFO] TLS credentials loaded for HTTPS\n");
+            }
+        } else {
+            fprintf(stderr, "Warning: Failed to load TLS credentials, server will use HTTP only\n");
+        }
+    }
+
     /* Initialize autosign configuration */
     const char *autosign_path = "/etc/puppetc/autosign.conf";
     autosign_config = puppet_autosign_init(autosign_path);
@@ -1257,23 +1343,37 @@ int main(int argc, char *argv[]) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    /* Start HTTP server */
+    /* Start server - HTTPS if TLS credentials available, HTTP otherwise */
     struct MHD_Daemon *daemon;
-    daemon = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY,
-                               port,
-                               NULL, NULL,
-                               &request_handler, NULL,
-                               MHD_OPTION_NOTIFY_COMPLETED, &request_completed, NULL,
-                               MHD_OPTION_END);
+    int use_tls = (server_cert_pem && server_key_pem);
+
+    if (use_tls) {
+        daemon = MHD_start_daemon(MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG | MHD_USE_TLS,
+                                   port,
+                                   NULL, NULL,
+                                   &request_handler, NULL,
+                                   MHD_OPTION_HTTPS_MEM_KEY, server_key_pem,
+                                   MHD_OPTION_HTTPS_MEM_CERT, server_cert_pem,
+                                   MHD_OPTION_NOTIFY_COMPLETED, &request_completed, NULL,
+                                   MHD_OPTION_END);
+    } else {
+        daemon = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY,
+                                   port,
+                                   NULL, NULL,
+                                   &request_handler, NULL,
+                                   MHD_OPTION_NOTIFY_COMPLETED, &request_completed, NULL,
+                                   MHD_OPTION_END);
+    }
 
     if (!daemon) {
-        fprintf(stderr, "Error: Failed to start HTTP server on port %d\n", port);
+        fprintf(stderr, "Error: Failed to start %s server on port %d\n",
+                use_tls ? "HTTPS" : "HTTP", port);
         config_free(file_config);
         puppet_ssl_cleanup();
         return 1;
     }
 
-    printf("puppetc-server started on port %d (HTTP only - no TLS)\n", port);
+    printf("puppetc-server started on port %d (%s)\n", port, use_tls ? "HTTPS" : "HTTP");
     printf("Manifest directory: %s\n", manifest_path);
     if (modules_path) printf("Modules directory: %s\n", modules_path);
     if (hiera_datadir) printf("Hiera data directory: %s\n", hiera_datadir);
@@ -1293,6 +1393,8 @@ int main(int argc, char *argv[]) {
     if (pdb) puppetdb_close(pdb);
     if (autosign_config) puppet_autosign_free(autosign_config);
     if (ca_ctx) puppet_ca_free(ca_ctx);
+    if (server_cert_pem) free(server_cert_pem);
+    if (server_key_pem) free(server_key_pem);
     config_free(file_config);
     puppet_ssl_cleanup();
     puppet_memory_shutdown();
