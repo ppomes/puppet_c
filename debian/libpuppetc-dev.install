@@ -1,2 +1,16 @@
 usr/lib/*/libpuppetc.so
-usr/include/puppetc/puppet_*.h
+usr/include/puppetc/puppet_agent_ruby.h
+usr/include/puppetc/puppet_ast.h
+usr/include/puppetc/puppet_autosign.h
+usr/include/puppetc/puppet_ca.h
+usr/include/puppetc/puppet_catalog.h
+usr/include/puppetc/puppet_erb.h
+usr/include/puppetc/puppet_hiera.h
+usr/include/puppetc/puppet_interpreter.h
+usr/include/puppetc/puppet_json.h
+usr/include/puppetc/puppet_json_parser.h
+usr/include/puppetc/puppet_loader.h
+usr/include/puppetc/puppet_pluginsync.h
+usr/include/puppetc/puppet_provider.h
+usr/include/puppetc/puppet_ssl.h
+usr/include/puppetc/puppet_stdlib.h
