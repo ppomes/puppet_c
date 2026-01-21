@@ -13,6 +13,11 @@ mutual TLS (mTLS) authentication and automatic certificate enrollment.
 On first run, the agent automatically generates a keypair, submits a
 Certificate Signing Request (CSR) to the server, and stores the signed
 certificate for future connections.
+.PP
+.B Note:
+The agent must be run as root. Root privileges are required for reading
+SSL private keys (stored in protected directories) and for applying most
+system resources (files, packages, services, users, etc.).
 .SH OPTIONS
 .TP
 .BR \-c ", " \-\-config " " \fIFILE\fR

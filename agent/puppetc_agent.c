@@ -1056,6 +1056,23 @@ int main(int argc, char *argv[]) {
     const char *config_file = NULL;
     config_file_t *file_config = NULL;
 
+    /* Check for root privileges (allow --help without root) */
+    if (geteuid() != 0) {
+        /* Quick check if user just wants help */
+        for (int i = 1; i < argc; i++) {
+            if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+                /* Allow help without root */
+                goto skip_root_check;
+            }
+        }
+        print_error("puppetc-agent must be run as root");
+        print_error("Root access is required for:");
+        print_error("  - Reading SSL private keys for mTLS authentication");
+        print_error("  - Applying system resources (files, packages, services, etc.)");
+        return 1;
+    }
+skip_root_check:
+
     /* Default configuration */
     agent_config_t config = {
         .server_url = NULL,
