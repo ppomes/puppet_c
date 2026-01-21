@@ -1,7 +1,10 @@
 usr/lib/*/libpuppetc_common.so
 usr/include/puppetc/puppet_memory.h
 usr/include/puppetc/puppet_json_common.h
+usr/include/puppetc/puppet_ssl.h
 usr/include/puppetc/exec_utils.h
 usr/include/puppetc/file_utils.h
 usr/include/puppetc/string_utils.h
 usr/include/puppetc/color_output.h
+usr/include/puppetc/config_parser.h
+usr/include/puppetc/puppetdb.h
