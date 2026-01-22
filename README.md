@@ -423,6 +423,7 @@ docker compose -f docker-compose.demo.yml down
 | user | Manage system users |
 | sysctl | Manage kernel parameters |
 | mount | Manage filesystem mounts |
+| ssh_authorized_key | Manage SSH public keys in authorized_keys |
 | notify | Log messages |
 
 ### Known Limitations

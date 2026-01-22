@@ -17,7 +17,8 @@ puppetc_agent_SOURCES = \
 	provider_user.c \
 	provider_sysctl.c \
 	provider_mount.c \
-	provider_anchor.c
+	provider_anchor.c \
+	provider_ssh_authorized_key.c
 
 # Link against libfacter_c, libpuppetc_common, libcurl, OpenSSL and Ruby
 puppetc_agent_LDADD = $(top_builddir)/facter/libfacter_c.la $(top_builddir)/common/libpuppetc_common.la $(CURL_LIBS) $(RUBY_LIBS) -lssl -lcrypto -lpthread

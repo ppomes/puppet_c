@@ -79,7 +79,7 @@
 
 ### Missing
 - [ ] augeas - Configuration file editing
-- [ ] ssh_authorized_key - SSH public keys
+- [x] ssh_authorized_key - SSH public keys
 - [ ] firewall - iptables/nftables rules
 - [ ] mailalias - Mail aliases
 

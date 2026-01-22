@@ -317,6 +317,11 @@ void provider_mount_register(void);
  */
 void provider_anchor_register(void);
 
+/**
+ * @brief Register ssh_authorized_key provider
+ */
+void provider_ssh_authorized_key_register(void);
+
 #ifdef __cplusplus
 }
 #endif

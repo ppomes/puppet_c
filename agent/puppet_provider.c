@@ -209,6 +209,7 @@ void providers_init(os_family_t os_family) {
     provider_sysctl_register();
     provider_mount_register();
     provider_anchor_register();
+    provider_ssh_authorized_key_register();
 }
 
 void providers_shutdown(void) {
