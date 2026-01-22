@@ -159,6 +159,44 @@ int puppet_catalog_update_resource(puppet_catalog_t *catalog,
     return 0;
 }
 
+int puppet_catalog_add_resource_tags(puppet_catalog_t *catalog,
+                                     const char *type,
+                                     const char *title,
+                                     const char **tags,
+                                     size_t tag_count) {
+    if (!catalog || !type || !title) return -1;
+    if (!tags || tag_count == 0) return 0;  /* Nothing to add */
+
+    puppet_catalog_resource_t *res = puppet_catalog_find_resource(catalog, type, title);
+    if (!res) return -1;  /* Not found */
+
+    /* Grow tags array to accommodate new tags */
+    size_t new_count = res->tag_count + tag_count;
+    char **new_tags = puppet_realloc(res->tags, new_count * sizeof(char *));
+    if (!new_tags) return -1;
+    res->tags = new_tags;
+
+    /* Add new tags (avoiding duplicates) */
+    for (size_t i = 0; i < tag_count; i++) {
+        if (!tags[i]) continue;
+
+        /* Check for duplicate */
+        bool duplicate = false;
+        for (size_t j = 0; j < res->tag_count; j++) {
+            if (strcmp(res->tags[j], tags[i]) == 0) {
+                duplicate = true;
+                break;
+            }
+        }
+
+        if (!duplicate) {
+            res->tags[res->tag_count++] = puppet_strdup(tags[i]);
+        }
+    }
+
+    return 0;
+}
+
 int puppet_catalog_add_edge(puppet_catalog_t *catalog,
                             const char *source_type,
                             const char *source_title,

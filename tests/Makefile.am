@@ -72,6 +72,7 @@ EXTRA_DIST = \
     puppet/binary_expr_test.pp \
     puppet/chain_test.pp \
     puppet/append_test.pp \
+    puppet/tag_test.pp \
     facts/sample_facts.json \
     facts/multi_node_facts.json \
     facts/test_facts_usage.pp \
@@ -87,6 +88,7 @@ EXTRA_DIST = \
     test_features.sh \
     test_chains.sh \
     test_append.sh \
+    test_tags.sh \
     modules/epp_test/templates/trim_basic.epp \
     modules/epp_test/templates/trim_newlines.epp \
     modules/epp_test/templates/if_elsif_else.epp \
@@ -95,7 +97,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags
 	@echo "All tests completed."
 
 check-parser:
@@ -487,4 +489,15 @@ check-append:
 		exit 1; \
 	fi
 
-.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-memory check-asan
+check-tags:
+	@echo "Running tag statement tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_tags.sh > output/tags.out 2>&1; then \
+		echo "✅ All tag tests passed!"; \
+	else \
+		echo "❌ Some tag tests failed:"; \
+		sed 's/^/  /' output/tags.out; \
+		exit 1; \
+	fi
+
+.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-memory check-asan

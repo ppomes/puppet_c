@@ -16,7 +16,7 @@
 - [x] `PUPPET_STMT_APPEND` - Array/hash append (`$arr += ['value']`, `$hash += {key => val}`)
 - [x] `PUPPET_STMT_REQUIRE` - `require class_name`
 - [x] `PUPPET_STMT_CONTAIN` - `contain class_name`
-- [ ] `PUPPET_STMT_TAG` - `tag 'tagname'`
+- [x] `PUPPET_STMT_TAG` - `tag 'tagname'` (applies tags to resources in scope)
 
 ### Virtual and Exported Resources
 - [x] Virtual resources (`@resource` syntax)

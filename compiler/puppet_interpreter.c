@@ -125,6 +125,35 @@ static puppet_value_t *puppet_apl_lookup(const char *class_name, const char *par
     return result;
 }
 
+/**
+ * Apply current scope tags to a resource in the catalog.
+ * Called after adding a resource to copy tags from env->current_tags.
+ */
+void puppet_apply_current_tags(puppet_env_t *env, const char *type, const char *title) {
+    if (!env || !env->catalog || !env->current_tags || !type || !title) return;
+    if (env->current_tags->type != PUPPET_VALUE_ARRAY) return;
+
+    puppet_array_t *tags = env->current_tags->data.array;
+    if (!tags || tags->count == 0) return;
+
+    /* Build array of tag strings */
+    const char **tag_strs = puppet_calloc(tags->count, sizeof(char *));
+    size_t tag_count = 0;
+
+    for (size_t i = 0; i < tags->count; i++) {
+        puppet_value_t *tag = tags->items[i];
+        if (tag && tag->type == PUPPET_VALUE_STRING && tag->data.string.data) {
+            tag_strs[tag_count++] = tag->data.string.data;
+        }
+    }
+
+    if (tag_count > 0) {
+        puppet_catalog_add_resource_tags(env->catalog, type, title, tag_strs, tag_count);
+    }
+
+    puppet_free(tag_strs);
+}
+
 // Helper function to convert value to string
 /* Forward declaration for recursive use */
 static void puppet_value_to_string_buffer(puppet_value_t *value, char *buf, size_t *pos, size_t max_len);
@@ -2020,6 +2049,8 @@ static void puppet_exec_collector(puppet_stmt_t *stmt, puppet_env_t *env) {
                             if (res) {
                                 res->exported = true;
                             }
+                            /* Apply current scope tags */
+                            puppet_apply_current_tags(env, res_type, res_title);
                             realized_count++;
                         }
                     }
@@ -2202,6 +2233,8 @@ static void puppet_exec_collector(puppet_stmt_t *stmt, puppet_env_t *env) {
                             }
                             puppet_catalog_add_resource(env->catalog, vres->type, vres->title,
                                                        params, vres->attr_count, NULL, 0);
+                            /* Apply current scope tags */
+                            puppet_apply_current_tags(env, vres->type, vres->title);
                         }
                     }
 
@@ -2926,6 +2959,8 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                                                                params,
                                                                param_idx);
                             }
+                            /* Apply current scope tags */
+                            puppet_apply_current_tags(env, stmt->data.resource.type.data, title_str);
                         }
 
                         /* Pop the define scope */
@@ -3078,6 +3113,8 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                                                                params,
                                                                param_idx);
                             }
+                            /* Apply current scope tags */
+                            puppet_apply_current_tags(env, stmt->data.resource.type.data, title_str);
                         }
 
                         puppet_free(resource_id);

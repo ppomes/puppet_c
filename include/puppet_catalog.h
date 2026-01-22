@@ -155,6 +155,21 @@ int puppet_catalog_update_resource(puppet_catalog_t *catalog,
                                    size_t param_count);
 
 /**
+ * @brief Add tags to an existing resource in the catalog
+ * @param catalog Target catalog
+ * @param type Resource type
+ * @param title Resource title
+ * @param tags Array of tag strings to add
+ * @param tag_count Number of tags
+ * @return 0 on success, -1 if resource not found
+ */
+int puppet_catalog_add_resource_tags(puppet_catalog_t *catalog,
+                                     const char *type,
+                                     const char *title,
+                                     const char **tags,
+                                     size_t tag_count);
+
+/**
  * @brief Add an edge (relationship) to the catalog
  * @param catalog Target catalog
  * @param source_type Source resource type

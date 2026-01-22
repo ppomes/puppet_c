@@ -310,6 +310,9 @@ puppet_value_t *puppet_eval_unop(puppet_unop_t op, puppet_value_t *operand);
 void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env);
 void puppet_exec_stmt_list(puppet_stmt_list_t *stmts, puppet_env_t *env);
 void puppet_exec_assignment(const char *var, puppet_expr_t *value, puppet_env_t *env);
+
+/* Tag management */
+void puppet_apply_current_tags(puppet_env_t *env, const char *type, const char *title);
 void puppet_exec_class_def(puppet_stmt_t *class_stmt, puppet_env_t *env);
 void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t *env);
 void puppet_exec_include(puppet_stmt_t *include_stmt, puppet_env_t *env);

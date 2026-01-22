@@ -582,6 +582,8 @@ void realize_single_resource(puppet_stmt_t *stmt, size_t instance_idx, puppet_en
                                     param_count,
                                     stmt->loc.filename,
                                     stmt->loc.line);
+        /* Apply current scope tags */
+        puppet_apply_current_tags(env, stmt->data.resource.type.data, title_str);
     }
 
     puppet_free(resource_id);
@@ -683,6 +685,8 @@ puppet_value_t *puppet_func_realize(puppet_expr_list_t *args, puppet_env_t *env)
                                                     params,
                                                     vres->attr_count,
                                                     NULL, 0);  /* TODO: add file/line to virtual_resource */
+                        /* Apply current scope tags */
+                        puppet_apply_current_tags(env, vres->type, vres->title);
                     }
 
                     vres->realized = true;
@@ -5768,6 +5772,8 @@ puppet_value_t *puppet_func_create_resources(puppet_expr_list_t *args, puppet_en
 
                     puppet_catalog_add_resource(env->catalog, res_type, title_str, cat_params, param_count,
                                                 NULL, 0);  /* create_resources: no source location */
+                    /* Apply current scope tags */
+                    puppet_apply_current_tags(env, res_type, title_str);
                 }
 
                 /* Pop the define scope */
@@ -5840,9 +5846,13 @@ puppet_value_t *puppet_func_create_resources(puppet_expr_list_t *args, puppet_en
 
                         puppet_catalog_add_resource(env->catalog, res_type, title_str, cat_params, param_idx,
                                                     NULL, 0);  /* create_resources: no source location */
+                        /* Apply current scope tags */
+                        puppet_apply_current_tags(env, res_type, title_str);
                     } else {
                         puppet_catalog_add_resource(env->catalog, res_type, title_str, NULL, 0,
                                                     NULL, 0);  /* create_resources: no source location */
+                        /* Apply current scope tags */
+                        puppet_apply_current_tags(env, res_type, title_str);
                     }
                 }
             }
@@ -6036,6 +6046,8 @@ puppet_value_t *puppet_func_ensure_resource(puppet_expr_list_t *args, puppet_env
 
                 puppet_catalog_add_resource(env->catalog, res_type, title_str, cat_params, param_count,
                                             NULL, 0);
+                /* Apply current scope tags */
+                puppet_apply_current_tags(env, res_type, title_str);
             }
 
             /* Pop the define scope */
@@ -6075,6 +6087,8 @@ puppet_value_t *puppet_func_ensure_resource(puppet_expr_list_t *args, puppet_env
 
                 puppet_catalog_add_resource(env->catalog, res_type, title_str, cat_params, param_count,
                                             NULL, 0);
+                /* Apply current scope tags */
+                puppet_apply_current_tags(env, res_type, title_str);
             }
         }
 
