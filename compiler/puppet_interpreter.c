@@ -2227,10 +2227,70 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
     
     switch (stmt->type) {
         case PUPPET_STMT_ASSIGNMENT:
-            puppet_exec_assignment(stmt->data.assignment.variable.data, 
+            puppet_exec_assignment(stmt->data.assignment.variable.data,
                                   stmt->data.assignment.value, env);
             break;
-            
+
+        case PUPPET_STMT_APPEND: {
+            /* Array append: $var += value */
+            const char *var_name = stmt->data.append.variable.data;
+            puppet_value_t *append_val = puppet_eval_expr(stmt->data.append.value, env);
+
+            /* Get current value of variable */
+            puppet_value_t *current = puppet_env_get_var(env, var_name);
+
+            if (!current || current->type == PUPPET_VALUE_UNDEF) {
+                /* Variable doesn't exist or is undef - create new array */
+                if (append_val->type == PUPPET_VALUE_ARRAY) {
+                    /* Value is already an array, use it directly */
+                    puppet_env_set_scoped_var(env, var_name, append_val, PUPPET_VAR_LOCAL);
+                } else {
+                    /* Wrap single value in array */
+                    puppet_value_t *new_array = puppet_value_create_array();
+                    puppet_array_append(new_array->data.array, puppet_value_copy(append_val));
+                    puppet_env_set_scoped_var(env, var_name, new_array, PUPPET_VAR_LOCAL);
+                    puppet_value_destroy(append_val);
+                }
+            } else if (current->type == PUPPET_VALUE_ARRAY) {
+                /* Append to existing array */
+                puppet_value_t *new_array = puppet_value_copy(current);
+                if (append_val->type == PUPPET_VALUE_ARRAY) {
+                    /* Concatenate arrays */
+                    for (size_t i = 0; i < append_val->data.array->count; i++) {
+                        puppet_array_append(new_array->data.array,
+                            puppet_value_copy(append_val->data.array->items[i]));
+                    }
+                } else {
+                    /* Append single value */
+                    puppet_array_append(new_array->data.array, puppet_value_copy(append_val));
+                }
+                puppet_env_set_scoped_var(env, var_name, new_array, PUPPET_VAR_LOCAL);
+                puppet_value_destroy(append_val);
+            } else if (current->type == PUPPET_VALUE_HASH && append_val->type == PUPPET_VALUE_HASH) {
+                /* Merge hashes */
+                puppet_value_t *new_hash = puppet_value_copy(current);
+                /* Copy entries from append_val to new_hash */
+                for (size_t i = 0; i < append_val->data.hash->bucket_count; i++) {
+                    puppet_hash_entry_t *entry = append_val->data.hash->buckets[i];
+                    while (entry) {
+                        puppet_hash_set(new_hash->data.hash, entry->key.data, entry->key.len,
+                            puppet_value_copy(entry->value));
+                        entry = entry->next;
+                    }
+                }
+                puppet_env_set_scoped_var(env, var_name, new_hash, PUPPET_VAR_LOCAL);
+                puppet_value_destroy(append_val);
+            } else {
+                puppet_warn("Cannot append to non-array/non-hash variable '%s'", var_name);
+                puppet_value_destroy(append_val);
+            }
+
+            if (puppet_verbose) {
+                puppet_debug("Appended to $%s", var_name);
+            }
+            break;
+        }
+
         case PUPPET_STMT_CLASS_DEF:
             puppet_exec_class_def(stmt, env);
             break;

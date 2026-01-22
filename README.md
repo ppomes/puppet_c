@@ -378,6 +378,8 @@ docker compose -f docker-compose.demo.yml down
 - Virtual resources (`@resource`), `realize()`, collectors (`<| |>`)
 - Exported resources (`@@resource`), exported collectors (`<<| |>>`) with PuppetDB
 - Resource overrides (`Type['title'] { attr => value }`)
+- Resource chains (`->`, `~>`, `<-`, `<~`) for ordering and notification
+- Array/hash append (`$arr += [val]`, `$hash += {k => v}`)
 - Iterator functions: `each()`, `map()`, `filter()`, `reduce()`
 - Deferred functions (`Deferred()` with agent-side evaluation)
 - Pluginsync (server serves module plugins to agents)
@@ -429,7 +431,6 @@ docker compose -f docker-compose.demo.yml down
 ### Known Limitations
 
 - **Type matching**: `=~ Type` syntax parsed but not evaluated
-- **Resource chains**: `->`, `~>` parsed but ordering not enforced
 - **All-nodes mode**: ERB templates skipped for faster CI/CD validation
 
 ## Security

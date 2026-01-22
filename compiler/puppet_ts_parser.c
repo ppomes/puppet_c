@@ -1318,11 +1318,20 @@ static puppet_expr_t *build_index_expr(puppet_expr_t *object, TSNode access_node
     return expr;
 }
 
-/* Convert assignment: variable = expression */
+/* Convert assignment: variable = expression or variable += expression */
 static puppet_stmt_t *convert_assignment(TSNode node, const char *source) {
     puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
-    stmt->type = PUPPET_STMT_ASSIGNMENT;
     stmt->loc = node_location(node);
+
+    /* Check operator field to distinguish = vs += */
+    TSNode op_node = ts_node_child_by_field_name(node, "operator", 8);
+    bool is_append = false;
+    if (!ts_node_is_null(op_node)) {
+        char *op = node_text(op_node, source);
+        is_append = (strcmp(op, "+=") == 0);
+        puppet_free(op);
+    }
+    stmt->type = is_append ? PUPPET_STMT_APPEND : PUPPET_STMT_ASSIGNMENT;
 
     /*
      * Assignment can have multiple forms:

@@ -71,6 +71,7 @@ EXTRA_DIST = \
     puppet/chained_access_test.pp \
     puppet/binary_expr_test.pp \
     puppet/chain_test.pp \
+    puppet/append_test.pp \
     facts/sample_facts.json \
     facts/multi_node_facts.json \
     facts/test_facts_usage.pp \
@@ -85,6 +86,7 @@ EXTRA_DIST = \
     test_epp.sh \
     test_features.sh \
     test_chains.sh \
+    test_append.sh \
     modules/epp_test/templates/trim_basic.epp \
     modules/epp_test/templates/trim_newlines.epp \
     modules/epp_test/templates/if_elsif_else.epp \
@@ -93,7 +95,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append
 	@echo "All tests completed."
 
 check-parser:
@@ -474,4 +476,15 @@ check-chains:
 		exit 1; \
 	fi
 
-.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-memory check-asan
+check-append:
+	@echo "Running array/hash append tests (+=)..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_append.sh > output/append.out 2>&1; then \
+		echo "✅ All append tests passed!"; \
+	else \
+		echo "❌ Some append tests failed:"; \
+		sed 's/^/  /' output/append.out; \
+		exit 1; \
+	fi
+
+.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-memory check-asan
