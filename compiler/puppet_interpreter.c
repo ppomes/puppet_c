@@ -3274,6 +3274,111 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
             break;
         }
 
+        case PUPPET_STMT_RESOURCE_CHAIN: {
+            /* Execute both sides of the chain */
+            puppet_stmt_t *left_stmt = stmt->data.chain.left;
+            puppet_stmt_t *right_stmt = stmt->data.chain.right;
+
+            /* Execute left side (may add resources to catalog) */
+            if (left_stmt) {
+                puppet_exec_stmt(left_stmt, env);
+            }
+
+            /* Execute right side (may add resources to catalog) */
+            if (right_stmt) {
+                puppet_exec_stmt(right_stmt, env);
+            }
+
+            /* Now add edges from left resources to right resources */
+            if (!env->catalog || !left_stmt || !right_stmt) {
+                break;
+            }
+
+            /* Determine relationship type */
+            puppet_relationship_t rel = (stmt->data.chain.type == CHAIN_NOTIFY)
+                ? PUPPET_REL_NOTIFY : PUPPET_REL_BEFORE;
+
+            /* Helper: extract resource refs from a statement */
+            /* For expression statements with resource refs */
+            char *left_type = NULL, *left_title = NULL;
+            char *right_type = NULL, *right_title = NULL;
+
+            /* Extract left resource reference */
+            /* For nested chains, use the rightmost resource */
+            puppet_stmt_t *left_ref = left_stmt;
+            while (left_ref && left_ref->type == PUPPET_STMT_RESOURCE_CHAIN) {
+                left_ref = left_ref->data.chain.right;
+            }
+
+            if (left_ref && left_ref->type == PUPPET_STMT_EXPRESSION &&
+                left_ref->data.expr &&
+                left_ref->data.expr->type == PUPPET_EXPR_RESOURCE_REF) {
+
+                left_type = puppet_strdup(left_ref->data.expr->data.resource_ref.type.data);
+                puppet_value_t *title_val = puppet_eval_expr(
+                    left_ref->data.expr->data.resource_ref.title, env);
+                if (title_val && title_val->type == PUPPET_VALUE_STRING) {
+                    left_title = puppet_strdup(title_val->data.string.data);
+                }
+                puppet_value_destroy(title_val);
+
+            } else if (left_ref && left_ref->type == PUPPET_STMT_RESOURCE &&
+                       left_ref->data.resource.instances &&
+                       left_ref->data.resource.instance_count > 0) {
+                /* Resource declaration - get type and first title */
+                left_type = puppet_strdup(left_ref->data.resource.type.data);
+                puppet_value_t *title_val = puppet_eval_expr(
+                    left_ref->data.resource.instances[0].title, env);
+                if (title_val && title_val->type == PUPPET_VALUE_STRING) {
+                    left_title = puppet_strdup(title_val->data.string.data);
+                }
+                puppet_value_destroy(title_val);
+            }
+
+            /* Extract right resource reference */
+            if (right_stmt->type == PUPPET_STMT_EXPRESSION &&
+                right_stmt->data.expr &&
+                right_stmt->data.expr->type == PUPPET_EXPR_RESOURCE_REF) {
+
+                right_type = puppet_strdup(right_stmt->data.expr->data.resource_ref.type.data);
+                puppet_value_t *title_val = puppet_eval_expr(
+                    right_stmt->data.expr->data.resource_ref.title, env);
+                if (title_val && title_val->type == PUPPET_VALUE_STRING) {
+                    right_title = puppet_strdup(title_val->data.string.data);
+                }
+                puppet_value_destroy(title_val);
+
+            } else if (right_stmt->type == PUPPET_STMT_RESOURCE &&
+                       right_stmt->data.resource.instances &&
+                       right_stmt->data.resource.instance_count > 0) {
+                /* Resource declaration - get type and first title */
+                right_type = puppet_strdup(right_stmt->data.resource.type.data);
+                puppet_value_t *title_val = puppet_eval_expr(
+                    right_stmt->data.resource.instances[0].title, env);
+                if (title_val && title_val->type == PUPPET_VALUE_STRING) {
+                    right_title = puppet_strdup(title_val->data.string.data);
+                }
+                puppet_value_destroy(title_val);
+            }
+
+            /* Add edge if we have both sides */
+            if (left_type && left_title && right_type && right_title) {
+                puppet_catalog_add_edge(env->catalog,
+                    left_type, left_title, right_type, right_title, rel);
+                puppet_debug("Added %s edge: %s[%s] -> %s[%s]",
+                    rel == PUPPET_REL_NOTIFY ? "notify" : "before",
+                    left_type, left_title, right_type, right_title);
+            } else {
+                puppet_warn("Could not extract resource references from chain");
+            }
+
+            puppet_free(left_type);
+            puppet_free(left_title);
+            puppet_free(right_type);
+            puppet_free(right_title);
+            break;
+        }
+
         default:
             puppet_warn("Unimplemented statement type: %d", stmt->type);
             break;

@@ -70,6 +70,7 @@ EXTRA_DIST = \
     puppet/splat_test.pp \
     puppet/chained_access_test.pp \
     puppet/binary_expr_test.pp \
+    puppet/chain_test.pp \
     facts/sample_facts.json \
     facts/multi_node_facts.json \
     facts/test_facts_usage.pp \
@@ -83,6 +84,7 @@ EXTRA_DIST = \
     test_erb.sh \
     test_epp.sh \
     test_features.sh \
+    test_chains.sh \
     modules/epp_test/templates/trim_basic.epp \
     modules/epp_test/templates/trim_newlines.epp \
     modules/epp_test/templates/if_elsif_else.epp \
@@ -91,7 +93,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains
 	@echo "All tests completed."
 
 check-parser:
@@ -461,4 +463,15 @@ check-features:
 		exit 1; \
 	fi
 
-.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-memory check-asan
+check-chains:
+	@echo "Running resource chain tests (-> ~> <- <~)..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_chains.sh > output/chains.out 2>&1; then \
+		echo "✅ All resource chain tests passed!"; \
+	else \
+		echo "❌ Some resource chain tests failed:"; \
+		sed 's/^/  /' output/chains.out; \
+		exit 1; \
+	fi
+
+.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-memory check-asan

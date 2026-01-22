@@ -1881,6 +1881,111 @@ static puppet_stmt_t *convert_statement(TSNode node, const char *source) {
     /* Check 'statement' wrapper for patterns */
     if (strcmp(type, "statement") == 0) {
         uint32_t count = ts_node_named_child_count(node);
+
+        /* Check for resource chains first - they have chaining_arrow children */
+        TSNode arrow_node = find_child(node, "chaining_arrow");
+        if (!ts_node_is_null(arrow_node)) {
+            /* This is a chain statement - find all arrows and operands */
+            size_t arrow_count = 0;
+            uint32_t arrow_positions[16];
+            char *arrow_types[16];
+
+            for (uint32_t i = 0; i < count && arrow_count < 16; i++) {
+                TSNode child = ts_node_named_child(node, i);
+                if (node_is(child, "chaining_arrow")) {
+                    arrow_positions[arrow_count] = i;
+                    arrow_types[arrow_count] = node_text(child, source);
+                    arrow_count++;
+                }
+            }
+
+            if (arrow_count > 0) {
+                /* Build chain statements for each arrow */
+                puppet_stmt_t *chain_stmt = NULL;
+                puppet_stmt_t *prev_stmt = NULL;
+
+                uint32_t start = 0;
+                for (size_t a = 0; a <= arrow_count; a++) {
+                    uint32_t end = (a < arrow_count) ? arrow_positions[a] : count;
+
+                    /* Build resource reference for children from start to end */
+                    puppet_string_t res_type = {0};
+                    puppet_expr_t *title_expr = NULL;
+                    puppet_stmt_t *cur_stmt = NULL;
+
+                    for (uint32_t i = start; i < end; i++) {
+                        TSNode child = ts_node_named_child(node, i);
+                        const char *child_type = ts_node_type(child);
+
+                        if (strcmp(child_type, "type") == 0) {
+                            char *type_str = node_text(child, source);
+                            res_type = puppet_string_create(type_str);
+                            puppet_free(type_str);
+                        } else if (strcmp(child_type, "access") == 0) {
+                            TSNode access_elem = find_child(child, "access_element");
+                            if (!ts_node_is_null(access_elem)) {
+                                TSNode value_node = ts_node_named_child(access_elem, 0);
+                                title_expr = convert_expression(value_node, source);
+                            }
+                        } else if (strcmp(child_type, "resource_type") == 0) {
+                            /* Inline resource declaration in chain */
+                            cur_stmt = convert_statement(child, source);
+                        }
+                    }
+
+                    /* Build resource reference from type + title */
+                    if (!cur_stmt && res_type.data && title_expr) {
+                        puppet_expr_t *ref_expr = puppet_calloc(1, sizeof(puppet_expr_t));
+                        ref_expr->type = PUPPET_EXPR_RESOURCE_REF;
+                        ref_expr->loc = node_location(node);
+                        ref_expr->data.resource_ref.type = res_type;
+                        ref_expr->data.resource_ref.title = title_expr;
+
+                        cur_stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
+                        cur_stmt->type = PUPPET_STMT_EXPRESSION;
+                        cur_stmt->loc = node_location(node);
+                        cur_stmt->data.expr = ref_expr;
+                    } else if (res_type.data && !cur_stmt) {
+                        puppet_free(res_type.data);
+                    }
+
+                    if (a == 0) {
+                        prev_stmt = cur_stmt;
+                    } else if (cur_stmt && prev_stmt) {
+                        int is_notify = (strcmp(arrow_types[a-1], "~>") == 0 ||
+                                       strcmp(arrow_types[a-1], "<~") == 0);
+                        int is_reverse = (strcmp(arrow_types[a-1], "<-") == 0 ||
+                                        strcmp(arrow_types[a-1], "<~") == 0);
+
+                        puppet_stmt_t *new_chain = puppet_calloc(1, sizeof(puppet_stmt_t));
+                        new_chain->type = PUPPET_STMT_RESOURCE_CHAIN;
+                        new_chain->loc = node_location(node);
+                        new_chain->data.chain.type = is_notify ? CHAIN_NOTIFY : CHAIN_BEFORE;
+
+                        if (is_reverse) {
+                            new_chain->data.chain.left = cur_stmt;
+                            new_chain->data.chain.right = chain_stmt ? chain_stmt : prev_stmt;
+                        } else {
+                            new_chain->data.chain.left = chain_stmt ? chain_stmt : prev_stmt;
+                            new_chain->data.chain.right = cur_stmt;
+                        }
+                        chain_stmt = new_chain;
+                        prev_stmt = cur_stmt;
+                    }
+
+                    if (a < arrow_count) {
+                        start = arrow_positions[a] + 1;
+                    }
+                }
+
+                for (size_t a = 0; a < arrow_count; a++) {
+                    puppet_free(arrow_types[a]);
+                }
+
+                return chain_stmt;
+            }
+        }
+
         if (count >= 2) {
             TSNode first = ts_node_named_child(node, 0);
             /* assignment: variable = expression */
@@ -2018,8 +2123,17 @@ static puppet_stmt_t *convert_statement(TSNode node, const char *source) {
 
                 return stmt;
             }
+        } else {
+            /* Resource reference without attribute_list - wrap as expression statement */
+            puppet_expr_t *expr = convert_expression(node, source);
+            if (expr) {
+                puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
+                stmt->type = PUPPET_STMT_EXPRESSION;
+                stmt->loc = node_location(node);
+                stmt->data.expr = expr;
+                return stmt;
+            }
         }
-        /* Resource reference without attribute_list is just an expression */
     }
 
     /* Handle resource collectors: File <| ensure == present |> */

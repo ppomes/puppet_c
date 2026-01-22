@@ -12,7 +12,7 @@
 - [~] `PUPPET_STMT_RESOURCE_DEFAULT` - Resource defaults (`File { mode => '0644' }`) - parsed, not applied
 - [x] `PUPPET_STMT_RESOURCE_OVERRIDE` - Resource override (`File['/x'] { attr => val }`)
 - [x] `PUPPET_STMT_RESOURCE_COLLECTOR` - Virtual collectors (`File <| ensure == present |>`)
-- [ ] `PUPPET_STMT_RESOURCE_CHAIN` - Ordering arrows (`Package['x'] -> Service['y']`)
+- [x] `PUPPET_STMT_RESOURCE_CHAIN` - Ordering arrows (`Package['x'] -> Service['y']`)
 - [ ] `PUPPET_STMT_APPEND` - Array append (`$arr += ['value']`)
 - [x] `PUPPET_STMT_REQUIRE` - `require class_name`
 - [x] `PUPPET_STMT_CONTAIN` - `contain class_name`

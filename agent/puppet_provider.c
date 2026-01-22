@@ -761,6 +761,69 @@ static void extract_dependencies(resource_entry_t *entries, size_t count, size_t
 }
 
 /**
+ * @brief Extract edges from catalog JSON and add as dependencies
+ *
+ * Edges are explicit ordering relationships from resource chains:
+ * Package['ntp'] -> File['/etc/ntp.conf'] ~> Service['ntpd']
+ *
+ * Edge format in JSON:
+ * {
+ *   "source": {"type": "Package", "title": "ntp"},
+ *   "target": {"type": "File", "title": "/etc/ntp.conf"},
+ *   "relationship": "before"  // or "notifies"
+ * }
+ */
+static void extract_edges(resource_entry_t *entries, size_t count, json_value_t *catalog) {
+    json_value_t *edges = json_object_get(catalog, "edges");
+    if (!edges || !json_is_array(edges)) return;
+
+    size_t edge_count = json_array_size(edges);
+    for (size_t i = 0; i < edge_count; i++) {
+        json_value_t *edge = json_array_get(edges, i);
+        if (!edge || !json_is_object(edge)) continue;
+
+        /* Get source and target */
+        json_value_t *source = json_object_get(edge, "source");
+        json_value_t *target = json_object_get(edge, "target");
+        json_value_t *rel = json_object_get(edge, "relationship");
+
+        if (!source || !json_is_object(source) ||
+            !target || !json_is_object(target)) continue;
+
+        /* Extract source type/title */
+        json_value_t *src_type = json_object_get(source, "type");
+        json_value_t *src_title = json_object_get(source, "title");
+        if (!src_type || !json_is_string(src_type) ||
+            !src_title || !json_is_string(src_title)) continue;
+
+        /* Extract target type/title */
+        json_value_t *tgt_type = json_object_get(target, "type");
+        json_value_t *tgt_title = json_object_get(target, "title");
+        if (!tgt_type || !json_is_string(tgt_type) ||
+            !tgt_title || !json_is_string(tgt_title)) continue;
+
+        /* Find source and target indices */
+        int src_idx = find_resource_index(entries, count,
+            json_get_string(src_type), json_get_string(src_title));
+        int tgt_idx = find_resource_index(entries, count,
+            json_get_string(tgt_type), json_get_string(tgt_title));
+
+        if (src_idx < 0 || tgt_idx < 0) continue;
+
+        /* Add dependency: target depends on source */
+        add_dependency(entries, (size_t)tgt_idx, (size_t)src_idx);
+
+        /* For notify relationship, also add notify trigger */
+        if (rel && json_is_string(rel)) {
+            const char *rel_str = json_get_string(rel);
+            if (strcmp(rel_str, "notifies") == 0 || strcmp(rel_str, "notify") == 0) {
+                add_notify(entries, (size_t)src_idx, (size_t)tgt_idx);
+            }
+        }
+    }
+}
+
+/**
  * @brief Topological sort using Kahn's algorithm
  * @return Sorted indices array (caller must free), or NULL on cycle
  */
@@ -1007,10 +1070,13 @@ int catalog_apply(const char *catalog_json, apply_context_t *ctx) {
         entries[i].dep_count = 0;
     }
 
-    /* Phase 2: Extract explicit dependencies */
+    /* Phase 2: Extract explicit dependencies from metaparameters */
     for (size_t i = 0; i < resource_count; i++) {
         extract_dependencies(entries, resource_count, i);
     }
+
+    /* Phase 2b: Extract edges from catalog (resource chains) */
+    extract_edges(entries, resource_count, catalog);
 
     /* Phase 3: Add auto-require dependencies (file -> parent directory) */
     add_file_autorequires(entries, resource_count);
