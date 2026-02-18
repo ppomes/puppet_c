@@ -73,6 +73,7 @@ EXTRA_DIST = \
     puppet/chain_test.pp \
     puppet/append_test.pp \
     puppet/tag_test.pp \
+    puppet/virtual_override_test.pp \
     facts/sample_facts.json \
     facts/multi_node_facts.json \
     facts/test_facts_usage.pp \
@@ -89,6 +90,7 @@ EXTRA_DIST = \
     test_chains.sh \
     test_append.sh \
     test_tags.sh \
+    test_virtual_override.sh \
     modules/epp_test/templates/trim_basic.epp \
     modules/epp_test/templates/trim_newlines.epp \
     modules/epp_test/templates/if_elsif_else.epp \
@@ -97,7 +99,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override
 	@echo "All tests completed."
 
 check-parser:
@@ -500,4 +502,15 @@ check-tags:
 		exit 1; \
 	fi
 
-.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-memory check-asan
+check-virtual-override:
+	@echo "Running virtual/exported resource override tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_virtual_override.sh > output/virtual_override.out 2>&1; then \
+		echo "✅ All virtual override tests passed!"; \
+	else \
+		echo "❌ Some virtual override tests failed:"; \
+		sed 's/^/  /' output/virtual_override.out; \
+		exit 1; \
+	fi
+
+.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-memory check-asan

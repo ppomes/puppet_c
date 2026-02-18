@@ -3315,7 +3315,25 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
             /* Check if resource exists in resource catalog */
             puppet_value_t *existing = puppet_hash_get(env->resource_catalog,
                                                        resource_id, strlen(resource_id));
-            if (!existing) {
+
+            /* Also check virtual and exported resources if not found in regular catalog */
+            puppet_virtual_resource_t *vres = NULL;
+            if (!existing && env->virtual_resources) {
+                puppet_value_t *vres_val = puppet_hash_get(env->virtual_resources,
+                                                           resource_id, strlen(resource_id));
+                if (vres_val) {
+                    vres = (puppet_virtual_resource_t *)vres_val->data.string.data;
+                }
+            }
+            if (!existing && !vres && env->exported_resources) {
+                puppet_value_t *vres_val = puppet_hash_get(env->exported_resources,
+                                                           resource_id, strlen(resource_id));
+                if (vres_val) {
+                    vres = (puppet_virtual_resource_t *)vres_val->data.string.data;
+                }
+            }
+
+            if (!existing && !vres) {
                 puppet_error_at(stmt->loc, "Resource override: %s has not been declared", resource_id);
                 puppet_env_increment_error(env);
                 puppet_free(res_type);
@@ -3324,8 +3342,43 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                 break;
             }
 
+            if (vres) {
+                /* Apply override to virtual/exported resource */
+                for (size_t i = 0; i < stmt->data.resource_override.attr_count; i++) {
+                    const char *attr_name = stmt->data.resource_override.attributes[i].name.data;
+                    puppet_value_t *attr_val = puppet_eval_expr(
+                        stmt->data.resource_override.attributes[i].value, env);
+
+                    /* Check if attribute already exists */
+                    bool found = false;
+                    for (size_t j = 0; j < vres->attr_count; j++) {
+                        if (vres->attrs[j].name && strcmp(vres->attrs[j].name, attr_name) == 0) {
+                            /* Replace existing value */
+                            puppet_value_destroy(vres->attrs[j].value);
+                            vres->attrs[j].value = puppet_value_copy(attr_val);
+                            found = true;
+                            break;
+                        }
+                    }
+
+                    if (!found) {
+                        /* Add new attribute */
+                        size_t new_count = vres->attr_count + 1;
+                        vres->attrs = puppet_realloc(vres->attrs,
+                            new_count * sizeof(puppet_virtual_attr_t));
+                        vres->attrs[vres->attr_count].name = puppet_strdup(attr_name);
+                        vres->attrs[vres->attr_count].value = puppet_value_copy(attr_val);
+                        vres->attr_count = new_count;
+                    }
+
+                    puppet_value_destroy(attr_val);
+                }
+
+                puppet_debug("Applied resource override to virtual %s", resource_id);
+            }
+
             /* Find resource in catalog and update attributes */
-            if (env->build_catalog && env->catalog) {
+            if (existing && env->build_catalog && env->catalog) {
                 puppet_catalog_resource_t *cat_res = puppet_catalog_find_resource(
                     env->catalog, res_type, title_str);
 
