@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <sys/stat.h>
 #include <pthread.h>
 
@@ -325,9 +326,13 @@ static void puppet_set_ruby_variable(const char *name, puppet_value_t *value, pu
     strncpy(clean_name, name, sizeof(clean_name) - 1);
     clean_name[sizeof(clean_name) - 1] = '\0';
 
-    // Replace dots with underscores for Ruby variable names
+    // Replace characters invalid in Ruby identifiers with underscores
+    // Ruby identifiers only allow [a-zA-Z0-9_] (and :: for scope)
     for (char *p = clean_name; *p; p++) {
-        if (*p == '.') *p = '_';
+        unsigned char c = (unsigned char)*p;
+        if (c >= 128 || (!isalnum(c) && c != '_' && c != ':')) {
+            *p = '_';
+        }
     }
 
     snprintf(var_name, sizeof(var_name), "@%s", clean_name);
