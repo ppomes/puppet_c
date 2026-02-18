@@ -1514,6 +1514,21 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
                 }
                 return result;
             }
+            // String - String: bareword like "www-data" parsed as subtraction
+            // Concatenate with '-' to reconstruct the original bareword
+            if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_STRING) {
+                size_t left_len = left->data.string.len;
+                size_t right_len = right->data.string.len;
+                size_t total = left_len + 1 + right_len;
+                char *buf = puppet_malloc(total + 1);
+                memcpy(buf, left->data.string.data, left_len);
+                buf[left_len] = '-';
+                memcpy(buf + left_len + 1, right->data.string.data, right_len);
+                buf[total] = '\0';
+                puppet_value_t *result = puppet_value_create_string(buf, total);
+                puppet_free(buf);
+                return result;
+            }
             // Array - Array: remove elements (set difference)
             if (left->type == PUPPET_VALUE_ARRAY && right->type == PUPPET_VALUE_ARRAY) {
                 puppet_value_t *result = puppet_value_create_array();
@@ -1750,6 +1765,16 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
                     return puppet_value_create_bool(ret == 0);
                 }
             }
+            /* String =~ Regexp */
+            if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_REGEXP) {
+                regex_t regex;
+                int ret = regcomp(&regex, right->data.regexp.data, REG_EXTENDED | REG_NOSUB);
+                if (ret == 0) {
+                    ret = regexec(&regex, left->data.string.data, 0, NULL, 0);
+                    regfree(&regex);
+                    return puppet_value_create_bool(ret == 0);
+                }
+            }
             return puppet_value_create_bool(false);
 
         case PUPPET_OP_NOT_MATCH:
@@ -1769,6 +1794,16 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
                 /* Regular regex non-match */
                 regex_t regex;
                 int ret = regcomp(&regex, right->data.string.data, REG_EXTENDED | REG_NOSUB);
+                if (ret == 0) {
+                    ret = regexec(&regex, left->data.string.data, 0, NULL, 0);
+                    regfree(&regex);
+                    return puppet_value_create_bool(ret != 0);
+                }
+            }
+            /* String !~ Regexp */
+            if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_REGEXP) {
+                regex_t regex;
+                int ret = regcomp(&regex, right->data.regexp.data, REG_EXTENDED | REG_NOSUB);
                 if (ret == 0) {
                     ret = regexec(&regex, left->data.string.data, 0, NULL, 0);
                     regfree(&regex);
