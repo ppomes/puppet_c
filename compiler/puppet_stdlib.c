@@ -4029,6 +4029,36 @@ puppet_value_t *puppet_func_regsubst(puppet_expr_list_t *args, puppet_env_t *env
         flags_val = puppet_eval_expr(args->exprs[3], env);
     }
 
+    /* Auto-convert non-string arguments to strings (Puppet does this implicitly) */
+    puppet_value_t *vals[] = { str_val, pattern_val, repl_val };
+    for (int i = 0; i < 3; i++) {
+        if (vals[i] && vals[i]->type != PUPPET_VALUE_STRING) {
+            char buf[64];
+            const char *s = NULL;
+            switch (vals[i]->type) {
+                case PUPPET_VALUE_NUMBER:
+                    snprintf(buf, sizeof(buf), "%g", vals[i]->data.number);
+                    s = buf;
+                    break;
+                case PUPPET_VALUE_BOOL:
+                    s = vals[i]->data.boolean ? "true" : "false";
+                    break;
+                case PUPPET_VALUE_UNDEF:
+                    s = "";
+                    break;
+                default:
+                    s = "";
+                    break;
+            }
+            puppet_value_t *new_val = puppet_value_create_string(s, strlen(s));
+            puppet_value_destroy(vals[i]);
+            vals[i] = new_val;
+        }
+    }
+    str_val = vals[0];
+    pattern_val = vals[1];
+    repl_val = vals[2];
+
     if (!str_val || str_val->type != PUPPET_VALUE_STRING ||
         !pattern_val || pattern_val->type != PUPPET_VALUE_STRING ||
         !repl_val || repl_val->type != PUPPET_VALUE_STRING) {
