@@ -27,6 +27,7 @@ static int puppet_register_node_def(puppet_env_t *env, puppet_stmt_t *node_def);
 static puppet_stmt_t *puppet_find_matching_node(puppet_env_t *env, const char *certname);
 void puppet_exec_nodes_parallel(puppet_env_t *env, size_t node_count);
 static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *certname, puppet_env_t *env);
+static void puppet_exec_deferred_define(puppet_deferred_define_t *deferred, puppet_env_t *env);
 
 /**
  * Automatic Parameter Lookup (APL) for class parameters.
@@ -354,6 +355,16 @@ puppet_env_t *puppet_env_create(void) {
     env->skip_erb = false;
     env->stats_mutex = NULL;  /* Allocated only when needed */
 
+    /* Initialize deferred define execution */
+    env->deferred_defines = NULL;
+    env->deferred_define_count = 0;
+    env->deferred_define_capacity = 0;
+
+    /* Initialize pending realizes */
+    env->pending_realizes = puppet_calloc(1, sizeof(puppet_hash_t));
+    env->pending_realizes->bucket_count = 16;
+    env->pending_realizes->buckets = puppet_calloc(16, sizeof(puppet_hash_entry_t*));
+
     /* Initialize exported resources (PuppetDB integration) */
     env->puppetdb = NULL;
     env->exported_resources = puppet_calloc(1, sizeof(puppet_hash_t));
@@ -493,6 +504,25 @@ void puppet_env_destroy(puppet_env_t *env) {
         }
         puppet_free(env->exported_resources->buckets);
         puppet_free(env->exported_resources);
+    }
+
+    /* Clean up deferred defines array */
+    puppet_free(env->deferred_defines);
+
+    /* Clean up pending realizes */
+    if (env->pending_realizes) {
+        for (size_t i = 0; i < env->pending_realizes->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->pending_realizes->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                puppet_value_destroy(entry->value);
+                puppet_free(entry);
+                entry = next;
+            }
+        }
+        puppet_free(env->pending_realizes->buckets);
+        puppet_free(env->pending_realizes);
     }
 
     /* Clean up defined types hash */
@@ -2734,6 +2764,37 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         puppet_hash_set(env->virtual_resources, resource_id, strlen(resource_id), vres_ptr);
 
                         puppet_debug("Stored virtual resource: %s (with %zu attrs)", resource_id, vres->attr_count);
+
+                        /* Check if a pending realize exists for this resource */
+                        if (env->pending_realizes) {
+                            puppet_value_t *pending = puppet_hash_get(env->pending_realizes,
+                                resource_id, strlen(resource_id));
+                            if (pending && !vres->realized) {
+                                /* Auto-realize: add to resource catalog */
+                                puppet_value_t *marker = puppet_value_create_bool(true);
+                                puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);
+
+                                if (env->build_catalog && env->catalog) {
+                                    puppet_catalog_param_t *params = NULL;
+                                    if (vres->attr_count > 0) {
+                                        params = puppet_calloc(vres->attr_count, sizeof(puppet_catalog_param_t));
+                                        for (size_t j = 0; j < vres->attr_count; j++) {
+                                            if (vres->attrs[j].name) {
+                                                params[j].name = puppet_strdup(vres->attrs[j].name);
+                                                params[j].value = puppet_value_copy(vres->attrs[j].value);
+                                            }
+                                        }
+                                    }
+                                    puppet_catalog_add_resource(env->catalog,
+                                        vres->type, vres->title, params, vres->attr_count, NULL, 0);
+                                    puppet_apply_current_tags(env, vres->type, vres->title);
+                                }
+
+                                vres->realized = true;
+                                puppet_debug("Auto-realized pending virtual resource: %s", resource_id);
+                            }
+                        }
+
                         puppet_free(resource_id);
                         puppet_value_destroy(title_val);
                     }
@@ -2904,105 +2965,28 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         puppet_value_t *marker = puppet_value_create_bool(true);
                         puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);
 
-                        puppet_debug("Executing defined type %s with title: %s",
+                        puppet_debug("Deferring defined type %s with title: %s",
                                     stmt->data.resource.type.data, title_str);
 
-                        /* Create new scope for the define execution */
-                        puppet_scope_t *define_scope = puppet_scope_create(env->current_scope,
-                                                                          stmt->data.resource.type.data);
-                        puppet_scope_push(env, define_scope);
-
-                        /* Bind $name and $title to the title */
-                        puppet_value_t *name_val = puppet_value_create_string(title_str, strlen(title_str));
-                        puppet_scope_set_var(define_scope, "name", name_val);
-                        puppet_scope_set_var(define_scope, "title", puppet_value_copy(name_val));
-
-                        /* Set $module_name for the define */
-                        const char *def_type_sep = strstr(stmt->data.resource.type.data, "::");
-                        if (def_type_sep) {
-                            size_t def_type_module_len = def_type_sep - stmt->data.resource.type.data;
-                            char *def_type_module = puppet_malloc(def_type_module_len + 1);
-                            memcpy(def_type_module, stmt->data.resource.type.data, def_type_module_len);
-                            def_type_module[def_type_module_len] = '\0';
-                            puppet_scope_set_var(define_scope, "module_name",
-                                puppet_value_create_string(def_type_module, def_type_module_len));
-                            puppet_free(def_type_module);
-                        } else {
-                            puppet_scope_set_var(define_scope, "module_name",
-                                puppet_value_create_string(stmt->data.resource.type.data,
-                                                          strlen(stmt->data.resource.type.data)));
+                        /* Defer execution: grow array if needed */
+                        if (env->deferred_define_count >= env->deferred_define_capacity) {
+                            size_t new_cap = env->deferred_define_capacity ? env->deferred_define_capacity * 2 : 16;
+                            env->deferred_defines = puppet_realloc(env->deferred_defines,
+                                new_cap * sizeof(puppet_deferred_define_t));
+                            env->deferred_define_capacity = new_cap;
                         }
+                        puppet_deferred_define_t *deferred = &env->deferred_defines[env->deferred_define_count++];
+                        deferred->define_stmt = define_stmt;
+                        deferred->resource_stmt = stmt;
+                        deferred->instance = instance;
+                        deferred->type_name = puppet_strdup(stmt->data.resource.type.data);
+                        deferred->title = puppet_strdup(title_str);
+                        deferred->resource_id = resource_id;  /* transfer ownership */
+                        deferred->override_attrs = puppet_calloc(1, sizeof(puppet_hash_t));
+                        deferred->override_attrs->bucket_count = 8;
+                        deferred->override_attrs->buckets = puppet_calloc(8, sizeof(puppet_hash_entry_t*));
+                        deferred->class_reexecuting = env->class_reexecuting;
 
-                        /* Bind define parameters with defaults */
-                        for (size_t p = 0; p < define_stmt->data.define.params.count; p++) {
-                            const char *param_name = define_stmt->data.define.params.params[p].name.data;
-                            puppet_value_t *param_value = NULL;
-
-                            /* Look for matching attribute in resource instance */
-                            for (size_t a = 0; a < instance->attr_count; a++) {
-                                if (instance->attributes[a].name.data &&
-                                    strcmp(instance->attributes[a].name.data, param_name) == 0) {
-                                    param_value = puppet_eval_expr(instance->attributes[a].value, env);
-                                    break;
-                                }
-                            }
-
-                            /* Use default value if not provided */
-                            if (!param_value && define_stmt->data.define.params.params[p].default_value) {
-                                param_value = puppet_eval_expr(
-                                    define_stmt->data.define.params.params[p].default_value, env);
-                            }
-
-                            if (param_value) {
-                                puppet_scope_set_var(define_scope, param_name, param_value);
-                            }
-                        }
-
-                        /* Execute the define body */
-                        puppet_exec_stmt_list(&define_stmt->data.define.body, env);
-
-                        /* Add the define instance to catalog */
-                        if (env->build_catalog && env->catalog) {
-                            /* Collect parameters for catalog */
-                            puppet_catalog_param_t *params = NULL;
-                            size_t param_count = instance->attr_count;
-                            if (param_count > 0) {
-                                params = puppet_calloc(param_count, sizeof(puppet_catalog_param_t));
-                            }
-                            size_t param_idx = 0;
-                            for (size_t j = 0; j < instance->attr_count; j++) {
-                                if (instance->attributes[j].name.data) {
-                                    puppet_value_t *attr_val = puppet_eval_expr(instance->attributes[j].value, env);
-                                    params[param_idx].name = puppet_strdup(instance->attributes[j].name.data);
-                                    params[param_idx].value = puppet_value_copy(attr_val);
-                                    param_idx++;
-                                    puppet_value_destroy(attr_val);
-                                }
-                            }
-                            int add_result = puppet_catalog_add_resource(env->catalog,
-                                                        stmt->data.resource.type.data,
-                                                        title_str,
-                                                        params,
-                                                        param_idx,
-                                                        stmt->loc.filename,
-                                                        stmt->loc.line);
-                            // If duplicate and we're re-executing a class, update the resource instead
-                            if (add_result == -1 && env->class_reexecuting) {
-                                puppet_catalog_update_resource(env->catalog,
-                                                               stmt->data.resource.type.data,
-                                                               title_str,
-                                                               params,
-                                                               param_idx);
-                            }
-                            /* Apply current scope tags */
-                            puppet_apply_current_tags(env, stmt->data.resource.type.data, title_str);
-                        }
-
-                        /* Pop the define scope */
-                        puppet_scope_t *popped = puppet_scope_pop(env);
-                        puppet_scope_destroy(popped);
-
-                        puppet_free(resource_id);
                         }  /* End of array title expansion loop */
 
                         puppet_value_destroy(title_val);
@@ -3368,13 +3352,35 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                 }
             }
 
-            if (!existing && !vres) {
+            /* Also check deferred defines (always search - deferred defines have
+             * a marker in resource_catalog so 'existing' may be true) */
+            puppet_deferred_define_t *deferred_def = NULL;
+            for (size_t di = 0; di < env->deferred_define_count; di++) {
+                if (strcmp(env->deferred_defines[di].resource_id, resource_id) == 0) {
+                    deferred_def = &env->deferred_defines[di];
+                    break;
+                }
+            }
+
+            if (!existing && !vres && !deferred_def) {
                 puppet_error_at(stmt->loc, "Resource override: %s has not been declared", resource_id);
                 puppet_env_increment_error(env);
                 puppet_free(res_type);
                 puppet_free(resource_id);
                 puppet_value_destroy(title_val);
                 break;
+            }
+
+            if (deferred_def) {
+                /* Apply override to deferred define - store evaluated attrs */
+                for (size_t i = 0; i < stmt->data.resource_override.attr_count; i++) {
+                    const char *attr_name = stmt->data.resource_override.attributes[i].name.data;
+                    puppet_value_t *attr_val = puppet_eval_expr(
+                        stmt->data.resource_override.attributes[i].value, env);
+                    puppet_hash_set(deferred_def->override_attrs,
+                                   attr_name, strlen(attr_name), attr_val);
+                }
+                puppet_debug("Applied resource override to deferred define %s", resource_id);
             }
 
             if (vres) {
@@ -3570,10 +3576,198 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
     }
 }
 
+/**
+ * Execute a deferred defined type instance.
+ * Parameters are resolved from: override_attrs first, then instance attrs, then defaults.
+ */
+static void puppet_exec_deferred_define(puppet_deferred_define_t *deferred, puppet_env_t *env) {
+    puppet_stmt_t *define_stmt = deferred->define_stmt;
+    puppet_stmt_t *resource_stmt = deferred->resource_stmt;
+    puppet_resource_instance_t *instance = deferred->instance;
+
+    puppet_debug("Executing deferred defined type %s with title: %s",
+                deferred->type_name, deferred->title);
+
+    /* Restore class_reexecuting state from deferral time */
+    bool saved_class_reexecuting = env->class_reexecuting;
+    env->class_reexecuting = deferred->class_reexecuting;
+
+    /* Create new scope for the define execution */
+    puppet_scope_t *define_scope = puppet_scope_create(env->current_scope,
+                                                      deferred->type_name);
+    puppet_scope_push(env, define_scope);
+
+    /* Bind $name and $title to the title */
+    puppet_value_t *name_val = puppet_value_create_string(deferred->title, strlen(deferred->title));
+    puppet_scope_set_var(define_scope, "name", name_val);
+    puppet_scope_set_var(define_scope, "title", puppet_value_copy(name_val));
+
+    /* Set $module_name for the define */
+    const char *def_type_sep = strstr(deferred->type_name, "::");
+    if (def_type_sep) {
+        size_t def_type_module_len = def_type_sep - deferred->type_name;
+        char *def_type_module = puppet_malloc(def_type_module_len + 1);
+        memcpy(def_type_module, deferred->type_name, def_type_module_len);
+        def_type_module[def_type_module_len] = '\0';
+        puppet_scope_set_var(define_scope, "module_name",
+            puppet_value_create_string(def_type_module, def_type_module_len));
+        puppet_free(def_type_module);
+    } else {
+        puppet_scope_set_var(define_scope, "module_name",
+            puppet_value_create_string(deferred->type_name,
+                                      strlen(deferred->type_name)));
+    }
+
+    /* Bind define parameters: override_attrs > instance attrs > defaults */
+    for (size_t p = 0; p < define_stmt->data.define.params.count; p++) {
+        const char *param_name = define_stmt->data.define.params.params[p].name.data;
+        puppet_value_t *param_value = NULL;
+
+        /* 1. Check override attributes first */
+        puppet_value_t *override_val = puppet_hash_get(deferred->override_attrs,
+            param_name, strlen(param_name));
+        if (override_val) {
+            param_value = puppet_value_copy(override_val);
+        }
+
+        /* 2. Look for matching attribute in resource instance */
+        if (!param_value) {
+            for (size_t a = 0; a < instance->attr_count; a++) {
+                if (instance->attributes[a].name.data &&
+                    strcmp(instance->attributes[a].name.data, param_name) == 0) {
+                    param_value = puppet_eval_expr(instance->attributes[a].value, env);
+                    break;
+                }
+            }
+        }
+
+        /* 3. Use default value if not provided */
+        if (!param_value && define_stmt->data.define.params.params[p].default_value) {
+            param_value = puppet_eval_expr(
+                define_stmt->data.define.params.params[p].default_value, env);
+        }
+
+        if (param_value) {
+            puppet_scope_set_var(define_scope, param_name, param_value);
+        }
+    }
+
+    /* Execute the define body */
+    puppet_exec_stmt_list(&define_stmt->data.define.body, env);
+
+    /* Add the define instance to catalog */
+    if (env->build_catalog && env->catalog) {
+        /* Collect parameters for catalog (instance attrs + overrides merged) */
+        size_t max_params = instance->attr_count + deferred->override_attrs->bucket_count;
+        puppet_catalog_param_t *params = puppet_calloc(max_params, sizeof(puppet_catalog_param_t));
+        size_t param_idx = 0;
+
+        for (size_t j = 0; j < instance->attr_count; j++) {
+            if (instance->attributes[j].name.data) {
+                const char *attr_name = instance->attributes[j].name.data;
+                /* Check if overridden */
+                puppet_value_t *override_val = puppet_hash_get(deferred->override_attrs,
+                    attr_name, strlen(attr_name));
+                puppet_value_t *attr_val;
+                if (override_val) {
+                    attr_val = puppet_value_copy(override_val);
+                } else {
+                    attr_val = puppet_eval_expr(instance->attributes[j].value, env);
+                }
+                params[param_idx].name = puppet_strdup(attr_name);
+                params[param_idx].value = puppet_value_copy(attr_val);
+                param_idx++;
+                puppet_value_destroy(attr_val);
+            }
+        }
+
+        /* Add override-only attributes (not in instance) */
+        for (size_t b = 0; b < deferred->override_attrs->bucket_count; b++) {
+            puppet_hash_entry_t *entry = deferred->override_attrs->buckets[b];
+            while (entry) {
+                /* Check if already added from instance */
+                bool already_added = false;
+                for (size_t j = 0; j < instance->attr_count; j++) {
+                    if (instance->attributes[j].name.data &&
+                        strcmp(instance->attributes[j].name.data, entry->key.data) == 0) {
+                        already_added = true;
+                        break;
+                    }
+                }
+                if (!already_added) {
+                    params[param_idx].name = puppet_strdup(entry->key.data);
+                    params[param_idx].value = puppet_value_copy(entry->value);
+                    param_idx++;
+                }
+                entry = entry->next;
+            }
+        }
+
+        int add_result = puppet_catalog_add_resource(env->catalog,
+                                    deferred->type_name,
+                                    deferred->title,
+                                    params,
+                                    param_idx,
+                                    resource_stmt->loc.filename,
+                                    resource_stmt->loc.line);
+        if (add_result == -1 && env->class_reexecuting) {
+            puppet_catalog_update_resource(env->catalog,
+                                           deferred->type_name,
+                                           deferred->title,
+                                           params,
+                                           param_idx);
+        }
+        puppet_apply_current_tags(env, deferred->type_name, deferred->title);
+    }
+
+    /* Pop the define scope */
+    puppet_scope_t *popped = puppet_scope_pop(env);
+    puppet_scope_destroy(popped);
+
+    /* Restore class_reexecuting state */
+    env->class_reexecuting = saved_class_reexecuting;
+}
+
 void puppet_exec_stmt_list(puppet_stmt_list_t *stmts, puppet_env_t *env) {
+    size_t saved_count = env->deferred_define_count;
+
     for (size_t i = 0; i < stmts->count; i++) {
         puppet_exec_stmt(stmts->stmts[i], env);
     }
+
+    /* Execute defines deferred during THIS statement list (not outer ones).
+     * Use while loop because executing a deferred define may itself defer more. */
+    size_t exec_cursor = saved_count;
+    while (exec_cursor < env->deferred_define_count) {
+        size_t batch_end = env->deferred_define_count;
+        for (size_t i = exec_cursor; i < batch_end; i++) {
+            puppet_exec_deferred_define(&env->deferred_defines[i], env);
+        }
+        exec_cursor = batch_end;
+    }
+
+    /* Cleanup deferred entries from this level */
+    for (size_t i = saved_count; i < env->deferred_define_count; i++) {
+        puppet_free(env->deferred_defines[i].type_name);
+        puppet_free(env->deferred_defines[i].title);
+        puppet_free(env->deferred_defines[i].resource_id);
+        /* Free override_attrs hash */
+        if (env->deferred_defines[i].override_attrs) {
+            for (size_t b = 0; b < env->deferred_defines[i].override_attrs->bucket_count; b++) {
+                puppet_hash_entry_t *entry = env->deferred_defines[i].override_attrs->buckets[b];
+                while (entry) {
+                    puppet_hash_entry_t *next = entry->next;
+                    puppet_free(entry->key.data);
+                    puppet_value_destroy(entry->value);
+                    puppet_free(entry);
+                    entry = next;
+                }
+            }
+            puppet_free(env->deferred_defines[i].override_attrs->buckets);
+            puppet_free(env->deferred_defines[i].override_attrs);
+        }
+    }
+    env->deferred_define_count = saved_count;
 }
 
 void puppet_exec_assignment(const char *var, puppet_expr_t *value, puppet_env_t *env) {
@@ -4057,6 +4251,21 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
         }
     }
 
+    /* Clear pending realizes */
+    if (env->pending_realizes) {
+        for (size_t i = 0; i < env->pending_realizes->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->pending_realizes->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                puppet_value_destroy(entry->value);
+                puppet_free(entry);
+                entry = next;
+            }
+            env->pending_realizes->buckets[i] = NULL;
+        }
+    }
+
     /* Switch to node-specific facts (skip in parallel mode - uses env->current_node_certname instead) */
     if (env->facts_db && !env->parallel_nodes) {
         if (puppet_facts_db_set_current_node(env->facts_db, certname) == 0) {
@@ -4270,6 +4479,21 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
                         entry = next;
                     }
                     env->defined_resources->buckets[i] = NULL;
+                }
+            }
+
+            /* Clear pending realizes */
+            if (env->pending_realizes) {
+                for (size_t i = 0; i < env->pending_realizes->bucket_count; i++) {
+                    puppet_hash_entry_t *entry = env->pending_realizes->buckets[i];
+                    while (entry) {
+                        puppet_hash_entry_t *next = entry->next;
+                        puppet_free(entry->key.data);
+                        puppet_value_destroy(entry->value);
+                        puppet_free(entry);
+                        entry = next;
+                    }
+                    env->pending_realizes->buckets[i] = NULL;
                 }
             }
         }
@@ -5693,6 +5917,12 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
     env->classes_being_reexecuted = create_hash(32);
     env->class_reexecuting = false;
 
+    /* Initialize deferred defines and pending realizes for this clone */
+    env->deferred_defines = NULL;
+    env->deferred_define_count = 0;
+    env->deferred_define_capacity = 0;
+    env->pending_realizes = create_hash(16);
+
     /* Copy define_types hash (shallow copy - AST pointers are shared but hash structure is per-thread) */
     env->define_types = puppet_calloc(1, sizeof(puppet_hash_t));
     env->define_types->bucket_count = source->define_types->bucket_count;
@@ -5884,6 +6114,25 @@ static void puppet_env_destroy_clone(puppet_env_t *env) {
         }
         puppet_free(env->define_types->buckets);
         puppet_free(env->define_types);
+    }
+
+    /* Free deferred defines array */
+    puppet_free(env->deferred_defines);
+
+    /* Free pending realizes hash */
+    if (env->pending_realizes) {
+        for (size_t i = 0; i < env->pending_realizes->bucket_count; i++) {
+            puppet_hash_entry_t *e = env->pending_realizes->buckets[i];
+            while (e) {
+                puppet_hash_entry_t *next = e->next;
+                puppet_free(e->key.data);
+                puppet_value_destroy(e->value);
+                puppet_free(e);
+                e = next;
+            }
+        }
+        puppet_free(env->pending_realizes->buckets);
+        puppet_free(env->pending_realizes);
     }
 
     /* Don't free shared data: loader, facts_db, data_providers, stats_mutex */

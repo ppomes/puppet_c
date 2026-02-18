@@ -126,8 +126,26 @@ typedef struct puppet_virtual_resource {
 } puppet_virtual_resource_t;
 
 /**
+ * @brief Deferred define type instance awaiting execution
+ *
+ * When a defined type resource is declared, execution is deferred until
+ * the end of the current statement list, so that resource overrides
+ * can be applied before the define body runs.
+ */
+typedef struct puppet_deferred_define {
+    puppet_stmt_t *define_stmt;
+    puppet_stmt_t *resource_stmt;
+    puppet_resource_instance_t *instance;
+    char *type_name;
+    char *title;
+    char *resource_id;
+    puppet_hash_t *override_attrs;  /* attr_name -> puppet_value_t* */
+    bool class_reexecuting;         /* preserve class_reexecuting state at deferral time */
+} puppet_deferred_define_t;
+
+/**
  * @brief Execution environment with scope management
- * 
+ *
  * The environment maintains the runtime state for Puppet evaluation,
  * including the current variable scope, scope stack for nested contexts,
  * and global scope for top-level variables. Provides the context needed
@@ -231,6 +249,14 @@ typedef struct puppet_env {
     /* Exported resources (PuppetDB integration) */
     puppetdb_t *puppetdb;                     /**< PuppetDB for storing/querying exported resources */
     puppet_hash_t *exported_resources;        /**< Local cache of exported resources awaiting storage */
+
+    /* Deferred define type execution */
+    puppet_deferred_define_t *deferred_defines;   /**< Array of deferred define instances */
+    size_t deferred_define_count;                 /**< Number of deferred defines */
+    size_t deferred_define_capacity;              /**< Capacity of deferred defines array */
+
+    /* Pending realizes for deferred virtual resources */
+    puppet_hash_t *pending_realizes;              /**< resource_key -> true for deferred realize() calls */
 } puppet_env_t;
 
 /* Global verbose flag for use before environment is created */

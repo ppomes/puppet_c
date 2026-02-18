@@ -696,8 +696,17 @@ puppet_value_t *puppet_func_realize(puppet_expr_list_t *args, puppet_env_t *env)
                 }
             }
         } else {
-            puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
-                "realize: %s is not a virtual resource", ref_str);
+            /* Virtual resource not found yet - if there are deferred defines
+             * pending, the resource may be created later, so store as pending.
+             * Otherwise warn immediately. */
+            if (env->pending_realizes && env->deferred_define_count > 0) {
+                puppet_value_t *marker = puppet_value_create_bool(true);
+                puppet_hash_set(env->pending_realizes, lookup_key, strlen(lookup_key), marker);
+                puppet_debug("Pending realize for %s (virtual resource not yet declared)", ref_str);
+            } else {
+                puppet_log_loc(PUPPET_LOG_WARNING, args->exprs[i]->loc,
+                    "realize: %s is not a virtual resource", ref_str);
+            }
         }
 
         puppet_free(lookup_key);
