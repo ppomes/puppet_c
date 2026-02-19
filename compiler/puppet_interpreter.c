@@ -5914,6 +5914,7 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
     env->resource_catalog = create_hash(64);
     env->virtual_resources = create_hash(64);
     env->defined_resources = create_hash(64);
+    env->exported_resources = create_hash(64);
     env->classes_being_reexecuted = create_hash(32);
     env->class_reexecuting = false;
 
@@ -6060,6 +6061,20 @@ static void puppet_env_destroy_clone(puppet_env_t *env) {
         }
         puppet_free(env->virtual_resources->buckets);
         puppet_free(env->virtual_resources);
+    }
+
+    if (env->exported_resources) {
+        for (size_t i = 0; i < env->exported_resources->bucket_count; i++) {
+            puppet_hash_entry_t *e = env->exported_resources->buckets[i];
+            while (e) {
+                puppet_hash_entry_t *next = e->next;
+                puppet_free(e->key.data);
+                puppet_free(e);
+                e = next;
+            }
+        }
+        puppet_free(env->exported_resources->buckets);
+        puppet_free(env->exported_resources);
     }
 
     if (env->defined_resources) {
