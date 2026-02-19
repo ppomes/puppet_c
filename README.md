@@ -59,18 +59,27 @@ See [Installation](#installation) below.
 
 ### Prerequisites
 
+**Required** (compiler and facter):
 - GCC and standard build tools
 - libtree-sitter
 - Ruby 3.0-3.3 with development headers (for ERB templates)
 - libyaml (for Hiera)
 - libssl/openssl (for SSL/TLS and crypto functions)
+
+**Optional** (server and agent):
 - libmicrohttpd (for puppetc-server HTTP/HTTPS support)
+- libsqlite3 (for PuppetDB support in server)
 - libcurl with OpenSSL (for puppetc-agent mTLS)
-- libsqlite3 (for PuppetDB)
 
 ### Installing Dependencies
 
-**Debian/Ubuntu:**
+**Debian/Ubuntu (compiler only):**
+```bash
+sudo apt-get install build-essential autoconf automake libtool pkg-config \
+  libtree-sitter-dev ruby3.2-dev libyaml-dev libssl-dev
+```
+
+**Debian/Ubuntu (all components):**
 ```bash
 sudo apt-get install build-essential autoconf automake libtool pkg-config \
   libtree-sitter-dev ruby3.2-dev libyaml-dev libssl-dev \
@@ -80,12 +89,14 @@ sudo apt-get install build-essential autoconf automake libtool pkg-config \
 **macOS (Homebrew):**
 ```bash
 brew install pkg-config tree-sitter ruby@3.3 libyaml openssl \
-  libmicrohttpd curl sqlite3 autoconf automake libtool
+  autoconf automake libtool
+# Optional, for server/agent:
+brew install libmicrohttpd curl sqlite3
 ```
 
 ### Building from Source
 
-**Linux:**
+**Linux (compiler and facter only):**
 ```bash
 ./autogen.sh
 ./configure
@@ -93,22 +104,68 @@ make
 make check
 ```
 
-**macOS (with Homebrew):**
+**Linux (all components):**
 ```bash
 ./autogen.sh
-./configure \
-  --with-treesitter=/opt/homebrew/opt/tree-sitter \
-  --with-ruby=/opt/homebrew/opt/ruby@3.3 \
-  --with-yaml=/opt/homebrew/opt/libyaml \
-  --with-openssl=/opt/homebrew/opt/openssl \
-  --with-microhttpd=/opt/homebrew/opt/libmicrohttpd \
-  --with-curl=/opt/homebrew/opt/curl \
-  --with-sqlite=/opt/homebrew/opt/sqlite3
+./configure --enable-server --enable-agent
 make
 make check
 ```
 
-Note: On Intel Macs, use `/usr/local/opt/` instead of `/opt/homebrew/opt/`.
+**macOS (with Homebrew, compiler and facter only):**
+```bash
+./autogen.sh
+./configure \
+  --with-treesitter=$(brew --prefix tree-sitter) \
+  --with-ruby=$(brew --prefix ruby@3.3) \
+  --with-yaml=$(brew --prefix libyaml) \
+  --with-openssl=$(brew --prefix openssl)
+make
+make check
+```
+
+**macOS (with Homebrew, all components):**
+```bash
+./autogen.sh
+./configure \
+  --with-treesitter=$(brew --prefix tree-sitter) \
+  --with-ruby=$(brew --prefix ruby@3.3) \
+  --with-yaml=$(brew --prefix libyaml) \
+  --with-openssl=$(brew --prefix openssl) \
+  --with-microhttpd=$(brew --prefix libmicrohttpd) \
+  --with-curl=$(brew --prefix curl) \
+  --with-sqlite=$(brew --prefix sqlite3) \
+  --enable-server --enable-agent
+make
+make check
+```
+
+### macOS (Homebrew formula)
+
+A Homebrew formula is provided for the compiler and facter:
+
+```bash
+brew install --HEAD Formula/puppet-c.rb
+```
+
+### Configure Options
+
+| Option | Description |
+|--------|-------------|
+| `--enable-server` | Build puppetc-server (requires libmicrohttpd, sqlite3) |
+| `--enable-agent` | Build puppetc-agent (requires libcurl) |
+| `--disable-server` | Skip server even if dependencies are present |
+| `--disable-agent` | Skip agent even if dependencies are present |
+| `--enable-debug` | Enable debug mode |
+| `--with-treesitter=PATH` | Path to tree-sitter installation |
+| `--with-ruby=PATH` | Path to Ruby installation |
+| `--with-yaml=PATH` | Path to libyaml installation |
+| `--with-openssl=PATH` | Path to OpenSSL installation |
+| `--with-microhttpd=PATH` | Path to libmicrohttpd installation |
+| `--with-curl=PATH` | Path to libcurl installation |
+| `--with-sqlite=PATH` | Path to SQLite3 installation |
+
+By default, server and agent are built automatically if their dependencies are found, and skipped otherwise.
 
 ## Usage
 

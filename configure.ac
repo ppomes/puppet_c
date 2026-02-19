@@ -209,80 +209,136 @@ AC_DEFINE([HAVE_OPENSSL], [1], [Define if OpenSSL is available])
 AC_SUBST([OPENSSL_CFLAGS])
 AC_SUBST([OPENSSL_LIBS])
 
-# Check for libmicrohttpd (required for puppetc-server)
+# Optional components: --enable-server / --enable-agent
+# Default: auto (build if deps found, skip if not)
+# --enable-server:  require deps, error if missing
+# --disable-server: skip even if deps are present
+AC_ARG_ENABLE([server],
+    [AS_HELP_STRING([--enable-server], [Build puppetc-server (requires libmicrohttpd, sqlite3) [default=auto]])],
+    [enable_server=$enableval],
+    [enable_server=auto])
+
+AC_ARG_ENABLE([agent],
+    [AS_HELP_STRING([--enable-agent], [Build puppetc-agent (requires libcurl) [default=auto]])],
+    [enable_agent=$enableval],
+    [enable_agent=auto])
+
+# Check for libmicrohttpd (needed for puppetc-server)
 AC_ARG_WITH([microhttpd],
     [AS_HELP_STRING([--with-microhttpd=PATH], [Path to libmicrohttpd installation])],
     [microhttpd_prefix=$withval],
     [microhttpd_prefix=])
 
-if test -n "$microhttpd_prefix"; then
-    AC_MSG_CHECKING([for libmicrohttpd in $microhttpd_prefix])
-    if test -f "$microhttpd_prefix/include/microhttpd.h"; then
-        MHD_CFLAGS="-I$microhttpd_prefix/include"
-        MHD_LIBS="-L$microhttpd_prefix/lib -lmicrohttpd"
-        AC_MSG_RESULT([yes])
+have_microhttpd=no
+if test "x$enable_server" != "xno"; then
+    if test -n "$microhttpd_prefix"; then
+        AC_MSG_CHECKING([for libmicrohttpd in $microhttpd_prefix])
+        if test -f "$microhttpd_prefix/include/microhttpd.h"; then
+            MHD_CFLAGS="-I$microhttpd_prefix/include"
+            MHD_LIBS="-L$microhttpd_prefix/lib -lmicrohttpd"
+            have_microhttpd=yes
+            AC_MSG_RESULT([yes])
+        else
+            AC_MSG_RESULT([no])
+            AC_MSG_ERROR([libmicrohttpd headers not found in $microhttpd_prefix/include])
+        fi
     else
-        AC_MSG_RESULT([no])
-        AC_MSG_ERROR([libmicrohttpd headers not found in $microhttpd_prefix/include])
+        PKG_CHECK_MODULES([MHD], [libmicrohttpd], [have_microhttpd=yes], [
+            if test "x$enable_server" = "xyes"; then
+                AC_MSG_ERROR([libmicrohttpd not found (required by --enable-server). Install libmicrohttpd-dev or use --with-microhttpd=PATH])
+            fi
+        ])
     fi
-else
-    PKG_CHECK_MODULES([MHD], [libmicrohttpd], [], [
-        AC_MSG_ERROR([libmicrohttpd not found. Install libmicrohttpd-dev package or use --with-microhttpd=PATH])
-    ])
 fi
-AC_DEFINE([HAVE_MICROHTTPD], [1], [Define if libmicrohttpd is available])
+if test "x$have_microhttpd" = "xyes"; then
+    AC_DEFINE([HAVE_MICROHTTPD], [1], [Define if libmicrohttpd is available])
+fi
 AC_SUBST([MHD_CFLAGS])
 AC_SUBST([MHD_LIBS])
 
-# Check for libcurl (required for puppetc-agent)
+# Check for libcurl (needed for puppetc-agent)
 AC_ARG_WITH([curl],
     [AS_HELP_STRING([--with-curl=PATH], [Path to libcurl installation])],
     [curl_prefix=$withval],
     [curl_prefix=])
 
-if test -n "$curl_prefix"; then
-    AC_MSG_CHECKING([for libcurl in $curl_prefix])
-    if test -f "$curl_prefix/include/curl/curl.h"; then
-        CURL_CFLAGS="-I$curl_prefix/include"
-        CURL_LIBS="-L$curl_prefix/lib -lcurl"
-        AC_MSG_RESULT([yes])
+have_curl=no
+if test "x$enable_agent" != "xno"; then
+    if test -n "$curl_prefix"; then
+        AC_MSG_CHECKING([for libcurl in $curl_prefix])
+        if test -f "$curl_prefix/include/curl/curl.h"; then
+            CURL_CFLAGS="-I$curl_prefix/include"
+            CURL_LIBS="-L$curl_prefix/lib -lcurl"
+            have_curl=yes
+            AC_MSG_RESULT([yes])
+        else
+            AC_MSG_RESULT([no])
+            AC_MSG_ERROR([libcurl headers not found in $curl_prefix/include])
+        fi
     else
-        AC_MSG_RESULT([no])
-        AC_MSG_ERROR([libcurl headers not found in $curl_prefix/include])
+        PKG_CHECK_MODULES([CURL], [libcurl], [have_curl=yes], [
+            if test "x$enable_agent" = "xyes"; then
+                AC_MSG_ERROR([libcurl not found (required by --enable-agent). Install libcurl4-openssl-dev or use --with-curl=PATH])
+            fi
+        ])
     fi
-else
-    PKG_CHECK_MODULES([CURL], [libcurl], [], [
-        AC_MSG_ERROR([libcurl not found. Install libcurl4-openssl-dev package or use --with-curl=PATH])
-    ])
 fi
-AC_DEFINE([HAVE_CURL], [1], [Define if libcurl is available])
+if test "x$have_curl" = "xyes"; then
+    AC_DEFINE([HAVE_CURL], [1], [Define if libcurl is available])
+fi
 AC_SUBST([CURL_CFLAGS])
 AC_SUBST([CURL_LIBS])
 
-# Check for SQLite3 (required for PuppetDB)
+# Check for SQLite3 (needed for PuppetDB support in server)
 AC_ARG_WITH([sqlite],
     [AS_HELP_STRING([--with-sqlite=PATH], [Path to SQLite3 installation])],
     [sqlite_prefix=$withval],
     [sqlite_prefix=])
 
-if test -n "$sqlite_prefix"; then
-    AC_MSG_CHECKING([for SQLite3 in $sqlite_prefix])
-    if test -f "$sqlite_prefix/include/sqlite3.h"; then
-        SQLITE_CFLAGS="-I$sqlite_prefix/include"
-        SQLITE_LIBS="-L$sqlite_prefix/lib -lsqlite3"
-        AC_MSG_RESULT([yes])
+have_sqlite=no
+if test "x$enable_server" != "xno"; then
+    if test -n "$sqlite_prefix"; then
+        AC_MSG_CHECKING([for SQLite3 in $sqlite_prefix])
+        if test -f "$sqlite_prefix/include/sqlite3.h"; then
+            SQLITE_CFLAGS="-I$sqlite_prefix/include"
+            SQLITE_LIBS="-L$sqlite_prefix/lib -lsqlite3"
+            have_sqlite=yes
+            AC_MSG_RESULT([yes])
+        else
+            AC_MSG_RESULT([no])
+            AC_MSG_ERROR([SQLite3 headers not found in $sqlite_prefix/include])
+        fi
     else
-        AC_MSG_RESULT([no])
-        AC_MSG_ERROR([SQLite3 headers not found in $sqlite_prefix/include])
+        PKG_CHECK_MODULES([SQLITE], [sqlite3], [have_sqlite=yes], [
+            if test "x$enable_server" = "xyes"; then
+                AC_MSG_ERROR([SQLite3 not found (required by --enable-server). Install libsqlite3-dev or use --with-sqlite=PATH])
+            fi
+        ])
     fi
-else
-    PKG_CHECK_MODULES([SQLITE], [sqlite3], [], [
-        AC_MSG_ERROR([SQLite3 not found. Install libsqlite3-dev package or use --with-sqlite=PATH])
-    ])
 fi
-AC_DEFINE([HAVE_SQLITE], [1], [Define if SQLite3 is available])
+if test "x$have_sqlite" = "xyes"; then
+    AC_DEFINE([HAVE_SQLITE], [1], [Define if SQLite3 is available])
+fi
 AC_SUBST([SQLITE_CFLAGS])
 AC_SUBST([SQLITE_LIBS])
+
+# Determine which optional components to build
+build_server=no
+if test "x$enable_server" = "xyes" -o "x$enable_server" = "xauto"; then
+    if test "x$have_microhttpd" = "xyes"; then
+        build_server=yes
+    fi
+fi
+
+build_agent=no
+if test "x$enable_agent" = "xyes" -o "x$enable_agent" = "xauto"; then
+    if test "x$have_curl" = "xyes"; then
+        build_agent=yes
+    fi
+fi
+
+AM_CONDITIONAL([BUILD_SERVER], [test "x$build_server" = "xyes"])
+AM_CONDITIONAL([BUILD_AGENT], [test "x$build_agent" = "xyes"])
 
 # Check for standard library functions
 AC_CHECK_FUNCS([malloc realloc free strdup strlen strcpy snprintf])
@@ -317,12 +373,20 @@ echo "  Debug mode:       $enable_debug"
 echo "  CC:               $CC"
 echo "  CFLAGS:           $CFLAGS"
 echo ""
-echo "Libraries detected:"
+echo "Required libraries:"
 echo "  tree-sitter:      ${TREESITTER_LIBS:-not found}"
 echo "  Ruby:             ${RUBY_LIBS:-not found}"
 echo "  libyaml:          ${YAML_LIBS:-not found}"
 echo "  OpenSSL:          ${OPENSSL_LIBS:-not found}"
+echo ""
+echo "Optional libraries:"
 echo "  libmicrohttpd:    ${MHD_LIBS:-not found}"
 echo "  libcurl:          ${CURL_LIBS:-not found}"
 echo "  SQLite3:          ${SQLITE_LIBS:-not found}"
+echo ""
+echo "Components to build:"
+echo "  puppetc-compile:  yes"
+echo "  facter_c:         yes"
+echo "  puppetc-server:   $build_server"
+echo "  puppetc-agent:    $build_agent"
 echo ""

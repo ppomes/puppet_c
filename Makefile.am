@@ -1,4 +1,11 @@
-SUBDIRS = common facter compiler server agent tests
+SUBDIRS = common facter compiler
+if BUILD_SERVER
+SUBDIRS += server
+endif
+if BUILD_AGENT
+SUBDIRS += agent
+endif
+SUBDIRS += tests
 
 # Man pages
 dist_man1_MANS = \
