@@ -7,6 +7,27 @@ LT_INIT
 
 AC_PROG_CC
 
+# Detect Homebrew on macOS and add its pkg-config paths
+# Homebrew installs many libraries as keg-only (not linked into /usr/local or /opt/homebrew),
+# so pkg-config won't find them without explicit PKG_CONFIG_PATH entries.
+AC_MSG_CHECKING([for Homebrew])
+HOMEBREW_PREFIX=`brew --prefix 2>/dev/null`
+if test -n "$HOMEBREW_PREFIX"; then
+    AC_MSG_RESULT([$HOMEBREW_PREFIX])
+    # Add pkg-config paths for keg-only formulae
+    for dir in "$HOMEBREW_PREFIX"/opt/*/lib/pkgconfig; do
+        if test -d "$dir"; then
+            PKG_CONFIG_PATH="$dir:$PKG_CONFIG_PATH"
+        fi
+    done
+    export PKG_CONFIG_PATH
+    # Also add Homebrew's general include/lib paths as fallback
+    CFLAGS="$CFLAGS -I$HOMEBREW_PREFIX/include"
+    LDFLAGS="$LDFLAGS -L$HOMEBREW_PREFIX/lib"
+else
+    AC_MSG_RESULT([no])
+fi
+
 # Check for tree-sitter library (required for parsing)
 AC_ARG_WITH([treesitter],
     [AS_HELP_STRING([--with-treesitter=PATH], [Path to tree-sitter installation])],
