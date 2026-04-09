@@ -56,6 +56,37 @@ Exit code: 0 = all nodes OK, 1 = errors found.
 .BR \-P ", " \-\-parallel
 Process nodes in parallel for faster execution. Requires \fB\-\-all\-nodes\fR.
 .TP
+.BR \-8 ", " \-\-puppet8
+Check Puppet 8 compatibility. Detects deprecated and removed language features
+to help migrate from older Puppet versions. Can be used standalone (lint-only)
+or combined with \fB\-e\fR to lint and evaluate.
+.sp
+\fBPhase 1 \- AST checks:\fR
+.RS
+.IP \(bu 2
+Removed Hiera 3 functions: \fBhiera()\fR, \fBhiera_array()\fR, \fBhiera_hash()\fR, \fBhiera_include()\fR
+.IP \(bu 2
+Legacy top-scope fact variables: \fB$::ipaddress\fR, \fB$::fqdn\fR, \fB$::osfamily\fR, etc. (45+ facts mapped to \fB$facts[]\fR replacements)
+.IP \(bu 2
+Deprecated functions: \fBvalidate_*\fR, \fBis_*\fR, \fBstr2bool\fR, \fBcreate_resources\fR, etc.
+.IP \(bu 2
+Class inheritance (\fBinherits\fR keyword)
+.IP \(bu 2
+Import statements
+.RE
+.sp
+\fBPhase 2 \- File scanning:\fR (when input is a directory)
+.RS
+.IP \(bu 2
+ERB templates: \fBscope.lookupvar()\fR, \fBscope['var']\fR, variables without \fB@\fR prefix
+.IP \(bu 2
+Ruby files: old function API (\fBPuppet::Parser::Functions.newfunction\fR), Ruby 3.x issues (\fBFile.exists?\fR, \fBURI.escape\fR, \fBPSON\fR)
+.IP \(bu 2
+metadata.json: version constraints incompatible with Puppet 8
+.RE
+.sp
+Exit code is 1 if any errors (removed features) are found.
+.TP
 .BR \-v ", " \-\-verbose
 Enable verbose/debug output.
 .TP
@@ -95,6 +126,18 @@ Output catalog as JSON:
 .PP
 .RS
 puppetc-compile \-c \-o catalog.json /etc/puppet
+.RE
+.PP
+Check Puppet 8 compatibility (manifests + templates + Ruby files):
+.PP
+.RS
+puppetc-compile \-\-puppet8 /etc/puppet
+.RE
+.PP
+Check a single manifest for Puppet 8 issues:
+.PP
+.RS
+puppetc-compile \-\-puppet8 manifests/site.pp
 .RE
 .SH FILES
 .TP

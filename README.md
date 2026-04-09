@@ -13,11 +13,13 @@ A fast, lightweight Puppet compiler written in C for local manifest development 
 - **Local development**: Validate your manifests and templates before committing
 - **CI/CD pipelines**: Check catalog coherence for all nodes in seconds
 - **Debugging**: See exactly what resources would be created for any node
+- **Puppet 8 migration**: Detect deprecated/removed features across your entire codebase
 
 ## Key Features
 
 - **Fast**: Compile a full catalog with templates in <1 second
 - **Parallel validation**: Check hundreds of nodes in parallel for CI/CD
+- **Puppet 8 linter**: Detect legacy facts, deprecated functions, ERB issues, Ruby API changes
 - **Minimal dependencies**: Pure C with optional Ruby for ERB templates
 - **Complete toolchain**: Includes compiler, server, agent, and facter binaries
 
@@ -195,6 +197,47 @@ puppetc-compile manifest.pp
 # Verbose output (debug)
 puppetc-compile -v -p -n mynode manifests/site.pp
 ```
+
+#### Puppet 8 Migration Check
+
+```bash
+# Check an entire Puppet directory (manifests + modules + templates + Ruby)
+puppetc-compile --puppet8 /etc/puppet
+
+# Check a single manifest
+puppetc-compile --puppet8 manifests/site.pp
+
+# Lint and evaluate together
+puppetc-compile --puppet8 -e -n mynode manifests/site.pp
+```
+
+The `--puppet8` flag runs a two-phase compatibility check:
+
+**Phase 1 - AST analysis** (parsed `.pp` files):
+- Legacy top-scope facts (`$::ipaddress` -> `$facts['networking']['ip']`, 45+ facts mapped)
+- Removed Hiera 3 functions (`hiera()` -> `lookup()`)
+- Deprecated stdlib functions (`validate_*`, `is_*`, `str2bool`, `create_resources`, etc.)
+- Class inheritance (`inherits` keyword)
+- Import statements
+
+**Phase 2 - File scanning** (when input is a directory):
+- ERB templates: `scope.lookupvar()`, `scope['var']`, variables without `@` prefix
+- Ruby files: old function API (`Puppet::Parser::Functions.newfunction`), Ruby 3.x issues (`File.exists?`, `URI.escape`, `PSON`)
+- `metadata.json`: version constraints that exclude Puppet 8
+
+**Example output:**
+```
+error[puppet8]: manifests/site.pp:10: 'hiera' was removed in Puppet 8, use lookup() instead
+error[puppet8]: manifests/site.pp:42: $::ipaddress is removed in Puppet 8, use $facts['networking']['ip']
+warning[puppet8]: modules/mymod/manifests/init.pp:3: class inheritance (inherits 'mymod::params') is deprecated
+error[puppet8]: modules/mymod/templates/config.erb:5: scope.lookupvar() is removed in Puppet 8
+warning[puppet8]: modules/mymod/lib/puppet/parser/functions/myfunc.rb:1: old Ruby API, rewrite using create_function
+
+Puppet 8 compatibility summary: 3 errors, 2 warnings
+File scan results: 2 errors, 1 warning
+```
+
+Exit code is 1 if errors (removed features) are found, 0 if only warnings or clean.
 
 Run `puppetc-compile --help` for all options.
 
