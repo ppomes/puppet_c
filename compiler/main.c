@@ -287,7 +287,35 @@ int main(int argc, char *argv[]) {
     if (result == 0 && program) {
         /* Run Puppet 8 compatibility check if requested */
         if (puppet8_check) {
+            /* Phase 1: AST-based checks on parsed manifests */
             puppet_lint_result_t lint = puppet_lint_puppet8(program);
+
+            /* Phase 2: File-based checks (ERB, Ruby, metadata.json) */
+            puppet_lint_result_t file_lint = puppet_lint_puppet8_directory(input_path);
+            /* Also scan modules directory if available */
+            if (loader) {
+                puppet_lint_result_t mod_lint = puppet_lint_puppet8_directory(
+                    loader->modules_path);
+                file_lint.errors += mod_lint.errors;
+                file_lint.warnings += mod_lint.warnings;
+            }
+
+            if (file_lint.errors > 0 || file_lint.warnings > 0) {
+                fprintf(stderr, "\n\033[1mFile scan results:\033[0m ");
+                if (file_lint.errors > 0)
+                    fprintf(stderr, "\033[1;31m%d error%s\033[0m",
+                            file_lint.errors, file_lint.errors == 1 ? "" : "s");
+                if (file_lint.errors > 0 && file_lint.warnings > 0)
+                    fprintf(stderr, ", ");
+                if (file_lint.warnings > 0)
+                    fprintf(stderr, "\033[1;33m%d warning%s\033[0m",
+                            file_lint.warnings, file_lint.warnings == 1 ? "" : "s");
+                fputc('\n', stderr);
+            }
+
+            lint.errors += file_lint.errors;
+            lint.warnings += file_lint.warnings;
+
             if (lint.errors > 0) {
                 result = 1;
             }

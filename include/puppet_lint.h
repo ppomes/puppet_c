@@ -33,4 +33,17 @@ typedef struct puppet_lint_result {
  */
 puppet_lint_result_t puppet_lint_puppet8(puppet_program_t *program);
 
+/**
+ * @brief Scan a directory tree for Puppet 8 issues in non-Puppet files
+ *
+ * Scans for:
+ * - ERB templates: scope.lookupvar(), scope[], variables without @
+ * - Ruby files: old function API (Puppet::Parser::Functions), Ruby 3.x issues
+ * - metadata.json: version constraints incompatible with Puppet 8
+ *
+ * @param dir_path Root directory to scan (typically modules/ or the project root)
+ * @return Lint result with error/warning counts
+ */
+puppet_lint_result_t puppet_lint_puppet8_directory(const char *dir_path);
+
 #endif /* PUPPET_LINT_H */

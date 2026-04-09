@@ -3,13 +3,19 @@
  * @brief Puppet 8 compatibility checker
  *
  * Detects deprecated and removed language features for Puppet 8 migration.
- * Operates on the parsed AST without requiring evaluation.
+ * Two-phase checking:
+ * 1. AST walk: deprecated functions, legacy variables, class inheritance
+ * 2. File scan: ERB templates, Ruby functions, metadata.json
  */
 
 #include "puppet_lint.h"
+#include "puppet_memory.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 /* ============================================================================
  * Lint message helpers
@@ -42,6 +48,35 @@ static void lint_warning(puppet_lint_result_t *r, puppet_location_t loc,
     if (loc.filename) {
         fprintf(stderr, "%s:%d: ", loc.filename, loc.line);
     }
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, format, args);
+    va_end(args);
+    fputc('\n', stderr);
+}
+
+/* Helper for file-based warnings (filename + line number) */
+static void lint_file_error(puppet_lint_result_t *r, const char *file, int line,
+                            const char *format, ...) __attribute__((format(printf, 4, 5)));
+
+static void lint_file_error(puppet_lint_result_t *r, const char *file, int line,
+                            const char *format, ...) {
+    r->errors++;
+    fprintf(stderr, "\033[1;31merror\033[0m[puppet8]: %s:%d: ", file, line);
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, format, args);
+    va_end(args);
+    fputc('\n', stderr);
+}
+
+static void lint_file_warning(puppet_lint_result_t *r, const char *file, int line,
+                              const char *format, ...) __attribute__((format(printf, 4, 5)));
+
+static void lint_file_warning(puppet_lint_result_t *r, const char *file, int line,
+                              const char *format, ...) {
+    r->warnings++;
+    fprintf(stderr, "\033[1;33mwarning\033[0m[puppet8]: %s:%d: ", file, line);
     va_list args;
     va_start(args, format);
     vfprintf(stderr, format, args);
@@ -106,7 +141,83 @@ static const deprecated_func_t deprecated_functions[] = {
     {"defined_with_params", "defined() function", false},
     {"type",          "type() built-in (Puppet 4+) or $var.type()", false},
 
+    /* Deprecated patterns */
+    {"create_resources", "each loop or resource iteration", false},
+
     {NULL, NULL, false}  /* sentinel */
+};
+
+/* ============================================================================
+ * Legacy top-scope facts ($::fact -> $facts[...])
+ * ============================================================================ */
+
+typedef struct {
+    const char *old_name;     /* without :: prefix */
+    const char *replacement;
+} legacy_fact_t;
+
+static const legacy_fact_t legacy_facts[] = {
+    /* Networking facts */
+    {"ipaddress",             "$facts['networking']['ip']"},
+    {"ipaddress_eth0",        "$facts['networking']['interfaces']['eth0']['ip']"},
+    {"ipaddress_lo",          "$facts['networking']['interfaces']['lo']['ip']"},
+    {"fqdn",                  "$facts['networking']['fqdn']"},
+    {"hostname",              "$facts['networking']['hostname']"},
+    {"domain",                "$facts['networking']['domain']"},
+    {"macaddress",            "$facts['networking']['mac']"},
+
+    /* OS facts */
+    {"osfamily",              "$facts['os']['family']"},
+    {"operatingsystem",       "$facts['os']['name']"},
+    {"operatingsystemrelease","$facts['os']['release']['full']"},
+    {"operatingsystemmajrelease","$facts['os']['release']['major']"},
+    {"lsbdistcodename",       "$facts['os']['distro']['codename']"},
+    {"lsbdistid",             "$facts['os']['distro']['id']"},
+    {"lsbdistdescription",    "$facts['os']['distro']['description']"},
+    {"lsbdistrelease",        "$facts['os']['distro']['release']['full']"},
+    {"lsbmajdistrelease",     "$facts['os']['distro']['release']['major']"},
+
+    /* Hardware facts */
+    {"processorcount",        "$facts['processors']['count']"},
+    {"physicalprocessorcount","$facts['processors']['physicalcount']"},
+    {"processor0",            "$facts['processors']['models'][0]"},
+    {"memorysize",            "$facts['memory']['system']['total']"},
+    {"memoryfree",            "$facts['memory']['system']['available']"},
+    {"memorysize_mb",         "$facts['memory']['system']['total_bytes'] / 1048576"},
+    {"swapsize",              "$facts['memory']['swap']['total']"},
+    {"swapfree",              "$facts['memory']['swap']['available']"},
+    {"blockdevice_sda_size",  "$facts['disks']['sda']['size']"},
+
+    /* System facts */
+    {"architecture",          "$facts['os']['architecture']"},
+    {"hardwaremodel",         "$facts['os']['hardware']"},
+    {"kernel",                "$facts['kernel']"},
+    {"kernelrelease",         "$facts['kernelrelease']"},
+    {"kernelversion",         "$facts['kernelversion']"},
+    {"kernelmajversion",      "$facts['kernelmajversion']"},
+    {"uptime_seconds",        "$facts['system_uptime']['seconds']"},
+    {"uptime_hours",          "$facts['system_uptime']['hours']"},
+    {"uptime_days",           "$facts['system_uptime']['days']"},
+    {"uptime",                "$facts['system_uptime']['uptime']"},
+
+    /* Identity */
+    {"id",                    "$facts['identity']['user']"},
+    {"gid",                   "$facts['identity']['group']"},
+
+    /* Puppet facts */
+    {"puppetversion",         "$facts['puppetversion']"},
+    {"clientcert",            "$facts['clientcert']"},
+    {"clientversion",         "$facts['clientversion']"},
+    {"environment",           "$facts['environment']"},
+
+    /* Path/location */
+    {"selinux",               "$facts['os']['selinux']['enabled']"},
+    {"selinux_enforced",      "$facts['os']['selinux']['enforced']"},
+    {"timezone",              "$facts['timezone']"},
+    {"virtual",               "$facts['virtual']"},
+    {"is_virtual",            "$facts['is_virtual']"},
+
+    {NULL, NULL}  /* sentinel */
 };
 
 /* ============================================================================
@@ -133,10 +244,58 @@ static void lint_check_funcall(puppet_lint_result_t *r, const char *name,
     }
 }
 
+static void lint_check_variable(puppet_lint_result_t *r, const char *name,
+                                puppet_location_t loc) {
+    if (!name) return;
+
+    /* Check for top-scope fact variables: $::factname or just ::factname */
+    const char *fact_name = NULL;
+    if (strncmp(name, "::", 2) == 0) {
+        fact_name = name + 2;
+    }
+    if (!fact_name) return;
+
+    /* Skip $::facts, $::trusted, $::server_facts — those are fine */
+    if (strcmp(fact_name, "facts") == 0 ||
+        strcmp(fact_name, "trusted") == 0 ||
+        strcmp(fact_name, "server_facts") == 0) {
+        return;
+    }
+
+    /* Check against known legacy facts */
+    for (const legacy_fact_t *f = legacy_facts; f->old_name; f++) {
+        if (strcmp(fact_name, f->old_name) == 0) {
+            lint_error(r, loc, "$::%s is removed in Puppet 8, use %s",
+                      fact_name, f->replacement);
+            return;
+        }
+    }
+
+    /* Any other $::var is suspicious — it's a top-scope variable access */
+    /* Only warn if it looks like a well-known fact pattern */
+    if (strncmp(fact_name, "ipaddress_", 10) == 0 ||
+        strncmp(fact_name, "macaddress_", 11) == 0 ||
+        strncmp(fact_name, "netmask_", 8) == 0 ||
+        strncmp(fact_name, "network_", 8) == 0 ||
+        strncmp(fact_name, "blockdevice_", 12) == 0 ||
+        strncmp(fact_name, "processor", 9) == 0) {
+        lint_error(r, loc,
+                  "$::%s uses a legacy fact format removed in Puppet 8, "
+                  "use $facts['...'] structured format instead", fact_name);
+    }
+}
+
 static void lint_expr(puppet_lint_result_t *r, puppet_expr_t *expr) {
     if (!expr) return;
 
     switch (expr->type) {
+        case PUPPET_EXPR_VARIABLE:
+            /* Check for legacy top-scope fact variables */
+            if (expr->data.variable.data) {
+                lint_check_variable(r, expr->data.variable.data, expr->loc);
+            }
+            break;
+
         case PUPPET_EXPR_FUNCALL:
             /* Check function name against deprecation list */
             if (expr->data.funcall.name.data) {
@@ -245,14 +404,11 @@ static void lint_stmt(puppet_lint_result_t *r, puppet_stmt_t *stmt) {
             break;
 
         case PUPPET_STMT_NODE:
-            /* Node inheritance was removed - but our AST doesn't store it.
-             * The grammar parses it; if it were stored we'd check here.
-             * For now, node definitions themselves are fine. */
             lint_stmt_list(r, &stmt->data.node.body);
             break;
 
         case PUPPET_STMT_CLASS_DEF:
-            /* Class inheritance - warn (still works but discouraged) */
+            /* Class inheritance */
             if (stmt->data.class_def.inherits &&
                 stmt->data.class_def.inherits->data) {
                 lint_warning(r, stmt->loc,
@@ -260,18 +416,15 @@ static void lint_stmt(puppet_lint_result_t *r, puppet_stmt_t *stmt) {
                             "use composition with include/contain instead",
                             stmt->data.class_def.inherits->data);
             }
-            /* Walk parameter defaults */
             for (size_t i = 0; i < stmt->data.class_def.params.count; i++) {
                 if (stmt->data.class_def.params.params[i].default_value) {
                     lint_expr(r, stmt->data.class_def.params.params[i].default_value);
                 }
             }
-            /* Walk class body */
             lint_stmt_list(r, &stmt->data.class_def.body);
             break;
 
         case PUPPET_STMT_DEFINE:
-            /* Walk parameter defaults */
             for (size_t i = 0; i < stmt->data.define.params.count; i++) {
                 if (stmt->data.define.params.params[i].default_value) {
                     lint_expr(r, stmt->data.define.params.params[i].default_value);
@@ -281,7 +434,6 @@ static void lint_stmt(puppet_lint_result_t *r, puppet_stmt_t *stmt) {
             break;
 
         case PUPPET_STMT_RESOURCE:
-            /* Walk resource attribute expressions */
             for (size_t i = 0; i < stmt->data.resource.instance_count; i++) {
                 puppet_resource_instance_t *inst = &stmt->data.resource.instances[i];
                 if (inst->title) lint_expr(r, inst->title);
@@ -348,10 +500,6 @@ static void lint_stmt(puppet_lint_result_t *r, puppet_stmt_t *stmt) {
             break;
 
         case PUPPET_STMT_FUNCTION_CALL:
-            /* Function call stored as expression — walk it via lint_expr */
-            lint_expr(r, stmt->data.expr);
-            break;
-
         case PUPPET_STMT_EXPRESSION:
             lint_expr(r, stmt->data.expr);
             break;
@@ -363,7 +511,6 @@ static void lint_stmt(puppet_lint_result_t *r, puppet_stmt_t *stmt) {
         case PUPPET_STMT_CONTAIN:
         case PUPPET_STMT_TAG:
         case PUPPET_STMT_TYPE_ALIAS:
-            /* These are fine in Puppet 8, walk their expressions */
             break;
     }
 }
@@ -376,6 +523,218 @@ static void lint_stmt_list(puppet_lint_result_t *r, puppet_stmt_list_t *list) {
 }
 
 /* ============================================================================
+ * Phase 2: File-based scanning (ERB templates, Ruby files, metadata.json)
+ * ============================================================================ */
+
+/**
+ * @brief Scan a single ERB template file for Puppet 8 issues
+ */
+static void lint_erb_file(puppet_lint_result_t *r, const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+
+    char line[4096];
+    int lineno = 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        lineno++;
+
+        /* Check for scope.lookupvar() — removed in Puppet 8 */
+        if (strstr(line, "scope.lookupvar")) {
+            lint_file_error(r, path, lineno,
+                "scope.lookupvar() is removed in Puppet 8, "
+                "pass variables as template parameters and use @variable");
+        }
+
+        /* Check for scope['var'] or scope["var"] */
+        if (strstr(line, "scope['") || strstr(line, "scope[\"")) {
+            lint_file_error(r, path, lineno,
+                "scope['var'] is removed in Puppet 8, "
+                "pass variables as template parameters and use @variable");
+        }
+
+        /* Check for variables without @ prefix: <%= variable %> (not @variable) */
+        char *pos = line;
+        while ((pos = strstr(pos, "<%=")) != NULL) {
+            pos += 3;
+            /* Skip whitespace */
+            while (*pos == ' ' || *pos == '\t') pos++;
+            /* Check if it's a bare variable (no @, no function call, no expression) */
+            if (*pos && *pos != '@' && *pos != '-' && *pos != '%' &&
+                *pos != '(' && *pos != '"' && *pos != '\'' &&
+                *pos != '[' && *pos != '{' && *pos != '#') {
+                /* It's likely a bare variable — but skip Ruby expressions */
+                /* Only warn if it's a simple identifier */
+                char *end = pos;
+                while (*end && *end != ' ' && *end != '%' && *end != '.' &&
+                       *end != '(' && *end != '[') end++;
+                if (end > pos && (strstr(pos, "%>") != NULL)) {
+                    /* Check it's not a method call or keyword */
+                    size_t len = end - pos;
+                    char varname[256];
+                    if (len < sizeof(varname)) {
+                        memcpy(varname, pos, len);
+                        varname[len] = '\0';
+                        /* Skip Ruby keywords and common patterns */
+                        if (strcmp(varname, "if") != 0 && strcmp(varname, "end") != 0 &&
+                            strcmp(varname, "else") != 0 && strcmp(varname, "elsif") != 0 &&
+                            strcmp(varname, "unless") != 0 && strcmp(varname, "nil") != 0 &&
+                            strcmp(varname, "true") != 0 && strcmp(varname, "false") != 0 &&
+                            strcmp(varname, "scope") != 0 &&
+                            varname[0] != '#') {
+                            lint_file_warning(r, path, lineno,
+                                "ERB variable '%s' should use @ prefix: <%= @%s %%>",
+                                varname, varname);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fclose(f);
+}
+
+/**
+ * @brief Scan a Ruby function file for Puppet 8 issues
+ */
+static void lint_ruby_file(puppet_lint_result_t *r, const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+
+    char line[4096];
+    int lineno = 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        lineno++;
+
+        /* Old Puppet 3.x function API — removed in Puppet 8 */
+        if (strstr(line, "Puppet::Parser::Functions.newfunction")) {
+            lint_file_error(r, path, lineno,
+                "Puppet::Parser::Functions.newfunction is removed in Puppet 8, "
+                "rewrite using Puppet::Functions.create_function (API 4.x+)");
+        }
+
+        /* Ruby 3.x compatibility issues */
+        if (strstr(line, "File.exists?")) {
+            lint_file_warning(r, path, lineno,
+                "File.exists? is removed in Ruby 3.2+ (used by Puppet 8), "
+                "use File.exist? instead");
+        }
+
+        if (strstr(line, "URI.escape")) {
+            lint_file_warning(r, path, lineno,
+                "URI.escape is removed in Ruby 3.0+ (used by Puppet 8), "
+                "use CGI.escape or ERB::Util.url_encode instead");
+        }
+
+        if (strstr(line, "URI.unescape")) {
+            lint_file_warning(r, path, lineno,
+                "URI.unescape is removed in Ruby 3.0+ (used by Puppet 8), "
+                "use CGI.unescape instead");
+        }
+
+        if (strstr(line, "PSON")) {
+            lint_file_warning(r, path, lineno,
+                "PSON is removed in Puppet 8, use JSON instead");
+        }
+
+        /* Dir.exists? removed in Ruby 3.2 */
+        if (strstr(line, "Dir.exists?")) {
+            lint_file_warning(r, path, lineno,
+                "Dir.exists? is removed in Ruby 3.2+ (used by Puppet 8), "
+                "use Dir.exist? instead");
+        }
+    }
+
+    fclose(f);
+}
+
+/**
+ * @brief Scan metadata.json for incompatible version constraints
+ */
+static void lint_metadata_json(puppet_lint_result_t *r, const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+
+    char line[4096];
+    int lineno = 0;
+    bool in_requirements = false;
+
+    while (fgets(line, sizeof(line), f)) {
+        lineno++;
+
+        /* Simple check for puppet version requirement */
+        if (strstr(line, "\"name\"") && strstr(line, "\"puppet\"")) {
+            in_requirements = true;
+        }
+
+        if (in_requirements && strstr(line, "\"version_requirement\"")) {
+            /* Check for version constraints that exclude Puppet 8 */
+            if (strstr(line, "< 4.0.0") || strstr(line, "< 5.0.0") ||
+                strstr(line, "< 6.0.0") || strstr(line, "< 7.0.0") ||
+                strstr(line, "<4.0.0") || strstr(line, "<5.0.0") ||
+                strstr(line, "<6.0.0") || strstr(line, "<7.0.0") ||
+                strstr(line, "3.x") || strstr(line, "4.x")) {
+                lint_file_error(r, path, lineno,
+                    "Puppet version constraint excludes Puppet 8, update to '>= 7.0.0 < 9.0.0' or similar");
+            }
+            in_requirements = false;
+        }
+    }
+
+    fclose(f);
+}
+
+/**
+ * @brief Recursively scan a directory for ERB/Ruby/metadata files
+ */
+static void lint_scan_directory(puppet_lint_result_t *r, const char *dir_path) {
+    DIR *dir = opendir(dir_path);
+    if (!dir) return;
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_name[0] == '.') continue;
+
+        char path[2048];
+        snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
+
+        struct stat st;
+        if (stat(path, &st) != 0) continue;
+
+        if (S_ISDIR(st.st_mode)) {
+            /* Skip hidden dirs and common non-Puppet dirs */
+            if (strcmp(entry->d_name, "spec") == 0 ||
+                strcmp(entry->d_name, "test") == 0 ||
+                strcmp(entry->d_name, "tests") == 0 ||
+                strcmp(entry->d_name, ".git") == 0 ||
+                strcmp(entry->d_name, ".svn") == 0) {
+                continue;
+            }
+            lint_scan_directory(r, path);
+        } else if (S_ISREG(st.st_mode)) {
+            size_t namelen = strlen(entry->d_name);
+
+            /* ERB templates */
+            if (namelen > 4 && strcmp(entry->d_name + namelen - 4, ".erb") == 0) {
+                lint_erb_file(r, path);
+            }
+            /* Ruby files in lib/ */
+            else if (namelen > 3 && strcmp(entry->d_name + namelen - 3, ".rb") == 0) {
+                lint_ruby_file(r, path);
+            }
+            /* metadata.json */
+            else if (strcmp(entry->d_name, "metadata.json") == 0) {
+                lint_metadata_json(r, path);
+            }
+        }
+    }
+
+    closedir(dir);
+}
+
+/* ============================================================================
  * Public API
  * ============================================================================ */
 
@@ -384,6 +743,7 @@ puppet_lint_result_t puppet_lint_puppet8(puppet_program_t *program) {
 
     if (!program) return result;
 
+    /* Phase 1: AST walk */
     lint_stmt_list(&result, &program->statements);
 
     /* Print summary */
@@ -404,6 +764,17 @@ puppet_lint_result_t puppet_lint_puppet8(puppet_program_t *program) {
         }
         fputc('\n', stderr);
     }
+
+    return result;
+}
+
+puppet_lint_result_t puppet_lint_puppet8_directory(const char *dir_path) {
+    puppet_lint_result_t result = {0, 0};
+
+    if (!dir_path) return result;
+
+    /* Scan for ERB templates, Ruby files, and metadata.json */
+    lint_scan_directory(&result, dir_path);
 
     return result;
 }
