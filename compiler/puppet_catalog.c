@@ -499,7 +499,13 @@ char *puppet_catalog_to_json(puppet_catalog_t *catalog) {
     fputs("}\n", out);
 
     fclose(out);
-    return buffer;
+
+    /* open_memstream allocates via system malloc, but callers free with
+     * puppet_free. Copy into a puppet_malloc'd buffer to avoid mismatch
+     * when memory tracking is enabled. */
+    char *result = puppet_strdup(buffer);
+    free(buffer);
+    return result;
 }
 
 int puppet_catalog_write_json(puppet_catalog_t *catalog, const char *filepath) {

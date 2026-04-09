@@ -24,18 +24,24 @@
 
 static bool apt_is_installed(const char *package) {
     char cmd[512];
+    char *esc = shell_escape(package);
+    if (!esc) return false;
     snprintf(cmd, sizeof(cmd),
-             "dpkg-query -W -f='${Status}' '%s' 2>/dev/null | grep -q 'install ok installed'",
-             package);
+             "dpkg-query -W -f='${Status}' %s 2>/dev/null | grep -q 'install ok installed'",
+             esc);
+    puppet_free(esc);
     return run_command(cmd, NULL, 0) == 0;
 }
 
 static char *apt_get_version(const char *package) {
     char cmd[512];
     char output[256];
+    char *esc = shell_escape(package);
+    if (!esc) return NULL;
     snprintf(cmd, sizeof(cmd),
-             "dpkg-query -W -f='${Version}' '%s' 2>/dev/null",
-             package);
+             "dpkg-query -W -f='${Version}' %s 2>/dev/null",
+             esc);
+    puppet_free(esc);
 
     if (run_command(cmd, output, sizeof(output)) == 0 && output[0]) {
         /* Remove trailing newline */
@@ -81,9 +87,12 @@ static apply_result_t apt_apply(const resource_t *resource, apply_context_t *ctx
 
         char cmd[512];
         const char *purge = strcmp(ensure, "purged") == 0 ? "--purge" : "";
+        char *esc = shell_escape(package);
+        if (!esc) { apply_context_set_error(ctx, "Failed to escape package name"); return APPLY_FAILED; }
         snprintf(cmd, sizeof(cmd),
-                 "DEBIAN_FRONTEND=noninteractive apt-get remove -y %s '%s' >/dev/null 2>&1",
-                 purge, package);
+                 "DEBIAN_FRONTEND=noninteractive apt-get remove -y %s %s >/dev/null 2>&1",
+                 purge, esc);
+        puppet_free(esc);
 
         if (exec_command(cmd, ctx->verbose) != 0) {
             apply_context_set_error(ctx, "Failed to remove package: %s", package);
@@ -101,9 +110,12 @@ static apply_result_t apt_apply(const resource_t *resource, apply_context_t *ctx
     if (strcmp(ensure, "latest") == 0 && is_installed) {
         /* Check if update is available */
         char cmd[512];
+        char *esc = shell_escape(package);
+        if (!esc) return APPLY_FAILED;
         snprintf(cmd, sizeof(cmd),
-                 "apt-cache policy '%s' 2>/dev/null | grep -q 'Candidate:.*Installed'",
-                 package);
+                 "apt-cache policy %s 2>/dev/null | grep -q 'Candidate:.*Installed'",
+                 esc);
+        puppet_free(esc);
         if (run_command(cmd, NULL, 0) != 0) {
             need_upgrade = true;
         }
@@ -143,18 +155,25 @@ static apply_result_t apt_apply(const resource_t *resource, apply_context_t *ctx
     /* Update package list first */
     exec_command("apt-get update -qq 2>/dev/null", ctx->verbose);
 
+    char *esc_pkg = shell_escape(package);
+    if (!esc_pkg) { apply_context_set_error(ctx, "Failed to escape package name"); return APPLY_FAILED; }
+
     if (strcmp(ensure, "installed") == 0 ||
         strcmp(ensure, "present") == 0 ||
         strcmp(ensure, "latest") == 0) {
         snprintf(cmd, sizeof(cmd),
-                 "DEBIAN_FRONTEND=noninteractive apt-get install -y '%s' >/dev/null 2>&1",
-                 package);
+                 "DEBIAN_FRONTEND=noninteractive apt-get install -y %s >/dev/null 2>&1",
+                 esc_pkg);
     } else {
         /* Specific version */
+        char *esc_ver = shell_escape(ensure);
+        if (!esc_ver) { puppet_free(esc_pkg); apply_context_set_error(ctx, "Failed to escape version"); return APPLY_FAILED; }
         snprintf(cmd, sizeof(cmd),
-                 "DEBIAN_FRONTEND=noninteractive apt-get install -y '%s=%s' >/dev/null 2>&1",
-                 package, ensure);
+                 "DEBIAN_FRONTEND=noninteractive apt-get install -y %s=%s >/dev/null 2>&1",
+                 esc_pkg, esc_ver);
+        puppet_free(esc_ver);
     }
+    puppet_free(esc_pkg);
 
     if (exec_command(cmd, ctx->verbose) != 0) {
         apply_context_set_error(ctx, "Failed to install package: %s", package);
@@ -172,16 +191,22 @@ static apply_result_t apt_apply(const resource_t *resource, apply_context_t *ctx
 
 static bool dnf_is_installed(const char *package) {
     char cmd[512];
-    snprintf(cmd, sizeof(cmd), "rpm -q '%s' >/dev/null 2>&1", package);
+    char *esc = shell_escape(package);
+    if (!esc) return false;
+    snprintf(cmd, sizeof(cmd), "rpm -q %s >/dev/null 2>&1", esc);
+    puppet_free(esc);
     return run_command(cmd, NULL, 0) == 0;
 }
 
 static char *dnf_get_version(const char *package) {
     char cmd[512];
     char output[256];
+    char *esc = shell_escape(package);
+    if (!esc) return NULL;
     snprintf(cmd, sizeof(cmd),
-             "rpm -q --qf '%%{VERSION}-%%{RELEASE}' '%s' 2>/dev/null",
-             package);
+             "rpm -q --qf '%%{VERSION}-%%{RELEASE}' %s 2>/dev/null",
+             esc);
+    puppet_free(esc);
 
     if (run_command(cmd, output, sizeof(output)) == 0 && output[0]) {
         char *nl = strchr(output, '\n');
@@ -225,7 +250,10 @@ static apply_result_t dnf_apply(const resource_t *resource, apply_context_t *ctx
         }
 
         char cmd[512];
-        snprintf(cmd, sizeof(cmd), "dnf remove -y '%s' >/dev/null 2>&1", package);
+        char *esc = shell_escape(package);
+        if (!esc) { apply_context_set_error(ctx, "Failed to escape package name"); return APPLY_FAILED; }
+        snprintf(cmd, sizeof(cmd), "dnf remove -y %s >/dev/null 2>&1", esc);
+        puppet_free(esc);
 
         if (exec_command(cmd, ctx->verbose) != 0) {
             apply_context_set_error(ctx, "Failed to remove package: %s", package);
@@ -242,9 +270,12 @@ static apply_result_t dnf_apply(const resource_t *resource, apply_context_t *ctx
 
     if (strcmp(ensure, "latest") == 0 && is_installed) {
         char cmd[512];
+        char *esc = shell_escape(package);
+        if (!esc) return APPLY_FAILED;
         snprintf(cmd, sizeof(cmd),
-                 "dnf check-update '%s' >/dev/null 2>&1; test $? -eq 100",
-                 package);
+                 "dnf check-update %s >/dev/null 2>&1; test $? -eq 100",
+                 esc);
+        puppet_free(esc);
         if (run_command(cmd, NULL, 0) == 0) {
             need_upgrade = true;
         }
@@ -278,16 +309,22 @@ static apply_result_t dnf_apply(const resource_t *resource, apply_context_t *ctx
     }
 
     char cmd[512];
+    char *esc_pkg = shell_escape(package);
+    if (!esc_pkg) { apply_context_set_error(ctx, "Failed to escape package name"); return APPLY_FAILED; }
     if (need_upgrade) {
-        snprintf(cmd, sizeof(cmd), "dnf upgrade -y '%s' >/dev/null 2>&1", package);
+        snprintf(cmd, sizeof(cmd), "dnf upgrade -y %s >/dev/null 2>&1", esc_pkg);
     } else if (strcmp(ensure, "installed") == 0 ||
                strcmp(ensure, "present") == 0 ||
                strcmp(ensure, "latest") == 0) {
-        snprintf(cmd, sizeof(cmd), "dnf install -y '%s' >/dev/null 2>&1", package);
+        snprintf(cmd, sizeof(cmd), "dnf install -y %s >/dev/null 2>&1", esc_pkg);
     } else {
-        snprintf(cmd, sizeof(cmd), "dnf install -y '%s-%s' >/dev/null 2>&1",
-                 package, ensure);
+        char *esc_ver = shell_escape(ensure);
+        if (!esc_ver) { puppet_free(esc_pkg); apply_context_set_error(ctx, "Failed to escape version"); return APPLY_FAILED; }
+        snprintf(cmd, sizeof(cmd), "dnf install -y %s-%s >/dev/null 2>&1",
+                 esc_pkg, esc_ver);
+        puppet_free(esc_ver);
     }
+    puppet_free(esc_pkg);
 
     if (exec_command(cmd, ctx->verbose) != 0) {
         apply_context_set_error(ctx, "Failed to install package: %s", package);

@@ -21,54 +21,57 @@
  * Systemd Service Functions
  * ============================================================================ */
 
+static int systemd_cmd(const char *action, const char *service, char *output, size_t output_size) {
+    char cmd[512];
+    char *esc = shell_escape(service);
+    if (!esc) return -1;
+    snprintf(cmd, sizeof(cmd), "systemctl %s %s 2>&1", action, esc);
+    puppet_free(esc);
+    return run_command(cmd, output, output_size);
+}
+
 static bool systemd_is_active(const char *service) {
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "systemctl is-active '%s' >/dev/null 2>&1", service);
-    return run_command(cmd, NULL, 0) == 0;
+    return systemd_cmd("is-active", service, NULL, 0) == 0;
 }
 
 static bool systemd_is_enabled(const char *service) {
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "systemctl is-enabled '%s' >/dev/null 2>&1", service);
-    return run_command(cmd, NULL, 0) == 0;
+    return systemd_cmd("is-enabled", service, NULL, 0) == 0;
 }
 
 static bool systemd_service_exists(const char *service) {
-    char cmd[256];
+    char cmd[512];
+    char *esc = shell_escape(service);
+    if (!esc) return false;
     snprintf(cmd, sizeof(cmd),
-             "systemctl list-unit-files '%s.service' 2>/dev/null | grep -q '%s'",
-             service, service);
+             "systemctl list-unit-files %s.service 2>/dev/null | grep -q %s",
+             esc, esc);
+    puppet_free(esc);
     return run_command(cmd, NULL, 0) == 0;
 }
 
 static int systemd_start(const char *service, bool verbose) {
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "systemctl start '%s' 2>&1", service);
-    return exec_command(cmd, verbose);
+    (void)verbose;
+    return systemd_cmd("start", service, NULL, 0);
 }
 
 static int systemd_stop(const char *service, bool verbose) {
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "systemctl stop '%s' 2>&1", service);
-    return exec_command(cmd, verbose);
+    (void)verbose;
+    return systemd_cmd("stop", service, NULL, 0);
 }
 
 static int systemd_restart(const char *service, bool verbose) {
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "systemctl restart '%s' 2>&1", service);
-    return exec_command(cmd, verbose);
+    (void)verbose;
+    return systemd_cmd("restart", service, NULL, 0);
 }
 
 static int systemd_enable(const char *service, bool verbose) {
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "systemctl enable '%s' 2>&1", service);
-    return exec_command(cmd, verbose);
+    (void)verbose;
+    return systemd_cmd("enable", service, NULL, 0);
 }
 
 static int systemd_disable(const char *service, bool verbose) {
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "systemctl disable '%s' 2>&1", service);
-    return exec_command(cmd, verbose);
+    (void)verbose;
+    return systemd_cmd("disable", service, NULL, 0);
 }
 
 /* ============================================================================

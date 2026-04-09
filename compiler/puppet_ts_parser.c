@@ -1303,7 +1303,7 @@ static puppet_expr_t *build_index_expr(puppet_expr_t *object, TSNode access_node
             expr->data.resource_ref.title = index_expr;
 
             /* Free the object variable expression since we've copied its data */
-            puppet_free(object);
+            puppet_expr_destroy(object);
 
             return expr;
         }
@@ -1439,7 +1439,7 @@ static puppet_stmt_t *convert_assignment(TSNode node, const char *source) {
         expr->data.value = puppet_value_create_string(
             pending_type_ref->data.resource_ref.type.data,
             pending_type_ref->data.resource_ref.type.len);
-        puppet_free(pending_type_ref);
+        puppet_expr_destroy(pending_type_ref);
         rhs_expr = expr;
     }
 

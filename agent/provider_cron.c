@@ -26,6 +26,7 @@
 #include "puppet_memory.h"
 #include "color_output.h"
 #include "puppet_provider.h"
+#include "exec_utils.h"
 
 #define CRON_MARKER "# Puppet Name: "
 #define MAX_CRONTAB_SIZE (64 * 1024)
@@ -44,7 +45,10 @@ static char *read_crontab(const char *user) {
     char cmd[256];
 
     if (user) {
-        snprintf(cmd, sizeof(cmd), "crontab -u %s -l 2>/dev/null", user);
+        char *escaped_user = shell_escape(user);
+        if (!escaped_user) return NULL;
+        snprintf(cmd, sizeof(cmd), "crontab -u %s -l 2>/dev/null", escaped_user);
+        puppet_free(escaped_user);
     } else {
         snprintf(cmd, sizeof(cmd), "crontab -l 2>/dev/null");
     }
@@ -82,7 +86,10 @@ static int write_crontab(const char *user, const char *content) {
     char cmd[256];
 
     if (user) {
-        snprintf(cmd, sizeof(cmd), "crontab -u %s -", user);
+        char *escaped_user = shell_escape(user);
+        if (!escaped_user) return -1;
+        snprintf(cmd, sizeof(cmd), "crontab -u %s -", escaped_user);
+        puppet_free(escaped_user);
     } else {
         snprintf(cmd, sizeof(cmd), "crontab -");
     }

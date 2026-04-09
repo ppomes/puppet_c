@@ -771,6 +771,10 @@ static char *read_file_contents(const char *path) {
 
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
+    if (size < 0) {
+        fclose(f);
+        return NULL;
+    }
     fseek(f, 0, SEEK_SET);
 
     char *content = puppet_malloc(size + 1);
@@ -1364,13 +1368,14 @@ puppet_value_t *puppet_func_epp(puppet_expr_list_t *args, puppet_env_t *env) {
 
     // Get parameters hash (optional)
     puppet_hash_t *params = NULL;
+    puppet_value_t *params_value = NULL;
     if (args->count >= 2) {
-        puppet_value_t *params_value = puppet_eval_expr(args->exprs[1], env);
+        params_value = puppet_eval_expr(args->exprs[1], env);
         if (params_value && params_value->type == PUPPET_VALUE_HASH) {
             params = params_value->data.hash;
-            // Keep reference, will clean up later
         } else if (params_value) {
             puppet_value_destroy(params_value);
+            params_value = NULL;
         }
     }
 
@@ -1379,6 +1384,7 @@ puppet_value_t *puppet_func_epp(puppet_expr_list_t *args, puppet_env_t *env) {
     puppet_value_destroy(path_value);
 
     if (!template_path) {
+        if (params_value) puppet_value_destroy(params_value);
         return puppet_value_create_undef();
     }
 
@@ -1388,15 +1394,16 @@ puppet_value_t *puppet_func_epp(puppet_expr_list_t *args, puppet_env_t *env) {
 
     if (!content) {
         fprintf(stderr, "[ERROR] Failed to read EPP template\n");
+        if (params_value) puppet_value_destroy(params_value);
         return puppet_value_create_undef();
     }
 
-    // Set params in environment scope for EPP access
+    // Set params in environment scope for EPP access (copy values since params_value owns them)
     if (params && env) {
         for (size_t i = 0; i < params->bucket_count; i++) {
             puppet_hash_entry_t *e = params->buckets[i];
             while (e) {
-                puppet_env_set_var(env, e->key.data, e->value);
+                puppet_env_set_var(env, e->key.data, puppet_value_copy(e->value));
                 e = e->next;
             }
         }
@@ -1405,6 +1412,11 @@ puppet_value_t *puppet_func_epp(puppet_expr_list_t *args, puppet_env_t *env) {
     // Render the template
     char *rendered = puppet_epp_render(content, params, env);
     puppet_free(content);
+
+    // Clean up params_value now that we've copied what we need
+    if (params_value) {
+        puppet_value_destroy(params_value);
+    }
 
     if (!rendered) {
         return puppet_value_create_undef();

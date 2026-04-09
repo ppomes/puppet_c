@@ -84,7 +84,10 @@ static apply_result_t group_apply(const resource_t *resource, apply_context_t *c
         }
 
         char cmd[512];
-        snprintf(cmd, sizeof(cmd), "groupdel '%s' 2>&1", groupname);
+        char *esc = shell_escape(groupname);
+        if (!esc) { apply_context_set_error(ctx, "Failed to escape group name"); return APPLY_FAILED; }
+        snprintf(cmd, sizeof(cmd), "groupdel %s 2>&1", esc);
+        puppet_free(esc);
 
         if (run_group_command(cmd, ctx->verbose) != 0) {
             apply_context_set_error(ctx, "Failed to delete group %s", groupname);
@@ -104,11 +107,17 @@ static apply_result_t group_apply(const resource_t *resource, apply_context_t *c
         }
 
         char cmd[512];
+        char *esc = shell_escape(groupname);
+        if (!esc) { apply_context_set_error(ctx, "Failed to escape group name"); return APPLY_FAILED; }
         if (gid_str && strlen(gid_str) > 0) {
-            snprintf(cmd, sizeof(cmd), "groupadd -g %s '%s' 2>&1", gid_str, groupname);
+            char *esc_gid = shell_escape(gid_str);
+            if (!esc_gid) { puppet_free(esc); apply_context_set_error(ctx, "Failed to escape gid"); return APPLY_FAILED; }
+            snprintf(cmd, sizeof(cmd), "groupadd -g %s %s 2>&1", esc_gid, esc);
+            puppet_free(esc_gid);
         } else {
-            snprintf(cmd, sizeof(cmd), "groupadd '%s' 2>&1", groupname);
+            snprintf(cmd, sizeof(cmd), "groupadd %s 2>&1", esc);
         }
+        puppet_free(esc);
 
         if (run_group_command(cmd, ctx->verbose) != 0) {
             apply_context_set_error(ctx, "Failed to create group %s", groupname);
@@ -134,7 +143,16 @@ static apply_result_t group_apply(const resource_t *resource, apply_context_t *c
             }
 
             char cmd[512];
-            snprintf(cmd, sizeof(cmd), "groupmod -g %s '%s' 2>&1", gid_str, groupname);
+            char *esc = shell_escape(groupname);
+            char *esc_gid = shell_escape(gid_str);
+            if (!esc || !esc_gid) {
+                puppet_free(esc); puppet_free(esc_gid);
+                apply_context_set_error(ctx, "Failed to escape group args");
+                return APPLY_FAILED;
+            }
+            snprintf(cmd, sizeof(cmd), "groupmod -g %s %s 2>&1", esc_gid, esc);
+            puppet_free(esc);
+            puppet_free(esc_gid);
 
             if (run_group_command(cmd, ctx->verbose) != 0) {
                 apply_context_set_error(ctx, "Failed to modify group %s", groupname);

@@ -210,8 +210,15 @@ static int facter_hash_set_string(facter_value_t *hash, const char *key, const c
 
     /* Add new key */
     size_t new_count = hash->data.hash_val.count + 1;
-    hash->data.hash_val.keys = puppet_realloc(hash->data.hash_val.keys, new_count * sizeof(char*));
-    hash->data.hash_val.values = puppet_realloc(hash->data.hash_val.values, new_count * sizeof(facter_value_t*));
+    char **new_keys = puppet_realloc(hash->data.hash_val.keys, new_count * sizeof(char*));
+    facter_value_t **new_values = puppet_realloc(hash->data.hash_val.values, new_count * sizeof(facter_value_t*));
+    if (!new_keys || !new_values) {
+        if (new_keys) hash->data.hash_val.keys = new_keys;
+        if (new_values) hash->data.hash_val.values = new_values;
+        return -1;
+    }
+    hash->data.hash_val.keys = new_keys;
+    hash->data.hash_val.values = new_values;
 
     hash->data.hash_val.keys[hash->data.hash_val.count] = puppet_strdup(key);
     hash->data.hash_val.values[hash->data.hash_val.count] = facter_value_string(value);
@@ -234,8 +241,15 @@ static int facter_hash_set_integer(facter_value_t *hash, const char *key, long v
 
     /* Add new key */
     size_t new_count = hash->data.hash_val.count + 1;
-    hash->data.hash_val.keys = puppet_realloc(hash->data.hash_val.keys, new_count * sizeof(char*));
-    hash->data.hash_val.values = puppet_realloc(hash->data.hash_val.values, new_count * sizeof(facter_value_t*));
+    char **new_keys = puppet_realloc(hash->data.hash_val.keys, new_count * sizeof(char*));
+    facter_value_t **new_values = puppet_realloc(hash->data.hash_val.values, new_count * sizeof(facter_value_t*));
+    if (!new_keys || !new_values) {
+        if (new_keys) hash->data.hash_val.keys = new_keys;
+        if (new_values) hash->data.hash_val.values = new_values;
+        return -1;
+    }
+    hash->data.hash_val.keys = new_keys;
+    hash->data.hash_val.values = new_values;
 
     hash->data.hash_val.keys[hash->data.hash_val.count] = puppet_strdup(key);
     hash->data.hash_val.values[hash->data.hash_val.count] = facter_value_integer(value);
@@ -258,8 +272,15 @@ static int __attribute__((unused)) facter_hash_set_boolean(facter_value_t *hash,
 
     /* Add new key */
     size_t new_count = hash->data.hash_val.count + 1;
-    hash->data.hash_val.keys = puppet_realloc(hash->data.hash_val.keys, new_count * sizeof(char*));
-    hash->data.hash_val.values = puppet_realloc(hash->data.hash_val.values, new_count * sizeof(facter_value_t*));
+    char **new_keys = puppet_realloc(hash->data.hash_val.keys, new_count * sizeof(char*));
+    facter_value_t **new_values = puppet_realloc(hash->data.hash_val.values, new_count * sizeof(facter_value_t*));
+    if (!new_keys || !new_values) {
+        if (new_keys) hash->data.hash_val.keys = new_keys;
+        if (new_values) hash->data.hash_val.values = new_values;
+        return -1;
+    }
+    hash->data.hash_val.keys = new_keys;
+    hash->data.hash_val.values = new_values;
 
     hash->data.hash_val.keys[hash->data.hash_val.count] = puppet_strdup(key);
     hash->data.hash_val.values[hash->data.hash_val.count] = facter_value_boolean(value);
@@ -282,8 +303,15 @@ static int facter_hash_set_hash(facter_value_t *hash, const char *key, facter_va
 
     /* Add new key */
     size_t new_count = hash->data.hash_val.count + 1;
-    hash->data.hash_val.keys = puppet_realloc(hash->data.hash_val.keys, new_count * sizeof(char*));
-    hash->data.hash_val.values = puppet_realloc(hash->data.hash_val.values, new_count * sizeof(facter_value_t*));
+    char **new_keys = puppet_realloc(hash->data.hash_val.keys, new_count * sizeof(char*));
+    facter_value_t **new_values = puppet_realloc(hash->data.hash_val.values, new_count * sizeof(facter_value_t*));
+    if (!new_keys || !new_values) {
+        if (new_keys) hash->data.hash_val.keys = new_keys;
+        if (new_values) hash->data.hash_val.values = new_values;
+        return -1;
+    }
+    hash->data.hash_val.keys = new_keys;
+    hash->data.hash_val.values = new_values;
 
     hash->data.hash_val.keys[hash->data.hash_val.count] = puppet_strdup(key);
     hash->data.hash_val.values[hash->data.hash_val.count] = value;
@@ -1465,6 +1493,14 @@ char *facter_to_yaml(facter_ctx_t *ctx) {
     for (size_t i = 0; i < ctx->fact_count; i++) {
         fact_entry_t *f = &ctx->facts[i];
 
+        /* Grow buffer if less than 1KB remaining */
+        if (pos + 1024 >= buf_size) {
+            buf_size *= 2;
+            char *new_buf = puppet_realloc(buf, buf_size);
+            if (!new_buf) { puppet_free(buf); return NULL; }
+            buf = new_buf;
+        }
+
         switch (f->value->type) {
             case FACTER_VALUE_STRING:
                 pos += snprintf(buf + pos, buf_size - pos, "%s: \"%s\"\n",
@@ -1502,6 +1538,14 @@ char *facter_to_text(facter_ctx_t *ctx) {
 
     for (size_t i = 0; i < ctx->fact_count; i++) {
         fact_entry_t *f = &ctx->facts[i];
+
+        /* Grow buffer if less than 1KB remaining */
+        if (pos + 1024 >= buf_size) {
+            buf_size *= 2;
+            char *new_buf = puppet_realloc(buf, buf_size);
+            if (!new_buf) { puppet_free(buf); return NULL; }
+            buf = new_buf;
+        }
 
         switch (f->value->type) {
             case FACTER_VALUE_STRING:

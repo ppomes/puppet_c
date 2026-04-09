@@ -906,6 +906,10 @@ json_value_t *json_parse_file(const char *filepath) {
     /* Get file size */
     fseek(file, 0, SEEK_END);
     long file_size = ftell(file);
+    if (file_size < 0) {
+        fclose(file);
+        return NULL;
+    }
     fseek(file, 0, SEEK_SET);
 
     /* Read file content */

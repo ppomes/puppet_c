@@ -36,6 +36,7 @@
 #include "puppet_provider.h"
 #include "puppet_memory.h"
 #include "color_output.h"
+#include "exec_utils.h"
 
 /* ============================================================================
  * Fstab Entry Structure
@@ -356,13 +357,27 @@ static int do_mount(const char *device, const char *mountpoint,
         }
     }
 
+    char *esc_fstype = shell_escape(fstype);
+    char *esc_device = shell_escape(device);
+    char *esc_mount = shell_escape(mountpoint);
+    if (!esc_fstype || !esc_device || !esc_mount) {
+        puppet_free(esc_fstype); puppet_free(esc_device); puppet_free(esc_mount);
+        return -1;
+    }
+
     if (options && strlen(options) > 0 && strcmp(options, "defaults") != 0) {
+        char *esc_opts = shell_escape(options);
+        if (!esc_opts) { puppet_free(esc_fstype); puppet_free(esc_device); puppet_free(esc_mount); return -1; }
         snprintf(cmd, sizeof(cmd), "mount -t %s -o %s %s %s 2>&1",
-                 fstype, options, device, mountpoint);
+                 esc_fstype, esc_opts, esc_device, esc_mount);
+        puppet_free(esc_opts);
     } else {
         snprintf(cmd, sizeof(cmd), "mount -t %s %s %s 2>&1",
-                 fstype, device, mountpoint);
+                 esc_fstype, esc_device, esc_mount);
     }
+    puppet_free(esc_fstype);
+    puppet_free(esc_device);
+    puppet_free(esc_mount);
 
     return system(cmd);
 }
@@ -372,7 +387,10 @@ static int do_mount(const char *device, const char *mountpoint,
  */
 static int do_umount(const char *mountpoint) {
     char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "umount %s 2>&1", mountpoint);
+    char *esc = shell_escape(mountpoint);
+    if (!esc) return -1;
+    snprintf(cmd, sizeof(cmd), "umount %s 2>&1", esc);
+    puppet_free(esc);
     return system(cmd);
 }
 

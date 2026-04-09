@@ -10,6 +10,37 @@
 #include <string.h>
 #include <sys/wait.h>
 
+char *shell_escape(const char *str) {
+    if (!str) return puppet_strdup("''");
+
+    /* Count single quotes to determine output size.
+     * Each ' becomes '\'' (4 chars), plus 2 for surrounding quotes + NUL. */
+    size_t len = 0;
+    for (const char *p = str; *p; p++) {
+        len += (*p == '\'') ? 4 : 1;
+    }
+
+    char *escaped = puppet_malloc(len + 3); /* 2 surrounding quotes + NUL */
+    if (!escaped) return NULL;
+
+    char *out = escaped;
+    *out++ = '\'';
+    for (const char *p = str; *p; p++) {
+        if (*p == '\'') {
+            *out++ = '\'';  /* end current quote */
+            *out++ = '\\';
+            *out++ = '\'';  /* escaped literal quote */
+            *out++ = '\'';  /* start new quote */
+        } else {
+            *out++ = *p;
+        }
+    }
+    *out++ = '\'';
+    *out = '\0';
+
+    return escaped;
+}
+
 int run_command(const char *cmd, char *output, size_t output_size) {
     if (!cmd) return -1;
 

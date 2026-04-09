@@ -346,6 +346,22 @@ void puppet_expr_destroy(puppet_expr_t *expr) {
             }
             puppet_free(expr->data.funcall.args.exprs);
             if (expr->data.funcall.lambda) {
+                for (size_t i = 0; i < expr->data.funcall.lambda->params.count; i++) {
+                    puppet_string_free(expr->data.funcall.lambda->params.params[i].name);
+                    puppet_value_destroy(expr->data.funcall.lambda->params.params[i].type_constraint);
+                    puppet_expr_destroy(expr->data.funcall.lambda->params.params[i].default_value);
+                }
+                puppet_free(expr->data.funcall.lambda->params.params);
+                if (expr->data.funcall.lambda->body) {
+                    for (size_t i = 0; i < expr->data.funcall.lambda->body->count; i++) {
+                        puppet_stmt_destroy(expr->data.funcall.lambda->body->stmts[i]);
+                    }
+                    puppet_free(expr->data.funcall.lambda->body->stmts);
+                    puppet_free(expr->data.funcall.lambda->body);
+                }
+                if (expr->data.funcall.lambda->expr_body) {
+                    puppet_expr_destroy(expr->data.funcall.lambda->expr_body);
+                }
                 puppet_free(expr->data.funcall.lambda);
             }
             break;

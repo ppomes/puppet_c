@@ -192,7 +192,8 @@ puppet_stmt_t *puppet_loader_load_class(puppet_loader_t *loader,
     
     if (!class_def) {
         fprintf(stderr, "Error: No class definition found in %s\n", path_buffer);
-        puppet_program_destroy(program);
+        /* Note: do NOT destroy program here - it's owned by the
+         * parsed_manifests cache in puppet_loader_load_manifest. */
         return NULL;
     }
     
@@ -252,8 +253,9 @@ puppet_stmt_t *puppet_loader_load_define(puppet_loader_t *loader,
     }
 
     if (!define_stmt) {
-        /* No define found - maybe it's a class file, not an error */
-        puppet_program_destroy(program);
+        /* No define found - maybe it's a class file, not an error.
+         * Note: do NOT destroy program here - it's owned by the
+         * parsed_manifests cache in puppet_loader_load_manifest. */
         return NULL;
     }
 

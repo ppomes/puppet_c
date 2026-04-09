@@ -482,7 +482,19 @@ void puppet_env_destroy(puppet_env_t *env) {
             while (entry) {
                 puppet_hash_entry_t *next = entry->next;
                 puppet_free(entry->key.data);
-                /* Note: value points to AST stmt, don't free it here */
+                /* Value stores a puppet_virtual_resource_t* via type-punning */
+                if (entry->value && entry->value->data.string.data) {
+                    puppet_virtual_resource_t *vres = (puppet_virtual_resource_t *)entry->value->data.string.data;
+                    puppet_free(vres->type);
+                    puppet_free(vres->title);
+                    for (size_t j = 0; j < vres->attr_count; j++) {
+                        puppet_free(vres->attrs[j].name);
+                        puppet_value_destroy(vres->attrs[j].value);
+                    }
+                    puppet_free(vres->attrs);
+                    puppet_free(vres);
+                }
+                puppet_free(entry->value);
                 puppet_free(entry);
                 entry = next;
             }
@@ -498,6 +510,19 @@ void puppet_env_destroy(puppet_env_t *env) {
             while (entry) {
                 puppet_hash_entry_t *next = entry->next;
                 puppet_free(entry->key.data);
+                /* Value stores a puppet_virtual_resource_t* via type-punning */
+                if (entry->value && entry->value->data.string.data) {
+                    puppet_virtual_resource_t *vres = (puppet_virtual_resource_t *)entry->value->data.string.data;
+                    puppet_free(vres->type);
+                    puppet_free(vres->title);
+                    for (size_t j = 0; j < vres->attr_count; j++) {
+                        puppet_free(vres->attrs[j].name);
+                        puppet_value_destroy(vres->attrs[j].value);
+                    }
+                    puppet_free(vres->attrs);
+                    puppet_free(vres);
+                }
+                puppet_free(entry->value);
                 puppet_free(entry);
                 entry = next;
             }
@@ -568,6 +593,25 @@ void puppet_env_destroy(puppet_env_t *env) {
     
     /* Clean up failure message */
     puppet_free(env->failure_message);
+
+    /* Clean up class re-execution tracking */
+    if (env->classes_being_reexecuted) {
+        for (size_t i = 0; i < env->classes_being_reexecuted->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->classes_being_reexecuted->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                puppet_value_destroy(entry->value);
+                puppet_free(entry);
+                entry = next;
+            }
+        }
+        puppet_free(env->classes_being_reexecuted->buckets);
+        puppet_free(env->classes_being_reexecuted);
+    }
+
+    /* Clean up current_node_certname if allocated */
+    puppet_free(env->current_node_certname);
 
     /* Note: catalog is NOT destroyed here - caller owns it after puppet_env_get_catalog() */
     /* If catalog was never retrieved, it will be leaked - caller should always get it */

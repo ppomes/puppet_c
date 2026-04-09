@@ -13,6 +13,17 @@
 #include <stdbool.h>
 
 /**
+ * @brief Escape a string for safe use inside a shell command
+ *
+ * Wraps the string in single quotes, escaping any embedded single quotes
+ * using the '\'' technique. The returned string includes surrounding quotes.
+ *
+ * @param str String to escape (can be NULL)
+ * @return Newly allocated escaped string (caller must free), or NULL on error
+ */
+char *shell_escape(const char *str);
+
+/**
  * @brief Run a command and capture its output
  *
  * @param cmd Command to execute (passed to popen)

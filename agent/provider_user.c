@@ -106,11 +106,14 @@ static apply_result_t user_apply(const resource_t *resource, apply_context_t *ct
         }
 
         char cmd[512];
+        char *esc_user = shell_escape(username);
+        if (!esc_user) { apply_context_set_error(ctx, "Failed to escape username"); return APPLY_FAILED; }
         if (create_home) {
-            snprintf(cmd, sizeof(cmd), "userdel -r '%s' 2>&1", username);
+            snprintf(cmd, sizeof(cmd), "userdel -r %s 2>&1", esc_user);
         } else {
-            snprintf(cmd, sizeof(cmd), "userdel '%s' 2>&1", username);
+            snprintf(cmd, sizeof(cmd), "userdel %s 2>&1", esc_user);
         }
+        puppet_free(esc_user);
 
         if (run_user_command(cmd, ctx->verbose) != 0) {
             apply_context_set_error(ctx, "Failed to delete user %s", username);
@@ -129,8 +132,8 @@ static apply_result_t user_apply(const resource_t *resource, apply_context_t *ct
             return APPLY_SKIPPED;
         }
 
-        /* Build useradd command */
-        char cmd[1024];
+        /* Build useradd command with shell-escaped parameters */
+        char cmd[2048];
         char *p = cmd;
         size_t remaining = sizeof(cmd);
         int n;
@@ -144,36 +147,41 @@ static apply_result_t user_apply(const resource_t *resource, apply_context_t *ct
         }
 
         if (uid_str && strlen(uid_str) > 0) {
-            n = snprintf(p, remaining, " -u %s", uid_str);
-            p += n; remaining -= n;
+            char *esc = shell_escape(uid_str);
+            if (esc) { n = snprintf(p, remaining, " -u %s", esc); p += n; remaining -= n; puppet_free(esc); }
         }
 
         if (gid_str && strlen(gid_str) > 0) {
-            n = snprintf(p, remaining, " -g '%s'", gid_str);
-            p += n; remaining -= n;
+            char *esc = shell_escape(gid_str);
+            if (esc) { n = snprintf(p, remaining, " -g %s", esc); p += n; remaining -= n; puppet_free(esc); }
         }
 
         if (groups && strlen(groups) > 0) {
-            n = snprintf(p, remaining, " -G '%s'", groups);
-            p += n; remaining -= n;
+            char *esc = shell_escape(groups);
+            if (esc) { n = snprintf(p, remaining, " -G %s", esc); p += n; remaining -= n; puppet_free(esc); }
         }
 
         if (home && strlen(home) > 0) {
-            n = snprintf(p, remaining, " -d '%s'", home);
-            p += n; remaining -= n;
+            char *esc = shell_escape(home);
+            if (esc) { n = snprintf(p, remaining, " -d %s", esc); p += n; remaining -= n; puppet_free(esc); }
         }
 
         if (shell && strlen(shell) > 0) {
-            n = snprintf(p, remaining, " -s '%s'", shell);
-            p += n; remaining -= n;
+            char *esc = shell_escape(shell);
+            if (esc) { n = snprintf(p, remaining, " -s %s", esc); p += n; remaining -= n; puppet_free(esc); }
         }
 
         if (comment && strlen(comment) > 0) {
-            n = snprintf(p, remaining, " -c '%s'", comment);
-            p += n; remaining -= n;
+            char *esc = shell_escape(comment);
+            if (esc) { n = snprintf(p, remaining, " -c %s", esc); p += n; remaining -= n; puppet_free(esc); }
         }
 
-        snprintf(p, remaining, " '%s' 2>&1", username);
+        {
+            char *esc = shell_escape(username);
+            if (!esc) { apply_context_set_error(ctx, "Failed to escape username"); return APPLY_FAILED; }
+            snprintf(p, remaining, " %s 2>&1", esc);
+            puppet_free(esc);
+        }
 
         if (run_user_command(cmd, ctx->verbose) != 0) {
             apply_context_set_error(ctx, "Failed to create user %s", username);
