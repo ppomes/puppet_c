@@ -14,6 +14,7 @@ libpuppetc_la_SOURCES = \
     puppet_hiera.c \
     puppet_ts_parser.c \
     puppet_erb.c \
+    puppet_lint.c \
     $(top_srcdir)/tree-sitter-puppet/src/parser.c \
     $(top_srcdir)/tree-sitter-puppet/src/scanner.c
 
@@ -46,4 +47,5 @@ puppetcinclude_HEADERS = \
     $(top_srcdir)/include/puppet_stdlib.h \
     $(top_srcdir)/include/puppet_hiera.h \
     $(top_srcdir)/include/puppet_erb.h \
+    $(top_srcdir)/include/puppet_lint.h \
     puppet_ts_parser.h

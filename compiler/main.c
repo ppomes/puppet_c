@@ -29,6 +29,7 @@
 #include "puppet_memory.h"
 #include "puppet_ts_parser.h"
 #include "puppet_hiera.h"
+#include "puppet_lint.h"
 
 /**
  * @brief Print command-line usage information
@@ -50,6 +51,7 @@ static void print_usage(const char *program_name) {
     printf("  -D, --hiera-data  Path to Hiera data directory (default: ./data)\n");
     printf("  -s, --summary     Print validation summary (for CI, implies -e)\n");
     printf("  -P, --parallel    Process nodes in parallel (faster, requires --all-nodes)\n");
+    printf("  -8, --puppet8     Check Puppet 8 compatibility (lint mode)\n");
     printf("  -v, --verbose     Enable verbose/debug output\n");
     printf("  -h, --help        Show this help message\n");
     printf("\nWhen a directory is provided, site.pp will be loaded from manifests/\n");
@@ -81,6 +83,7 @@ int main(int argc, char *argv[]) {
     char *template_output = NULL;
     char *hiera_datadir = NULL;
     int verbose = 0;
+    int puppet8_check = 0;
     int opt;
 
     static struct option long_options[] = {
@@ -97,12 +100,13 @@ int main(int argc, char *argv[]) {
         {"facts", required_argument, 0, 'f'},
         {"template", required_argument, 0, 't'},
         {"hiera-data", required_argument, 0, 'D'},
+        {"puppet8", no_argument, 0, '8'},
         {"verbose", no_argument, 0, 'v'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
 
-    while ((opt = getopt_long(argc, argv, "jecpsPo:m:n:af:t:D:vh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "jecpsPo:m:n:af:t:D:8vh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'j':
                 json_output = 1;
@@ -147,6 +151,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'D':
                 hiera_datadir = optarg;
+                break;
+            case '8':
+                puppet8_check = 1;
                 break;
             case 'v':
                 verbose = 1;
@@ -278,6 +285,21 @@ int main(int argc, char *argv[]) {
     }
     
     if (result == 0 && program) {
+        /* Run Puppet 8 compatibility check if requested */
+        if (puppet8_check) {
+            puppet_lint_result_t lint = puppet_lint_puppet8(program);
+            if (lint.errors > 0) {
+                result = 1;
+            }
+            if (!eval_mode && !json_output) {
+                /* In lint-only mode, we're done */
+                puppet_program_destroy(program);
+                if (loader) puppet_loader_destroy(loader);
+                puppet_memory_shutdown();
+                return result;
+            }
+        }
+
         if (json_output) {
             FILE *output = stdout;
             if (output_file) {
