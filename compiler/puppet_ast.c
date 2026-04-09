@@ -105,7 +105,7 @@ puppet_value_t *puppet_value_create_deferred(const char *function_name, puppet_a
 
 void puppet_array_append(puppet_array_t *array, puppet_value_t *value) {
     if (array->count >= array->capacity) {
-        array->capacity *= 2;
+        array->capacity = array->capacity ? array->capacity * 2 : 8;
         array->items = puppet_realloc(array->items, array->capacity * sizeof(puppet_value_t*));
     }
     array->items[array->count++] = value;

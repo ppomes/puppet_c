@@ -82,9 +82,13 @@ static char *read_file_to_string(const char *path) {
 
     fseek(f, 0, SEEK_END);
     long len = ftell(f);
+    if (len < 0) {
+        fclose(f);
+        return NULL;
+    }
     fseek(f, 0, SEEK_SET);
 
-    char *content = malloc(len + 1);
+    char *content = puppet_malloc(len + 1);
     if (!content) {
         fclose(f);
         return NULL;

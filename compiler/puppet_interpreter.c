@@ -531,8 +531,29 @@ void puppet_env_destroy(puppet_env_t *env) {
         puppet_free(env->exported_resources);
     }
 
-    /* Clean up deferred defines array */
-    puppet_free(env->deferred_defines);
+    /* Clean up deferred defines array and each entry's owned data */
+    if (env->deferred_defines) {
+        for (size_t i = 0; i < env->deferred_define_count; i++) {
+            puppet_free(env->deferred_defines[i].type_name);
+            puppet_free(env->deferred_defines[i].title);
+            puppet_free(env->deferred_defines[i].resource_id);
+            if (env->deferred_defines[i].override_attrs) {
+                for (size_t b = 0; b < env->deferred_defines[i].override_attrs->bucket_count; b++) {
+                    puppet_hash_entry_t *entry = env->deferred_defines[i].override_attrs->buckets[b];
+                    while (entry) {
+                        puppet_hash_entry_t *next = entry->next;
+                        puppet_free(entry->key.data);
+                        puppet_value_destroy(entry->value);
+                        puppet_free(entry);
+                        entry = next;
+                    }
+                }
+                puppet_free(env->deferred_defines[i].override_attrs->buckets);
+                puppet_free(env->deferred_defines[i].override_attrs);
+            }
+        }
+        puppet_free(env->deferred_defines);
+    }
 
     /* Clean up pending realizes */
     if (env->pending_realizes) {
@@ -613,8 +634,10 @@ void puppet_env_destroy(puppet_env_t *env) {
     /* Clean up current_node_certname if allocated */
     puppet_free(env->current_node_certname);
 
-    /* Note: catalog is NOT destroyed here - caller owns it after puppet_env_get_catalog() */
-    /* If catalog was never retrieved, it will be leaked - caller should always get it */
+    /* Destroy catalog if it was never retrieved by the caller */
+    if (env->catalog) {
+        puppet_catalog_destroy(env->catalog);
+    }
 
     puppet_free(env);
 }
@@ -1657,6 +1680,7 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
                 if (right->data.number != 0) {
                     return puppet_value_create_number(left->data.number / right->data.number);
                 }
+                fprintf(stderr, "Warning: division by zero\n");
             }
             break;
             
@@ -1783,6 +1807,7 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
                     return puppet_value_create_number(
                         (int)left->data.number % (int)right->data.number);
                 }
+                fprintf(stderr, "Warning: modulo by zero\n");
             }
             break;
 
@@ -1844,6 +1869,10 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
                     ret = regexec(&regex, left->data.string.data, 0, NULL, 0);
                     regfree(&regex);
                     return puppet_value_create_bool(ret == 0);
+                } else {
+                    char errbuf[128];
+                    regerror(ret, &regex, errbuf, sizeof(errbuf));
+                    fprintf(stderr, "Warning: invalid regex '%s': %s\n", right->data.string.data, errbuf);
                 }
             }
             /* String =~ Regexp */
@@ -1854,6 +1883,10 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
                     ret = regexec(&regex, left->data.string.data, 0, NULL, 0);
                     regfree(&regex);
                     return puppet_value_create_bool(ret == 0);
+                } else {
+                    char errbuf[128];
+                    regerror(ret, &regex, errbuf, sizeof(errbuf));
+                    fprintf(stderr, "Warning: invalid regex '%s': %s\n", right->data.regexp.data, errbuf);
                 }
             }
             return puppet_value_create_bool(false);
@@ -1879,6 +1912,10 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
                     ret = regexec(&regex, left->data.string.data, 0, NULL, 0);
                     regfree(&regex);
                     return puppet_value_create_bool(ret != 0);
+                } else {
+                    char errbuf[128];
+                    regerror(ret, &regex, errbuf, sizeof(errbuf));
+                    fprintf(stderr, "Warning: invalid regex '%s': %s\n", right->data.string.data, errbuf);
                 }
             }
             /* String !~ Regexp */
@@ -1889,6 +1926,10 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
                     ret = regexec(&regex, left->data.string.data, 0, NULL, 0);
                     regfree(&regex);
                     return puppet_value_create_bool(ret != 0);
+                } else {
+                    char errbuf[128];
+                    regerror(ret, &regex, errbuf, sizeof(errbuf));
+                    fprintf(stderr, "Warning: invalid regex '%s': %s\n", right->data.regexp.data, errbuf);
                 }
             }
             return puppet_value_create_bool(true);
@@ -4224,7 +4265,8 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
     } else {
         fprintf(stderr, "--- Node: %s ---\n", certname);
     }
-    env->current_node_certname = (char*)certname;
+    puppet_free(env->current_node_certname);
+    env->current_node_certname = puppet_strdup(certname);
     env->current_node_failed = false;
 
     /* Clear state for this node (each node has its own catalog and class scope) */
@@ -6199,8 +6241,29 @@ static void puppet_env_destroy_clone(puppet_env_t *env) {
         puppet_free(env->define_types);
     }
 
-    /* Free deferred defines array */
-    puppet_free(env->deferred_defines);
+    /* Free deferred defines array and each entry's owned data */
+    if (env->deferred_defines) {
+        for (size_t i = 0; i < env->deferred_define_count; i++) {
+            puppet_free(env->deferred_defines[i].type_name);
+            puppet_free(env->deferred_defines[i].title);
+            puppet_free(env->deferred_defines[i].resource_id);
+            if (env->deferred_defines[i].override_attrs) {
+                for (size_t b = 0; b < env->deferred_defines[i].override_attrs->bucket_count; b++) {
+                    puppet_hash_entry_t *entry = env->deferred_defines[i].override_attrs->buckets[b];
+                    while (entry) {
+                        puppet_hash_entry_t *next = entry->next;
+                        puppet_free(entry->key.data);
+                        puppet_value_destroy(entry->value);
+                        puppet_free(entry);
+                        entry = next;
+                    }
+                }
+                puppet_free(env->deferred_defines[i].override_attrs->buckets);
+                puppet_free(env->deferred_defines[i].override_attrs);
+            }
+        }
+        puppet_free(env->deferred_defines);
+    }
 
     /* Free pending realizes hash */
     if (env->pending_realizes) {

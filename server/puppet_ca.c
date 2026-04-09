@@ -24,6 +24,7 @@
 #include <fcntl.h>
 #include <dirent.h>
 #include <errno.h>
+#include <pthread.h>
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
 
@@ -1011,18 +1012,22 @@ bool puppet_ca_cert_exists(puppet_ca_ctx_t *ctx, const char *certname) {
  */
 
 /**
- * Get the next serial number for certificate signing
+ * Get the next serial number for certificate signing (thread-safe)
  */
+static pthread_mutex_t serial_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 long puppet_ca_get_next_serial(puppet_ca_ctx_t *ctx) {
     if (!ctx) {
         return -1;
     }
 
+    pthread_mutex_lock(&serial_mutex);
     long serial = ctx->serial_number;
     ctx->serial_number++;
 
     /* Save updated serial number */
     puppet_ca_save_serial(ctx);
+    pthread_mutex_unlock(&serial_mutex);
 
     return serial;
 }

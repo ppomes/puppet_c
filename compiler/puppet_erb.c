@@ -641,8 +641,13 @@ puppet_value_t *puppet_func_template(puppet_expr_list_t *args, puppet_env_t *env
 
     // Initialize Ruby if needed (once for all templates)
     static puppet_ruby_context_t *ruby_ctx = NULL;
+    static pthread_mutex_t ruby_init_mutex = PTHREAD_MUTEX_INITIALIZER;
     if (!ruby_ctx) {
-        ruby_ctx = puppet_ruby_init();
+        pthread_mutex_lock(&ruby_init_mutex);
+        if (!ruby_ctx) {  /* Double-check after acquiring lock */
+            ruby_ctx = puppet_ruby_init();
+        }
+        pthread_mutex_unlock(&ruby_init_mutex);
         if (!ruby_ctx) {
             return puppet_value_create_undef();
         }

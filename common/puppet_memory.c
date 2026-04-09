@@ -170,9 +170,13 @@ static puppet_alloc_info_t *find_allocation(void *ptr) {
 
 void puppet_memory_init(void) {
     if (memory_initialized) return;
-    
+
     pthread_mutex_lock(&memory_mutex);
-    
+    if (memory_initialized) {  /* Double-check after acquiring lock */
+        pthread_mutex_unlock(&memory_mutex);
+        return;
+    }
+
     /* Clear allocation table */
     for (int i = 0; i < ALLOC_HASH_SIZE; i++) {
         alloc_table[i] = NULL;

@@ -18,6 +18,30 @@
 #include <time.h>
 
 /**
+ * @brief Write a JSON-escaped string to a file stream
+ */
+static void fprint_json_escaped(FILE *fp, const char *str) {
+    fputc('"', fp);
+    for (const char *p = str; *p; p++) {
+        switch (*p) {
+            case '"':  fputs("\\\"", fp); break;
+            case '\\': fputs("\\\\", fp); break;
+            case '\n': fputs("\\n", fp); break;
+            case '\r': fputs("\\r", fp); break;
+            case '\t': fputs("\\t", fp); break;
+            default:
+                if ((unsigned char)*p < 0x20) {
+                    fprintf(fp, "\\u%04x", (unsigned char)*p);
+                } else {
+                    fputc(*p, fp);
+                }
+                break;
+        }
+    }
+    fputc('"', fp);
+}
+
+/**
  * @brief Set error message in configuration
  */
 static void set_error(puppet_autosign_config_t *config, const char *format, ...) {
@@ -240,10 +264,13 @@ bool puppet_autosign_execute_policy(puppet_autosign_config_t *config,
     FILE *fp = fdopen(stdin_pipe[1], "w");
     if (fp) {
         fprintf(fp, "{\n");
-        fprintf(fp, "  \"certname\": \"%s\",\n", csr_info->certname ? csr_info->certname : "");
-        fprintf(fp, "  \"subject\": \"%s\",\n", csr_info->subject ? csr_info->subject : "");
-        fprintf(fp, "  \"fingerprint\": \"%s\"\n", csr_info->fingerprint ? csr_info->fingerprint : "");
-        fprintf(fp, "}\n");
+        fprintf(fp, "  \"certname\": ");
+        fprint_json_escaped(fp, csr_info->certname ? csr_info->certname : "");
+        fprintf(fp, ",\n  \"subject\": ");
+        fprint_json_escaped(fp, csr_info->subject ? csr_info->subject : "");
+        fprintf(fp, ",\n  \"fingerprint\": ");
+        fprint_json_escaped(fp, csr_info->fingerprint ? csr_info->fingerprint : "");
+        fprintf(fp, "\n}\n");
         fclose(fp); /* This also closes stdin_pipe[1] */
     } else {
         close(stdin_pipe[1]);

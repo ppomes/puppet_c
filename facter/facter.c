@@ -490,9 +490,15 @@ char *facter_os_family(void) {
             if (strncmp(line, "ID_LIKE=", 8) == 0) {
                 id_like = line + 8;
                 if (*id_like == '"') id_like++;
+                /* Strip trailing quote */
+                char *end = id_like + strlen(id_like) - 1;
+                if (end >= id_like && *end == '"') *end = '\0';
             } else if (strncmp(line, "ID=", 3) == 0) {
                 id = line + 3;
                 if (*id == '"') id++;
+                /* Strip trailing quote */
+                char *end = id + strlen(id) - 1;
+                if (end >= id && *end == '"') *end = '\0';
             }
             line = strtok(NULL, "\n");
         }
@@ -1046,9 +1052,8 @@ static void collect_system_facts(facter_ctx_t *ctx) {
         puppet_free(domain);
     }
 
-    facter_set_integer(ctx, "uptime_seconds", facter_uptime_seconds());
-
     long uptime = facter_uptime_seconds();
+    facter_set_integer(ctx, "uptime_seconds", uptime);
     facter_set_integer(ctx, "uptime_days", uptime / 86400);
     facter_set_integer(ctx, "uptime_hours", uptime / 3600);
 }

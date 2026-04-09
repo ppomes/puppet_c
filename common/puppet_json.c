@@ -282,11 +282,26 @@ static bool json_parser_read_string(json_parser_t *parser) {
                 case 'r': json_buffer_append_char(buf, '\r'); break;
                 case 't': json_buffer_append_char(buf, '\t'); break;
                 case 'u':
-                    /* Unicode escape - simplified handling */
+                    /* Unicode escape - decode \uXXXX to UTF-8 */
                     if (parser->pos + 4 < parser->length) {
+                        char hex[5];
+                        memcpy(hex, parser->input + parser->pos, 4);
+                        hex[4] = '\0';
+                        unsigned int codepoint = (unsigned int)strtoul(hex, NULL, 16);
                         parser->pos += 4;
                         parser->column += 4;
-                        json_buffer_append_char(buf, '?'); /* Placeholder */
+
+                        /* Encode as UTF-8 */
+                        if (codepoint <= 0x7F) {
+                            json_buffer_append_char(buf, (char)codepoint);
+                        } else if (codepoint <= 0x7FF) {
+                            json_buffer_append_char(buf, (char)(0xC0 | (codepoint >> 6)));
+                            json_buffer_append_char(buf, (char)(0x80 | (codepoint & 0x3F)));
+                        } else {
+                            json_buffer_append_char(buf, (char)(0xE0 | (codepoint >> 12)));
+                            json_buffer_append_char(buf, (char)(0x80 | ((codepoint >> 6) & 0x3F)));
+                            json_buffer_append_char(buf, (char)(0x80 | (codepoint & 0x3F)));
+                        }
                     }
                     break;
                 default:
