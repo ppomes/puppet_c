@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <curl/curl.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/x509.h>
@@ -112,16 +113,20 @@ static EVP_PKEY *generate_private_key(const char *key_path, bool verbose) {
         fprintf(stderr, "[INFO] Generated 2048-bit RSA private key\n");
     }
 
-    /* Save private key to file */
-    fp = fopen(key_path, "w");
-    if (!fp) {
+    /* Save private key to file with restrictive permissions from the start */
+    int fd = open(key_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
         fprintf(stderr, "Error: Cannot create private key file: %s\n", key_path);
         EVP_PKEY_free(pkey);
         return NULL;
     }
-
-    /* Set restrictive permissions (0600) */
-    chmod(key_path, 0600);
+    fp = fdopen(fd, "w");
+    if (!fp) {
+        fprintf(stderr, "Error: Cannot open private key file: %s\n", key_path);
+        close(fd);
+        EVP_PKEY_free(pkey);
+        return NULL;
+    }
 
     if (!PEM_write_PrivateKey(fp, pkey, NULL, NULL, 0, NULL, NULL)) {
         fprintf(stderr, "Error: Failed to write private key\n");

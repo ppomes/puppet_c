@@ -155,7 +155,6 @@ static enum MHD_Result send_json_response(struct MHD_Connection *connection,
     if (!response) return MHD_NO;
 
     MHD_add_response_header(response, "Content-Type", "application/json");
-    MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
 
     ret = MHD_queue_response(connection, status_code, response);
     MHD_destroy_response(response);
@@ -169,9 +168,21 @@ static enum MHD_Result send_json_response(struct MHD_Connection *connection,
 static enum MHD_Result send_error(struct MHD_Connection *connection,
                                   unsigned int status_code,
                                   const char *message) {
-    char json[512];
+    /* Escape message for safe JSON embedding */
+    char escaped[1024];
+    size_t j = 0;
+    for (size_t i = 0; message[i] && j < sizeof(escaped) - 2; i++) {
+        if (message[i] == '"' || message[i] == '\\') {
+            if (j + 2 >= sizeof(escaped) - 1) break;
+            escaped[j++] = '\\';
+        }
+        escaped[j++] = message[i];
+    }
+    escaped[j] = '\0';
+
+    char json[1536];
     snprintf(json, sizeof(json),
-             "{\"error\": \"%s\", \"status\": %u}", message, status_code);
+             "{\"error\": \"%s\", \"status\": %u}", escaped, status_code);
     return send_json_response(connection, status_code, json);
 }
 
@@ -191,7 +202,6 @@ static enum MHD_Result send_file_response(struct MHD_Connection *connection,
     if (!response) return MHD_NO;
 
     MHD_add_response_header(response, "Content-Type", "application/octet-stream");
-    MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
 
     ret = MHD_queue_response(connection, status_code, response);
     MHD_destroy_response(response);
@@ -1003,8 +1013,12 @@ static enum MHD_Result request_handler(void *cls,
 
     struct connection_info *con_info = *con_cls;
 
-    /* Accumulate POST data */
+    /* Accumulate POST data (limit to 10MB to prevent DoS) */
+    #define MAX_POST_DATA_SIZE (10 * 1024 * 1024)
     if (*upload_data_size > 0) {
+        if (con_info->post_data_size + *upload_data_size > MAX_POST_DATA_SIZE) {
+            return MHD_NO;
+        }
         char *new_data = puppet_realloc(con_info->post_data,
                                   con_info->post_data_size + *upload_data_size + 1);
         if (!new_data) return MHD_NO;

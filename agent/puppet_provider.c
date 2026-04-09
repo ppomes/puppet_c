@@ -111,8 +111,8 @@ static char *build_args_json(json_value_t *args) {
 
         if (arg_str) {
             size_t arg_len = strlen(arg_str);
-            /* Ensure buffer is large enough */
-            while (pos + arg_len + 10 >= buf_size) {
+            /* Ensure buffer is large enough (worst case: every char escaped = 2x + quotes + comma) */
+            while (pos + arg_len * 2 + 10 >= buf_size) {
                 buf_size *= 2;
                 char *new_buf = puppet_realloc(buf, buf_size);
                 if (!new_buf) {

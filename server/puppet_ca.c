@@ -37,6 +37,21 @@ static __thread char ca_error_buffer[PUPPET_CA_MAX_ERROR];
  */
 
 /**
+ * Validate certname contains only safe characters for use in file paths.
+ * Rejects path separators, .., and control characters.
+ */
+static bool is_valid_certname(const char *certname) {
+    if (!certname || !certname[0]) return false;
+    for (const char *p = certname; *p; p++) {
+        if (*p == '/' || *p == '\\' || *p == '\0') return false;
+        if ((unsigned char)*p < 32) return false;  /* control chars */
+    }
+    /* Reject .. components */
+    if (strstr(certname, "..") != NULL) return false;
+    return true;
+}
+
+/**
  * Create directory with proper permissions if it doesn't exist
  */
 static int ensure_directory(const char *path, mode_t mode) {
@@ -458,11 +473,20 @@ int puppet_ca_save(puppet_ca_ctx_t *ctx) {
     /* Set certificate permissions (readable by all) */
     set_file_permissions(cert_path, 0644);
 
-    /* Save private key */
-    FILE *key_file = fopen(key_path, "w");
-    if (!key_file) {
+    /* Save private key with restrictive permissions from the start */
+    int key_fd = open(key_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (key_fd < 0) {
         snprintf(ctx->last_error, sizeof(ctx->last_error),
                 "Failed to create CA private key file: %s", strerror(errno));
+        puppet_free(cert_path);
+        puppet_free(key_path);
+        return -1;
+    }
+    FILE *key_file = fdopen(key_fd, "w");
+    if (!key_file) {
+        close(key_fd);
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Failed to open CA private key file: %s", strerror(errno));
         puppet_free(cert_path);
         puppet_free(key_path);
         return -1;
@@ -477,9 +501,6 @@ int puppet_ca_save(puppet_ca_ctx_t *ctx) {
         return -1;
     }
     fclose(key_file);
-
-    /* Set private key permissions (owner read/write only) */
-    set_file_permissions(key_path, 0600);
 
     puppet_free(cert_path);
     puppet_free(key_path);
@@ -831,6 +852,11 @@ int puppet_ca_save_signed_cert(puppet_ca_ctx_t *ctx,
     if (!ctx || !certname || !cert_pem) {
         return -1;
     }
+    if (!is_valid_certname(certname)) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Invalid certname: contains unsafe characters");
+        return -1;
+    }
 
     char *signed_dir = build_path(ctx->ca_dir, PUPPET_CA_SIGNED_DIR);
     if (!signed_dir) {
@@ -878,6 +904,11 @@ int puppet_ca_load_signed_cert(puppet_ca_ctx_t *ctx,
                                 const char *certname,
                                 char **cert_pem) {
     if (!ctx || !certname || !cert_pem) {
+        return -1;
+    }
+    if (!is_valid_certname(certname)) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Invalid certname: contains unsafe characters");
         return -1;
     }
 
@@ -1094,6 +1125,12 @@ int puppet_ca_save_csr(puppet_ca_ctx_t *ctx,
         return -1;
     }
 
+    if (!is_valid_certname(certname)) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Invalid certname: contains unsafe characters");
+        return -1;
+    }
+
     /* Create requests directory if it doesn't exist */
     char requests_dir[PUPPET_CA_MAX_PATH];
     snprintf(requests_dir, sizeof(requests_dir), "%s/%s",
@@ -1187,6 +1224,7 @@ int puppet_ca_load_csr(puppet_ca_ctx_t *ctx,
  */
 bool puppet_ca_csr_exists(puppet_ca_ctx_t *ctx, const char *certname) {
     if (!ctx || !ctx->ca_dir || !certname) return false;
+    if (!is_valid_certname(certname)) return false;
 
     char csr_path[PUPPET_CA_MAX_PATH];
     snprintf(csr_path, sizeof(csr_path), "%s/%s/%s.pem",
@@ -1205,6 +1243,12 @@ int puppet_ca_delete_csr(puppet_ca_ctx_t *ctx, const char *certname) {
             snprintf(ctx->last_error, sizeof(ctx->last_error),
                     "Invalid parameters");
         }
+        return -1;
+    }
+
+    if (!is_valid_certname(certname)) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "Invalid certname: contains unsafe characters");
         return -1;
     }
 

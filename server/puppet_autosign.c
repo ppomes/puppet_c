@@ -321,17 +321,21 @@ bool puppet_autosign_check_whitelist(puppet_autosign_config_t *config,
 
         /* Check for simple wildcard pattern (e.g., *.example.com) */
         if (trimmed[0] == '*' && trimmed[1] == '.') {
-            const char *domain = trimmed + 1; /* Skip '*' */
-            const char *certname_domain = strrchr(certname, '.');
-            if (certname_domain) {
-                /* Check if certname ends with the domain pattern */
-                size_t domain_len = strlen(domain);
-                size_t certname_len = strlen(certname);
-                if (certname_len >= domain_len) {
-                    if (strcmp(certname + certname_len - domain_len, domain) == 0) {
-                        found = true;
-                        break;
-                    }
+            const char *domain = trimmed + 1; /* Skip '*', keep the leading '.' */
+            size_t domain_len = strlen(domain);
+            size_t certname_len = strlen(certname);
+            if (certname_len > domain_len) {
+                /* Check if certname ends with the domain pattern AND
+                 * the character before the match is the start of the certname
+                 * (i.e., the matched portion is a complete subdomain label).
+                 * This prevents *.example.com from matching evil.notexample.com */
+                const char *suffix = certname + certname_len - domain_len;
+                if (strcmp(suffix, domain) == 0) {
+                    /* Verify the match is at a domain boundary:
+                     * suffix starts with '.', so certname_len > domain_len
+                     * means there's at least one char before the '.', which is valid */
+                    found = true;
+                    break;
                 }
             }
         }

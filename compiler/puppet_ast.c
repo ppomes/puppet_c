@@ -281,8 +281,28 @@ puppet_value_t *puppet_value_copy(puppet_value_t *value) {
             return new_deferred;
         }
 
+        case PUPPET_VALUE_REGEXP: {
+            puppet_value_t *copy = puppet_calloc(1, sizeof(puppet_value_t));
+            if (!copy) return NULL;
+            copy->type = PUPPET_VALUE_REGEXP;
+            copy->data.regexp.data = puppet_malloc(value->data.regexp.len + 1);
+            memcpy(copy->data.regexp.data, value->data.regexp.data, value->data.regexp.len);
+            copy->data.regexp.data[value->data.regexp.len] = '\0';
+            copy->data.regexp.len = value->data.regexp.len;
+            return copy;
+        }
+
+        case PUPPET_VALUE_TYPE: {
+            /* Type references are opaque pointers; create a shallow copy */
+            puppet_value_t *copy = puppet_calloc(1, sizeof(puppet_value_t));
+            if (!copy) return NULL;
+            copy->type = PUPPET_VALUE_TYPE;
+            copy->data.type_ref = value->data.type_ref;
+            return copy;
+        }
+
         default:
-            return NULL;
+            return puppet_value_create_undef();
     }
 }
 

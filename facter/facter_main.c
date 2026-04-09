@@ -17,6 +17,30 @@ typedef enum {
     FORMAT_YAML
 } output_format_t;
 
+/* Print a JSON-escaped string (handles quotes, backslashes, control chars) */
+static void print_json_escaped(const char *str) {
+    putchar('"');
+    for (const char *p = str; *p; p++) {
+        switch (*p) {
+            case '"':  fputs("\\\"", stdout); break;
+            case '\\': fputs("\\\\", stdout); break;
+            case '\b': fputs("\\b", stdout); break;
+            case '\f': fputs("\\f", stdout); break;
+            case '\n': fputs("\\n", stdout); break;
+            case '\r': fputs("\\r", stdout); break;
+            case '\t': fputs("\\t", stdout); break;
+            default:
+                if ((unsigned char)*p < 0x20) {
+                    printf("\\u%04x", (unsigned char)*p);
+                } else {
+                    putchar(*p);
+                }
+                break;
+        }
+    }
+    putchar('"');
+}
+
 static void print_usage(const char *prog) {
     printf("Usage: %s [OPTIONS] [FACT...]\n", prog);
     printf("\nNative fact collection tool (libfacter_c %s)\n", facter_version());
@@ -96,7 +120,11 @@ int main(int argc, char *argv[]) {
 
             if (value) {
                 if (format == FORMAT_JSON) {
-                    printf("{\"%s\": \"%s\"}\n", name, value);
+                    putchar('{');
+                    print_json_escaped(name);
+                    fputs(": ", stdout);
+                    print_json_escaped(value);
+                    puts("}");
                 } else if (format == FORMAT_YAML) {
                     printf("%s: \"%s\"\n", name, value);
                 } else {

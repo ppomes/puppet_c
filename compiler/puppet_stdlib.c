@@ -54,7 +54,8 @@ static const char *puppet_log_level_str(puppet_log_level_t level) {
 static void puppet_log(puppet_log_level_t level, const char *message) {
     time_t now;
     time(&now);
-    struct tm *tm_info = localtime(&now);
+    struct tm tm_storage;
+    struct tm *tm_info = localtime_r(&now, &tm_storage);
     char time_buffer[26];
     strftime(time_buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
 
@@ -92,7 +93,8 @@ void puppet_log_loc(puppet_log_level_t level, puppet_location_t loc, const char 
 
     time_t now;
     time(&now);
-    struct tm *tm_info = localtime(&now);
+    struct tm tm_storage;
+    struct tm *tm_info = localtime_r(&now, &tm_storage);
     char time_buffer[26];
     strftime(time_buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
 

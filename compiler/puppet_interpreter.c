@@ -1334,8 +1334,15 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
                         key->data.string.data, key->data.string.len);
                     result = val ? puppet_value_copy(val) : puppet_value_create_undef();
                 } else if (obj->type == PUPPET_VALUE_ARRAY && key->type == PUPPET_VALUE_NUMBER) {
-                    /* Array access */
-                    size_t idx = (size_t)key->data.number;
+                    /* Array access - support negative indexing ($arr[-1] is last element) */
+                    int index = (int)key->data.number;
+                    size_t idx;
+                    if (index < 0) {
+                        int adjusted = (int)obj->data.array->count + index;
+                        idx = adjusted >= 0 ? (size_t)adjusted : obj->data.array->count; /* force OOB */
+                    } else {
+                        idx = (size_t)index;
+                    }
                     if (idx < obj->data.array->count) {
                         result = puppet_value_copy(obj->data.array->items[idx]);
                     } else {
@@ -5743,18 +5750,7 @@ puppet_value_t *puppet_facts_get(puppet_env_t *env, const char *fact_name) {
     }
     
     // Return copy to avoid double-free
-    switch (fact_value->type) {
-        case PUPPET_VALUE_UNDEF:
-            return puppet_value_create_undef();
-        case PUPPET_VALUE_BOOL:
-            return puppet_value_create_bool(fact_value->data.boolean);
-        case PUPPET_VALUE_NUMBER:
-            return puppet_value_create_number(fact_value->data.number);
-        case PUPPET_VALUE_STRING:
-            return puppet_value_create_string(fact_value->data.string.data, fact_value->data.string.len);
-        default:
-            return puppet_value_create_undef();
-    }
+    return puppet_value_copy(fact_value);
 }
 
 /**
@@ -5795,8 +5791,9 @@ puppet_value_t *puppet_facts_get_all_as_hash(puppet_env_t *env) {
             /* Split dotted name and create nested hashes */
             puppet_value_t *current = root;
             char *name_copy = puppet_strdup(fact_name);
-            char *token = strtok(name_copy, ".");
-            char *next_token = strtok(NULL, ".");
+            char *saveptr;
+            char *token = strtok_r(name_copy, ".", &saveptr);
+            char *next_token = strtok_r(NULL, ".", &saveptr);
 
             while (token) {
                 if (!next_token) {
@@ -5814,7 +5811,7 @@ puppet_value_t *puppet_facts_get_all_as_hash(puppet_env_t *env) {
                     current = nested;
                 }
                 token = next_token;
-                next_token = strtok(NULL, ".");
+                next_token = strtok_r(NULL, ".", &saveptr);
             }
 
             puppet_free(name_copy);
@@ -6054,6 +6051,8 @@ static void puppet_env_destroy_clone(puppet_env_t *env) {
             while (e) {
                 puppet_hash_entry_t *next = e->next;
                 puppet_free(e->key.data);
+                /* Destroy the stored scope (same as puppet_env_destroy) */
+                puppet_scope_destroy((puppet_scope_t *)e->value);
                 puppet_free(e);
                 e = next;
             }
@@ -6098,7 +6097,19 @@ static void puppet_env_destroy_clone(puppet_env_t *env) {
             while (e) {
                 puppet_hash_entry_t *next = e->next;
                 puppet_free(e->key.data);
-                puppet_value_destroy(e->value);
+                /* Value stores a puppet_virtual_resource_t* via type-punning */
+                if (e->value && e->value->data.string.data) {
+                    puppet_virtual_resource_t *vres = (puppet_virtual_resource_t *)e->value->data.string.data;
+                    puppet_free(vres->type);
+                    puppet_free(vres->title);
+                    for (size_t j = 0; j < vres->attr_count; j++) {
+                        puppet_free(vres->attrs[j].name);
+                        puppet_value_destroy(vres->attrs[j].value);
+                    }
+                    puppet_free(vres->attrs);
+                    puppet_free(vres);
+                }
+                puppet_free(e->value);
                 puppet_free(e);
                 e = next;
             }
@@ -6113,6 +6124,19 @@ static void puppet_env_destroy_clone(puppet_env_t *env) {
             while (e) {
                 puppet_hash_entry_t *next = e->next;
                 puppet_free(e->key.data);
+                /* Value stores a puppet_virtual_resource_t* via type-punning */
+                if (e->value && e->value->data.string.data) {
+                    puppet_virtual_resource_t *vres = (puppet_virtual_resource_t *)e->value->data.string.data;
+                    puppet_free(vres->type);
+                    puppet_free(vres->title);
+                    for (size_t j = 0; j < vres->attr_count; j++) {
+                        puppet_free(vres->attrs[j].name);
+                        puppet_value_destroy(vres->attrs[j].value);
+                    }
+                    puppet_free(vres->attrs);
+                    puppet_free(vres);
+                }
+                puppet_free(e->value);
                 puppet_free(e);
                 e = next;
             }
