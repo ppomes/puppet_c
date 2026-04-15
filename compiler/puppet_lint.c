@@ -546,12 +546,8 @@ static void lint_erb_file(puppet_lint_result_t *r, const char *path) {
                 "pass variables as template parameters and use @variable");
         }
 
-        /* Check for scope['var'] or scope["var"] */
-        if (strstr(line, "scope['") || strstr(line, "scope[\"")) {
-            lint_file_error(r, path, lineno,
-                "scope['var'] is removed in Puppet 8, "
-                "pass variables as template parameters and use @variable");
-        }
+        /* Note: scope['var'] is the recommended modern syntax in Puppet 8,
+         * replacing the older scope.lookupvar('var'). Do not flag it. */
 
         /* Check for variables without @ prefix: <%= variable %> (not @variable) */
         char *pos = line;
