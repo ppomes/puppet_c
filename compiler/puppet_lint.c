@@ -672,8 +672,8 @@ static void lint_metadata_json(puppet_lint_result_t *r, const char *path) {
                 strstr(line, "<4.0.0") || strstr(line, "<5.0.0") ||
                 strstr(line, "<6.0.0") || strstr(line, "<7.0.0") ||
                 strstr(line, "3.x") || strstr(line, "4.x")) {
-                lint_file_error(r, path, lineno,
-                    "Puppet version constraint excludes Puppet 8, update to '>= 7.0.0 < 9.0.0' or similar");
+                lint_file_warning(r, path, lineno,
+                    "Puppet version constraint excludes Puppet 8, consider updating to '>= 7.0.0 < 9.0.0' or similar");
             }
             in_requirements = false;
         }
