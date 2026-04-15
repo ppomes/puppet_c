@@ -19,6 +19,7 @@ const TSLanguage *tree_sitter_puppet(void);
 /* Forward declarations */
 static puppet_stmt_t *convert_statement(TSNode node, const char *source);
 static puppet_expr_t *convert_expression(TSNode node, const char *source);
+static puppet_expr_t *convert_access_element_expr(TSNode access_elem, const char *source);
 static puppet_stmt_list_t convert_block(TSNode node, const char *source);
 static puppet_lambda_t *convert_lambda(TSNode node, const char *source);
 static puppet_expr_t *build_index_expr(puppet_expr_t *object, TSNode access_node, const char *source);
@@ -1055,9 +1056,7 @@ static puppet_expr_t *convert_expression(TSNode node, const char *source) {
             /* Get the title from the first access_element */
             TSNode access_elem = find_child(access_child, "access_element");
             if (!ts_node_is_null(access_elem)) {
-                /* Get the first named child of access_element (the actual value) */
-                TSNode value_node = ts_node_named_child(access_elem, 0);
-                expr->data.resource_ref.title = convert_expression(value_node, source);
+                expr->data.resource_ref.title = convert_access_element_expr(access_elem, source);
             } else {
                 /* Fallback: use entire access content */
                 expr->data.resource_ref.title = convert_expression(access_child, source);
@@ -1140,8 +1139,7 @@ static puppet_expr_t *convert_expression(TSNode node, const char *source) {
             /* Get the title from the first access_element */
             TSNode access_elem = find_child(access_child, "access_element");
             if (!ts_node_is_null(access_elem)) {
-                TSNode value_node = ts_node_named_child(access_elem, 0);
-                expr->data.resource_ref.title = convert_expression(value_node, source);
+                expr->data.resource_ref.title = convert_access_element_expr(access_elem, source);
             } else {
                 expr->data.resource_ref.title = convert_expression(access_child, source);
             }
@@ -1267,6 +1265,44 @@ static puppet_attribute_t convert_attribute(TSNode node, const char *source) {
     }
 
     return attr;
+}
+
+/**
+ * @brief Convert an access_element node to a full expression, handling chained hash access.
+ *
+ * An access_element like $myhash['a']['b'] is parsed by tree-sitter as:
+ *   access_element
+ *     variable ($myhash)
+ *     access (['a'])
+ *     access (['b'])
+ *
+ * This function builds the full chained index expression instead of
+ * just taking the first child (which would return only $myhash).
+ */
+static puppet_expr_t *convert_access_element_expr(TSNode access_elem, const char *source) {
+    uint32_t named_count = ts_node_named_child_count(access_elem);
+    if (named_count == 0) return NULL;
+
+    TSNode first = ts_node_named_child(access_elem, 0);
+
+    /* Check if first child is a variable followed by access nodes */
+    if (named_count >= 2 && node_is(first, "variable")) {
+        TSNode second = ts_node_named_child(access_elem, 1);
+        if (node_is(second, "access")) {
+            /* Variable with chained access: $var['a']['b'] */
+            puppet_expr_t *expr = convert_variable(first, source);
+            for (uint32_t j = 1; j < named_count; j++) {
+                TSNode acc = ts_node_named_child(access_elem, j);
+                if (node_is(acc, "access")) {
+                    expr = build_index_expr(expr, acc, source);
+                }
+            }
+            return expr;
+        }
+    }
+
+    /* Simple case: just convert the first child */
+    return convert_expression(first, source);
 }
 
 /* Build index expression from object + access node */
@@ -2087,8 +2123,7 @@ static puppet_stmt_t *convert_statement(TSNode node, const char *source) {
                 /* Get title from access element */
                 TSNode access_elem = find_child(access_node, "access_element");
                 if (!ts_node_is_null(access_elem)) {
-                    TSNode title_node = ts_node_named_child(access_elem, 0);
-                    ref->data.resource_ref.title = convert_expression(title_node, source);
+                    ref->data.resource_ref.title = convert_access_element_expr(access_elem, source);
                 }
 
                 stmt->data.resource_override.reference = ref;
