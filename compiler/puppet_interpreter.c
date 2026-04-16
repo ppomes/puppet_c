@@ -22,6 +22,68 @@
 /* Global verbose flag */
 bool puppet_verbose = false;
 
+/* Wrapper around regcomp() that translates Ruby/PCRE-style inline flag groups
+ * "(?i:...)", "(?m:...)", "(?i)..." into POSIX regex flags. POSIX does not
+ * support per-group flags, so occurrences are stripped and the flag is applied
+ * globally — acceptable for the Puppet patterns we encounter in practice.
+ * On success returns 0 and the caller must regfree(rx). */
+static int puppet_regcomp(regex_t *rx, const char *pattern, int cflags) {
+    if (!pattern) return REG_BADPAT;
+
+    int extra_flags = 0;
+    char *buf = NULL;
+    const char *p = pattern;
+
+    /* Quick check: only act if pattern might contain Ruby-style flags */
+    if (strstr(pattern, "(?") != NULL) {
+        size_t len = strlen(pattern);
+        buf = (char *)puppet_malloc(len + 1);
+        char *dst = buf;
+        const char *src = pattern;
+        while (*src) {
+            if (src[0] == '(' && src[1] == '?' &&
+                (src[2] == 'i' || src[2] == 'm' || src[2] == 'x' || src[2] == '-')) {
+                /* Parse a flag group until ':' or ')' */
+                const char *q = src + 2;
+                int local_icase = 0, local_newline = 0;
+                bool negating = false;
+                while (*q && *q != ':' && *q != ')') {
+                    switch (*q) {
+                        case 'i': if (!negating) local_icase = 1; break;
+                        case 'm': if (!negating) local_newline = 1; break;
+                        case 'x': break; /* extended: POSIX ext already is */
+                        case '-': negating = true; break;
+                        default:  goto no_match; /* unknown flag, bail */
+                    }
+                    q++;
+                }
+                if (*q == ':') {
+                    /* (?flags:X) — drop "(?flags:" and keep "X)" */
+                    if (local_icase) extra_flags |= REG_ICASE;
+                    if (local_newline) extra_flags |= REG_NEWLINE;
+                    *dst++ = '(';  /* keep the opening paren as a non-capturing group */
+                    src = q + 1;
+                    continue;
+                } else if (*q == ')') {
+                    /* (?flags)X — drop the whole group */
+                    if (local_icase) extra_flags |= REG_ICASE;
+                    if (local_newline) extra_flags |= REG_NEWLINE;
+                    src = q + 1;
+                    continue;
+                }
+            }
+no_match:
+            *dst++ = *src++;
+        }
+        *dst = '\0';
+        p = buf;
+    }
+
+    int ret = regcomp(rx, p, cflags | extra_flags);
+    if (buf) puppet_free(buf);
+    return ret;
+}
+
 /* Forward declarations for node definition management */
 static int puppet_register_node_def(puppet_env_t *env, puppet_stmt_t *node_def);
 static puppet_stmt_t *puppet_find_matching_node(puppet_env_t *env, const char *certname);
@@ -1627,7 +1689,7 @@ static bool value_matches_type_impl(puppet_value_t *val, const char *type_name,
         }
         if (pattern_str) {
             regex_t rx;
-            if (regcomp(&rx, pattern_str, REG_EXTENDED | REG_NOSUB) == 0) {
+            if (puppet_regcomp(&rx, pattern_str, REG_EXTENDED | REG_NOSUB) == 0) {
                 matched = (regexec(&rx, val->data.string.data, 0, NULL, 0) == 0);
                 regfree(&rx);
             }
@@ -2045,7 +2107,7 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
                 }
                 /* Regular regex match */
                 regex_t regex;
-                int ret = regcomp(&regex, right->data.string.data, REG_EXTENDED | REG_NOSUB);
+                int ret = puppet_regcomp(&regex, right->data.string.data, REG_EXTENDED | REG_NOSUB);
                 if (ret == 0) {
                     ret = regexec(&regex, left->data.string.data, 0, NULL, 0);
                     regfree(&regex);
@@ -2059,7 +2121,7 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
             /* String =~ Regexp */
             if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_REGEXP) {
                 regex_t regex;
-                int ret = regcomp(&regex, right->data.regexp.data, REG_EXTENDED | REG_NOSUB);
+                int ret = puppet_regcomp(&regex, right->data.regexp.data, REG_EXTENDED | REG_NOSUB);
                 if (ret == 0) {
                     ret = regexec(&regex, left->data.string.data, 0, NULL, 0);
                     regfree(&regex);
@@ -2088,7 +2150,7 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
                 }
                 /* Regular regex non-match */
                 regex_t regex;
-                int ret = regcomp(&regex, right->data.string.data, REG_EXTENDED | REG_NOSUB);
+                int ret = puppet_regcomp(&regex, right->data.string.data, REG_EXTENDED | REG_NOSUB);
                 if (ret == 0) {
                     ret = regexec(&regex, left->data.string.data, 0, NULL, 0);
                     regfree(&regex);
@@ -2102,7 +2164,7 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
             /* String !~ Regexp */
             if (left->type == PUPPET_VALUE_STRING && right->type == PUPPET_VALUE_REGEXP) {
                 regex_t regex;
-                int ret = regcomp(&regex, right->data.regexp.data, REG_EXTENDED | REG_NOSUB);
+                int ret = puppet_regcomp(&regex, right->data.regexp.data, REG_EXTENDED | REG_NOSUB);
                 if (ret == 0) {
                     ret = regexec(&regex, left->data.string.data, 0, NULL, 0);
                     regfree(&regex);
@@ -3518,7 +3580,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                                expr_val->type == PUPPET_VALUE_STRING) {
                         // Regex match: test pattern against string value
                         regex_t regex;
-                        int ret = regcomp(&regex, test_val->data.regexp.data, REG_EXTENDED | REG_NOSUB);
+                        int ret = puppet_regcomp(&regex, test_val->data.regexp.data, REG_EXTENDED | REG_NOSUB);
                         if (ret == 0) {
                             ret = regexec(&regex, expr_val->data.string.data, 0, NULL, 0);
                             is_match = (ret == 0);
@@ -4634,7 +4696,7 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
 
                 /* Compile and execute regex */
                 regex_t regex;
-                int ret = regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB);
+                int ret = puppet_regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB);
                 if (ret == 0) {
                     ret = regexec(&regex, env->node_name, 0, NULL, 0);
                     should_execute = (ret == 0);
@@ -5112,7 +5174,7 @@ static puppet_stmt_t *puppet_find_matching_node(puppet_env_t *env, const char *c
 
             // Compile and execute regex
             regex_t regex;
-            int ret = regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB);
+            int ret = puppet_regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB);
             if (ret == 0) {
                 ret = regexec(&regex, certname, 0, NULL, 0);
                 regfree(&regex);
