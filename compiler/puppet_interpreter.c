@@ -716,6 +716,10 @@ puppet_value_t *puppet_scope_get_var(puppet_scope_t *scope, const char *name, bo
     return value;
 }
 
+/* Forward declaration for type-match helper defined below */
+static bool value_matches_type(puppet_value_t *val, const char *type_name,
+                                puppet_expr_t *title_expr, puppet_env_t *env);
+
 puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
     if (!expr) {
         return puppet_value_create_undef();
@@ -753,6 +757,36 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             return puppet_eval_variable(expr->data.variable.data, expr->loc, env);
             
         case PUPPET_EXPR_BINOP: {
+            /* Intercept type-match: $value =~ TypeRef (e.g. Array, Pattern[/x/]) */
+            if ((expr->data.binop.op == PUPPET_OP_MATCH ||
+                 expr->data.binop.op == PUPPET_OP_NOT_MATCH) &&
+                expr->data.binop.right &&
+                expr->data.binop.right->type == PUPPET_EXPR_RESOURCE_REF) {
+                puppet_expr_t *rref = expr->data.binop.right;
+                const char *tname = rref->data.resource_ref.type.data;
+                /* Skip regular resource-ref titles like File['x'], User['y'] etc.
+                 * by only matching capitalized builtin type names. A resource ref
+                 * with a string title is a regular resource ref. A bare type or a
+                 * type[param] is what we handle here. Heuristic: if title is a
+                 * string literal value, treat as resource ref; otherwise as type. */
+                bool is_type_ref = true;
+                if (rref->data.resource_ref.title) {
+                    puppet_expr_t *t = rref->data.resource_ref.title;
+                    /* A string literal title means regular resource ref */
+                    if (t->type == PUPPET_EXPR_VALUE && t->data.value &&
+                        t->data.value->type == PUPPET_VALUE_STRING) {
+                        is_type_ref = false;
+                    }
+                }
+                if (is_type_ref) {
+                    puppet_value_t *lval = puppet_eval_expr(expr->data.binop.left, env);
+                    bool matched = value_matches_type(lval, tname,
+                                                      rref->data.resource_ref.title, env);
+                    if (expr->data.binop.op == PUPPET_OP_NOT_MATCH) matched = !matched;
+                    puppet_value_destroy(lval);
+                    return puppet_value_create_bool(matched);
+                }
+            }
             puppet_value_t *left = puppet_eval_expr(expr->data.binop.left, env);
             puppet_value_t *right = puppet_eval_expr(expr->data.binop.right, env);
             puppet_value_t *result = puppet_eval_binop(expr->data.binop.op, left, right);
@@ -1527,6 +1561,153 @@ static bool puppet_values_equal(puppet_value_t *left, puppet_value_t *right) {
         default:
             return false;
     }
+}
+
+/* Check if a Puppet value matches a Puppet type name (bare or parametric).
+ * type_name: the type identifier (e.g. "Array", "String", "Pattern", "Variant", "Optional")
+ * title_expr: the parameter expression inside brackets (NULL for bare types)
+ * env: evaluation environment (needed to evaluate title_expr for parametric types)
+ */
+static bool value_matches_type_impl(puppet_value_t *val, const char *type_name,
+                                     puppet_expr_t *title_expr, puppet_env_t *env) {
+    if (!val || !type_name) return false;
+
+    /* Any / Data / Scalar / NotUndef */
+    if (strcmp(type_name, "Any") == 0) return true;
+    if (strcmp(type_name, "NotUndef") == 0) return val->type != PUPPET_VALUE_UNDEF;
+    if (strcmp(type_name, "Data") == 0) {
+        /* Data = Scalar, Undef, Array[Data], Hash[String, Data] */
+        return val->type != PUPPET_VALUE_TYPE && val->type != PUPPET_VALUE_DEFERRED;
+    }
+    if (strcmp(type_name, "Scalar") == 0) {
+        return val->type == PUPPET_VALUE_STRING || val->type == PUPPET_VALUE_NUMBER ||
+               val->type == PUPPET_VALUE_BOOL || val->type == PUPPET_VALUE_REGEXP;
+    }
+    if (strcmp(type_name, "Collection") == 0) {
+        return val->type == PUPPET_VALUE_ARRAY || val->type == PUPPET_VALUE_HASH;
+    }
+
+    /* Bare simple types */
+    if (strcmp(type_name, "Undef") == 0) return val->type == PUPPET_VALUE_UNDEF;
+    if (strcmp(type_name, "Boolean") == 0) return val->type == PUPPET_VALUE_BOOL;
+    if (strcmp(type_name, "Numeric") == 0) return val->type == PUPPET_VALUE_NUMBER;
+    if (strcmp(type_name, "Integer") == 0) {
+        return val->type == PUPPET_VALUE_NUMBER &&
+               val->data.number == (double)(long long)val->data.number;
+    }
+    if (strcmp(type_name, "Float") == 0) {
+        return val->type == PUPPET_VALUE_NUMBER &&
+               val->data.number != (double)(long long)val->data.number;
+    }
+    if (strcmp(type_name, "Regexp") == 0) return val->type == PUPPET_VALUE_REGEXP;
+
+    if (strcmp(type_name, "String") == 0) {
+        if (val->type != PUPPET_VALUE_STRING) return false;
+        /* String[min, max] - check length bounds if title given */
+        /* For simplicity, bare String[N] means min length N */
+        return true;  /* Most usages are bare String or String[1]; we accept all strings */
+    }
+
+    if (strcmp(type_name, "Array") == 0) {
+        return val->type == PUPPET_VALUE_ARRAY;
+    }
+    if (strcmp(type_name, "Hash") == 0) {
+        return val->type == PUPPET_VALUE_HASH;
+    }
+
+    /* Parametric types requiring title evaluation */
+    if (strcmp(type_name, "Pattern") == 0) {
+        if (val->type != PUPPET_VALUE_STRING || !title_expr) return false;
+        puppet_value_t *pat = puppet_eval_expr(title_expr, env);
+        bool matched = false;
+        const char *pattern_str = NULL;
+        if (pat) {
+            if (pat->type == PUPPET_VALUE_REGEXP) pattern_str = pat->data.regexp.data;
+            else if (pat->type == PUPPET_VALUE_STRING) pattern_str = pat->data.string.data;
+        }
+        if (pattern_str) {
+            regex_t rx;
+            if (regcomp(&rx, pattern_str, REG_EXTENDED | REG_NOSUB) == 0) {
+                matched = (regexec(&rx, val->data.string.data, 0, NULL, 0) == 0);
+                regfree(&rx);
+            }
+        }
+        if (pat) puppet_value_destroy(pat);
+        return matched;
+    }
+
+    if (strcmp(type_name, "Enum") == 0) {
+        if (val->type != PUPPET_VALUE_STRING || !title_expr) return false;
+        puppet_value_t *list = puppet_eval_expr(title_expr, env);
+        bool matched = false;
+        if (list && list->type == PUPPET_VALUE_ARRAY) {
+            for (size_t i = 0; i < list->data.array->count && !matched; i++) {
+                puppet_value_t *item = list->data.array->items[i];
+                if (item && item->type == PUPPET_VALUE_STRING &&
+                    strcmp(val->data.string.data, item->data.string.data) == 0) {
+                    matched = true;
+                }
+            }
+        } else if (list && list->type == PUPPET_VALUE_STRING) {
+            matched = (strcmp(val->data.string.data, list->data.string.data) == 0);
+        }
+        if (list) puppet_value_destroy(list);
+        return matched;
+    }
+
+    if (strcmp(type_name, "Optional") == 0) {
+        if (val->type == PUPPET_VALUE_UNDEF) return true;
+        if (!title_expr) return true;
+        /* title_expr is the inner type; if it's a resource_ref, recurse */
+        if (title_expr->type == PUPPET_EXPR_RESOURCE_REF) {
+            const char *inner_type = title_expr->data.resource_ref.type.data;
+            return value_matches_type(val, inner_type,
+                                       title_expr->data.resource_ref.title, env);
+        }
+        return true;
+    }
+
+    if (strcmp(type_name, "Variant") == 0) {
+        if (!title_expr) return false;
+        /* title_expr should be an array of types, but tree-sitter may give us
+         * a single type or a sequence. Evaluate and try each. */
+        if (title_expr->type == PUPPET_EXPR_ARRAY) {
+            for (size_t i = 0; i < title_expr->data.array_items.count; i++) {
+                puppet_expr_t *item = title_expr->data.array_items.items[i];
+                if (item && item->type == PUPPET_EXPR_RESOURCE_REF) {
+                    const char *inner = item->data.resource_ref.type.data;
+                    if (value_matches_type(val, inner,
+                                            item->data.resource_ref.title, env)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        if (title_expr->type == PUPPET_EXPR_RESOURCE_REF) {
+            return value_matches_type(val, title_expr->data.resource_ref.type.data,
+                                       title_expr->data.resource_ref.title, env);
+        }
+        return false;
+    }
+
+    if (strcmp(type_name, "Type") == 0) {
+        /* Type[X] - match if val is the type X */
+        if (val->type != PUPPET_VALUE_STRING || !title_expr) return false;
+        if (title_expr->type == PUPPET_EXPR_RESOURCE_REF) {
+            return strcmp(val->data.string.data,
+                          title_expr->data.resource_ref.type.data) == 0;
+        }
+        return false;
+    }
+
+    /* Unknown type name - be conservative and return false */
+    return false;
+}
+
+static bool value_matches_type(puppet_value_t *val, const char *type_name,
+                                puppet_expr_t *title_expr, puppet_env_t *env) {
+    return value_matches_type_impl(val, type_name, title_expr, env);
 }
 
 puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppet_value_t *right) {

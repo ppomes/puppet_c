@@ -535,6 +535,12 @@ static puppet_expr_t *convert_binary(TSNode node, const char *source) {
         return comparison;
     }
 
+    /* Handle bare type ref as final operand: $x =~ Array (no access brackets) */
+    if (pending_type_ref && have_op && !pending_operand) {
+        pending_operand = pending_type_ref;
+        pending_type_ref = NULL;
+    }
+
     /* Build final expression */
     if (result && pending_operand && have_op) {
         puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
