@@ -6160,17 +6160,9 @@ puppet_value_t *puppet_func_ensure_packages(puppet_expr_list_t *args, puppet_env
         return puppet_value_create_undef();
     }
 
-    /* Just log for now - full implementation would create package resources */
-    if (pkgs->type == PUPPET_VALUE_ARRAY) {
-        for (size_t i = 0; i < pkgs->data.array->count; i++) {
-            puppet_value_t *pkg = pkgs->data.array->items[i];
-            if (pkg && pkg->type == PUPPET_VALUE_STRING) {
-                puppet_log(PUPPET_LOG_NOTICE, "ensure_packages: Would ensure package is installed");
-            }
-        }
-    } else if (pkgs->type == PUPPET_VALUE_STRING) {
-        puppet_log(PUPPET_LOG_NOTICE, "ensure_packages: Would ensure package is installed");
-    }
+    /* Stub: full implementation would create Package resources if absent.
+     * Silently accept the call — catalog compilation doesn't require it. */
+    (void)pkgs;
 
     puppet_value_destroy(pkgs);
     return puppet_value_create_undef();
