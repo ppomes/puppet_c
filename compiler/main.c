@@ -485,6 +485,15 @@ int main(int argc, char *argv[]) {
                 return 1;  // Exit with failure
             }
 
+            // In parallel mode, compilation_failed isn't set by worker threads —
+            // propagate failure if any node errored out during aggregation.
+            if (env->nodes_failed > 0) {
+                puppet_env_destroy(env);
+                puppet_program_destroy(program);
+                if (loader) puppet_loader_destroy(loader);
+                return 1;
+            }
+
             /* Output catalog if requested */
             if (catalog_mode) {
                 puppet_catalog_t *catalog = puppet_env_get_catalog(env);
