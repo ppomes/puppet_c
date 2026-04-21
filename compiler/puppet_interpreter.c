@@ -3039,6 +3039,11 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         // Store class scope BEFORE executing body for $class::var lookups
                         puppet_hash_set(env->class_scopes, class_name, strlen(class_name), (puppet_value_t *)class_scope);
 
+                        // Set $title and $name to the class's own name (Puppet semantics)
+                        puppet_value_t *cls_title = puppet_value_create_string(class_name, strlen(class_name));
+                        puppet_scope_set_var(class_scope, "title", cls_title);
+                        puppet_scope_set_var(class_scope, "name", puppet_value_copy(cls_title));
+
                         // Set class parameters using pre-evaluated values or defaults
                         for (size_t pi = 0; pi < param_count; pi++) {
                             puppet_param_t *param = &class_def->data.class_def.params.params[pi];
@@ -4337,6 +4342,13 @@ static bool puppet_include_class_from_def(puppet_stmt_t *class_def, puppet_env_t
 
     /* Store class scope BEFORE executing body - allows $class::var lookups during execution */
     puppet_hash_set(env->class_scopes, class_name, strlen(class_name), (puppet_value_t *)class_scope);
+
+    /* Puppet semantics: inside a class body, $title and $name are set to the class's
+     * full name (e.g. "firewall::linux"). Used by modern modules to build submodule
+     * references like "${title}::linux". */
+    puppet_value_t *title_val = puppet_value_create_string(class_name, strlen(class_name));
+    puppet_scope_set_var(class_scope, "title", title_val);
+    puppet_scope_set_var(class_scope, "name", puppet_value_copy(title_val));
 
     /* Process class parameters - use APL (Automatic Parameter Lookup) for unset params */
     for (size_t i = 0; i < class_def->data.class_def.params.count; i++) {
