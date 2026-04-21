@@ -1650,6 +1650,14 @@ static puppet_stmt_t *convert_class_def(TSNode node, const char *source) {
                     /* The second named child is the default value expression */
                     TSNode default_node = ts_node_named_child(reg_param, 1);
                     p->default_value = convert_expression(default_node, source);
+                    /* Chain any following "access" sibling nodes onto the default:
+                     * tree-sitter flattens $facts['os']['name'] into variable + access + access */
+                    for (uint32_t k = 2; k < reg_param_children; k++) {
+                        TSNode sibling = ts_node_named_child(reg_param, k);
+                        if (node_is(sibling, "access")) {
+                            p->default_value = build_index_expr(p->default_value, sibling, source);
+                        }
+                    }
                 }
 
                 stmt->data.class_def.params.count++;
@@ -1718,6 +1726,14 @@ static puppet_stmt_t *convert_define_def(TSNode node, const char *source) {
                     /* The second named child is the default value expression */
                     TSNode default_node = ts_node_named_child(reg_param, 1);
                     p->default_value = convert_expression(default_node, source);
+                    /* Chain any following "access" sibling nodes onto the default:
+                     * tree-sitter flattens $facts['os']['name'] into variable + access + access */
+                    for (uint32_t k = 2; k < reg_param_children; k++) {
+                        TSNode sibling = ts_node_named_child(reg_param, k);
+                        if (node_is(sibling, "access")) {
+                            p->default_value = build_index_expr(p->default_value, sibling, source);
+                        }
+                    }
                 }
 
                 stmt->data.define.params.count++;

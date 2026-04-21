@@ -22,65 +22,116 @@
 /* Global verbose flag */
 bool puppet_verbose = false;
 
-/* Wrapper around regcomp() that translates Ruby/PCRE-style inline flag groups
- * "(?i:...)", "(?m:...)", "(?i)..." into POSIX regex flags. POSIX does not
- * support per-group flags, so occurrences are stripped and the flag is applied
- * globally — acceptable for the Puppet patterns we encounter in practice.
+/* Wrapper around regcomp() that translates Ruby/PCRE idioms into POSIX ERE:
+ *   (?i:...), (?m:...), (?i)... — inline flag groups → POSIX flags
+ *   \/                          — Ruby-escaped slash → "/"
+ *   inside [...]                — strip redundant backslash escapes; collect
+ *                                 literal "-" and emit at end of class so it
+ *                                 doesn't form an invalid range
+ * POSIX cannot express per-group flags, so flag groups promote to whole-pattern.
  * On success returns 0 and the caller must regfree(rx). */
 static int puppet_regcomp(regex_t *rx, const char *pattern, int cflags) {
     if (!pattern) return REG_BADPAT;
 
     int extra_flags = 0;
-    char *buf = NULL;
-    const char *p = pattern;
+    size_t len = strlen(pattern);
+    /* Worst-case: extra byte per class for literal "-" appended */
+    char *buf = (char *)puppet_malloc(len * 2 + 2);
+    char *dst = buf;
+    const char *src = pattern;
+    bool in_class = false;
+    bool literal_dash = false;
 
-    /* Quick check: only act if pattern might contain Ruby-style flags */
-    if (strstr(pattern, "(?") != NULL) {
-        size_t len = strlen(pattern);
-        buf = (char *)puppet_malloc(len + 1);
-        char *dst = buf;
-        const char *src = pattern;
-        while (*src) {
-            if (src[0] == '(' && src[1] == '?' &&
-                (src[2] == 'i' || src[2] == 'm' || src[2] == 'x' || src[2] == '-')) {
-                /* Parse a flag group until ':' or ')' */
-                const char *q = src + 2;
-                int local_icase = 0, local_newline = 0;
-                bool negating = false;
-                while (*q && *q != ':' && *q != ')') {
-                    switch (*q) {
-                        case 'i': if (!negating) local_icase = 1; break;
-                        case 'm': if (!negating) local_newline = 1; break;
-                        case 'x': break; /* extended: POSIX ext already is */
-                        case '-': negating = true; break;
-                        default:  goto no_match; /* unknown flag, bail */
-                    }
-                    q++;
+    while (*src) {
+        /* Inline flag groups (outside char class) */
+        if (!in_class && src[0] == '(' && src[1] == '?' &&
+            (src[2] == 'i' || src[2] == 'm' || src[2] == 'x' || src[2] == '-')) {
+            const char *q = src + 2;
+            int local_icase = 0, local_newline = 0;
+            bool negating = false, valid = true;
+            while (*q && *q != ':' && *q != ')') {
+                switch (*q) {
+                    case 'i': if (!negating) local_icase = 1; break;
+                    case 'm': if (!negating) local_newline = 1; break;
+                    case 'x': break;
+                    case '-': negating = true; break;
+                    default: valid = false; break;
                 }
-                if (*q == ':') {
-                    /* (?flags:X) — drop "(?flags:" and keep "X)" */
-                    if (local_icase) extra_flags |= REG_ICASE;
-                    if (local_newline) extra_flags |= REG_NEWLINE;
-                    *dst++ = '(';  /* keep the opening paren as a non-capturing group */
-                    src = q + 1;
+                if (!valid) break;
+                q++;
+            }
+            if (valid && *q == ':') {
+                if (local_icase) extra_flags |= REG_ICASE;
+                if (local_newline) extra_flags |= REG_NEWLINE;
+                *dst++ = '(';
+                src = q + 1;
+                continue;
+            }
+            if (valid && *q == ')') {
+                if (local_icase) extra_flags |= REG_ICASE;
+                if (local_newline) extra_flags |= REG_NEWLINE;
+                src = q + 1;
+                continue;
+            }
+        }
+
+        /* Enter character class */
+        if (!in_class && *src == '[') {
+            in_class = true;
+            literal_dash = false;
+            *dst++ = *src++;
+            /* A leading "^" or "]" inside [] is literal; emit verbatim */
+            if (*src == '^') *dst++ = *src++;
+            if (*src == ']') *dst++ = *src++;
+            continue;
+        }
+
+        /* Close character class — append collected literal dash, then "]" */
+        if (in_class && *src == ']') {
+            if (literal_dash) *dst++ = '-';
+            in_class = false;
+            literal_dash = false;
+            *dst++ = *src++;
+            continue;
+        }
+
+        /* Backslash handling */
+        if (*src == '\\' && src[1]) {
+            char esc = src[1];
+            if (esc == '/') {
+                /* Ruby-specific \/ — always literal slash */
+                *dst++ = '/';
+                src += 2;
+                continue;
+            }
+            if (in_class) {
+                if (esc == '-') {
+                    /* Defer literal dash to end of class */
+                    literal_dash = true;
+                    src += 2;
                     continue;
-                } else if (*q == ')') {
-                    /* (?flags)X — drop the whole group */
-                    if (local_icase) extra_flags |= REG_ICASE;
-                    if (local_newline) extra_flags |= REG_NEWLINE;
-                    src = q + 1;
+                }
+                if (esc == '.' || esc == '+' || esc == '?' || esc == '*' ||
+                    esc == '(' || esc == ')' || esc == '|' || esc == '{' ||
+                    esc == '}' || esc == '$' || esc == '^' || esc == '/') {
+                    /* Redundant escape in char class — emit bare char */
+                    *dst++ = esc;
+                    src += 2;
                     continue;
                 }
             }
-no_match:
+            /* Preserve other escapes */
             *dst++ = *src++;
+            *dst++ = *src++;
+            continue;
         }
-        *dst = '\0';
-        p = buf;
-    }
 
-    int ret = regcomp(rx, p, cflags | extra_flags);
-    if (buf) puppet_free(buf);
+        *dst++ = *src++;
+    }
+    *dst = '\0';
+
+    int ret = regcomp(rx, buf, cflags | extra_flags);
+    puppet_free(buf);
     return ret;
 }
 
