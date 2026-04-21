@@ -1033,10 +1033,104 @@ static puppet_expr_t *convert_named_access(TSNode node, const char *source) {
 }
 
 /* Main expression conversion dispatcher */
+/* Extract the "value expression" of a block used as an rvalue: the last
+ * statement if it's an expression-statement. Otherwise returns NULL. */
+static puppet_expr_t *block_last_expr(TSNode block_node, const char *source) {
+    if (ts_node_is_null(block_node)) return NULL;
+    uint32_t count = ts_node_named_child_count(block_node);
+    for (int32_t i = (int32_t)count - 1; i >= 0; i--) {
+        TSNode child = ts_node_named_child(block_node, (uint32_t)i);
+        const char *ctype = ts_node_type(child);
+        if (strcmp(ctype, "comment") == 0) continue;
+        /* The last meaningful child IS the value expression */
+        return convert_expression(child, source);
+    }
+    return NULL;
+}
+
 static puppet_expr_t *convert_expression(TSNode node, const char *source) {
     if (ts_node_is_null(node)) return NULL;
 
     const char *type = ts_node_type(node);
+
+    /* "if" used as an rvalue expression (Puppet 4+):
+     *   $x = if cond { a } elsif cond2 { b } else { c }
+     * Convert to nested ternary (PUPPET_EXPR_CONDITIONAL). Only the last
+     * expression of each block is kept as the branch value — multi-statement
+     * rvalue blocks are uncommon and would need a full block-eval primitive. */
+    if (strcmp(type, "if") == 0) {
+        /* Collect branches: list of (cond, value_expr) + optional else value */
+        TSNode elsif_conds[16];
+        TSNode elsif_blocks[16];
+        size_t elsif_count = 0;
+        TSNode if_cond = {0};
+        TSNode if_block = {0};
+        TSNode else_block = {0};
+        bool have_else = false;
+
+        uint32_t cnt = ts_node_named_child_count(node);
+        for (uint32_t i = 0; i < cnt; i++) {
+            TSNode c = ts_node_named_child(node, i);
+            const char *ct = ts_node_type(c);
+            if (strcmp(ct, "condition") == 0 && ts_node_is_null(if_cond)) {
+                if_cond = c;
+            } else if (strcmp(ct, "block") == 0 && ts_node_is_null(if_block)) {
+                if_block = c;
+            } else if (strcmp(ct, "elsif") == 0) {
+                if (elsif_count < 16) {
+                    elsif_conds[elsif_count] = find_child(c, "condition");
+                    elsif_blocks[elsif_count] = find_child(c, "block");
+                    elsif_count++;
+                }
+            } else if (strcmp(ct, "else") == 0) {
+                else_block = find_child(c, "block");
+                have_else = true;
+            }
+        }
+
+        /* Build the else value first, then wrap backwards with elsif/if */
+        puppet_expr_t *else_val = NULL;
+        if (have_else && !ts_node_is_null(else_block)) {
+            else_val = block_last_expr(else_block, source);
+        }
+        if (!else_val) {
+            /* Default to undef */
+            else_val = puppet_calloc(1, sizeof(puppet_expr_t));
+            else_val->type = PUPPET_EXPR_VALUE;
+            else_val->loc = node_location(node);
+            else_val->data.value = puppet_calloc(1, sizeof(puppet_value_t));
+            else_val->data.value->type = PUPPET_VALUE_UNDEF;
+        }
+
+        puppet_expr_t *acc = else_val;
+        for (int32_t i = (int32_t)elsif_count - 1; i >= 0; i--) {
+            puppet_expr_t *cond_expr = convert_expression(
+                ts_node_is_null(elsif_conds[i]) ? elsif_conds[i] :
+                ts_node_named_child(elsif_conds[i], 0), source);
+            puppet_expr_t *then_val = block_last_expr(elsif_blocks[i], source);
+            puppet_expr_t *cond_node = puppet_calloc(1, sizeof(puppet_expr_t));
+            cond_node->type = PUPPET_EXPR_CONDITIONAL;
+            cond_node->loc = node_location(node);
+            cond_node->data.conditional.condition = cond_expr;
+            cond_node->data.conditional.then_expr = then_val;
+            cond_node->data.conditional.else_expr = acc;
+            acc = cond_node;
+        }
+
+        puppet_expr_t *top_cond = NULL;
+        if (!ts_node_is_null(if_cond)) {
+            uint32_t cc = ts_node_named_child_count(if_cond);
+            if (cc > 0) top_cond = convert_expression(ts_node_named_child(if_cond, 0), source);
+        }
+        puppet_expr_t *if_val = block_last_expr(if_block, source);
+        puppet_expr_t *root = puppet_calloc(1, sizeof(puppet_expr_t));
+        root->type = PUPPET_EXPR_CONDITIONAL;
+        root->loc = node_location(node);
+        root->data.conditional.condition = top_cond;
+        root->data.conditional.then_expr = if_val;
+        root->data.conditional.else_expr = acc;
+        return root;
+    }
 
     /* Handle resource references: Type[title] where type and access are siblings in "argument" node
      * Parse tree looks like:
