@@ -7,6 +7,7 @@
 #include "puppet_ts_parser.h"
 #include "puppet_memory.h"
 #include "puppet_interpreter.h"
+#include "puppet_deadcode.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -350,6 +351,8 @@ bool puppet_loader_include_class(puppet_loader_t *loader,
     if (strncmp(normalized_name, "::", 2) == 0) {
         normalized_name = class_name + 2;
     }
+
+    puppet_deadcode_mark_class_used(env->deadcode, normalized_name);
 
     /* Check if class is already included - classes are idempotent */
     if (puppet_hash_get(env->class_scopes, normalized_name, strlen(normalized_name))) {

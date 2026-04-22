@@ -30,6 +30,7 @@
 #include "puppet_ts_parser.h"
 #include "puppet_hiera.h"
 #include "puppet_lint.h"
+#include "puppet_deadcode.h"
 
 /**
  * @brief Print command-line usage information
@@ -52,6 +53,7 @@ static void print_usage(const char *program_name) {
     printf("  -s, --summary     Print validation summary (for CI, implies -e)\n");
     printf("  -P, --parallel    Process nodes in parallel (faster, requires --all-nodes)\n");
     printf("  -8, --puppet8     Check Puppet 8 compatibility (lint mode)\n");
+    printf("  -X, --dead-code   Report classes/defines/functions/templates never used (implies -a)\n");
     printf("  -v, --verbose     Enable verbose/debug output\n");
     printf("  -h, --help        Show this help message\n");
     printf("\nWhen a directory is provided, site.pp will be loaded from manifests/\n");
@@ -84,6 +86,7 @@ int main(int argc, char *argv[]) {
     char *hiera_datadir = NULL;
     int verbose = 0;
     int puppet8_check = 0;
+    int dead_code_mode = 0;
     int opt;
 
     static struct option long_options[] = {
@@ -101,12 +104,13 @@ int main(int argc, char *argv[]) {
         {"template", required_argument, 0, 't'},
         {"hiera-data", required_argument, 0, 'D'},
         {"puppet8", no_argument, 0, '8'},
+        {"dead-code", no_argument, 0, 'X'},
         {"verbose", no_argument, 0, 'v'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
 
-    while ((opt = getopt_long(argc, argv, "jecpsPo:m:n:af:t:D:8vh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "jecpsPo:m:n:af:t:D:8Xvh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'j':
                 json_output = 1;
@@ -154,6 +158,11 @@ int main(int argc, char *argv[]) {
                 break;
             case '8':
                 puppet8_check = 1;
+                break;
+            case 'X':
+                dead_code_mode = 1;
+                eval_mode = 1;   /* Dead-code requires evaluation */
+                all_nodes = 1;   /* Dead-code needs full node coverage */
                 break;
             case 'v':
                 verbose = 1;
@@ -464,8 +473,22 @@ int main(int argc, char *argv[]) {
                 }
             }
 
+            puppet_deadcode_t *dc = NULL;
+            if (dead_code_mode && loader) {
+                dc = puppet_deadcode_create(loader->modules_path);
+                env->deadcode = dc;
+                if (verbose) fprintf(stderr, "Dead-code tracker: %zu classes, %zu defines, %zu pp-funcs, %zu rb-funcs, %zu templates declared.\n",
+                    dc->declared_classes.count, dc->declared_defines.count,
+                    dc->declared_pp_funcs.count, dc->declared_rb_funcs.count,
+                    dc->declared_templates.count);
+            }
+
             puppet_exec_program(program, env);
             if (verbose) fprintf(stderr, "Evaluation complete.\n");
+
+            if (dc) {
+                puppet_deadcode_report(dc, stdout);
+            }
 
             // Check if template target was found
             if (template_output && !env->template_output_found) {

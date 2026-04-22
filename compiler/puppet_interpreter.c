@@ -3,6 +3,7 @@
 #include "puppet_stdlib.h"
 #include "puppet_loader.h"
 #include "puppet_memory.h"
+#include "puppet_deadcode.h"
 #include "puppet_hiera.h"
 #include "puppet_json_parser.h"
 #include "puppet_json.h"
@@ -505,7 +506,12 @@ void puppet_env_set_puppetdb(puppet_env_t *env, puppetdb_t *pdb) {
 
 void puppet_env_destroy(puppet_env_t *env) {
     if (!env) return;
-    
+
+    if (env->deadcode) {
+        puppet_deadcode_destroy(env->deadcode);
+        env->deadcode = NULL;
+    }
+
     // Clean up scope stack
     while (env->stack_depth > 0) {
         puppet_scope_pop(env);
@@ -923,6 +929,20 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             if (!func_name) {
                 puppet_error_at(expr->loc, "Function call with NULL name");
                 return puppet_value_create_undef();
+            }
+
+            puppet_deadcode_mark_function_used(env->deadcode, func_name);
+
+            // Track template/epp target path for dead-code mode
+            if (env->deadcode && expr->data.funcall.args.count >= 1 &&
+                (strcmp(func_name, "template") == 0 ||
+                 strcmp(func_name, "epp") == 0 ||
+                 strcmp(func_name, "stdlib::deferrable_epp") == 0)) {
+                puppet_value_t *pv = puppet_eval_expr(expr->data.funcall.args.exprs[0], env);
+                if (pv && pv->type == PUPPET_VALUE_STRING && pv->data.string.data) {
+                    puppet_deadcode_mark_template_used(env->deadcode, pv->data.string.data);
+                }
+                if (pv) puppet_value_destroy(pv);
             }
 
             // Template function
@@ -2611,6 +2631,7 @@ static void puppet_exec_collector(puppet_stmt_t *stmt, puppet_env_t *env) {
                     if (define_ptr) {
                         /* Execute the defined type body */
                         puppet_stmt_t *define_stmt = (puppet_stmt_t *)define_ptr->data.string.data;
+                        puppet_deadcode_mark_define_used(env->deadcode, vres->type);
 
                         puppet_debug("Collector: executing defined type %s[%s]", vres->type, vres->title);
 
@@ -2857,6 +2878,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                             class_name = class_name_raw + 2;
                         }
                         puppet_debug("  Class resource: %s", class_name);
+                        puppet_deadcode_mark_class_used(env->deadcode, class_name);
 
                         // Check if this class was already declared with class { } syntax
                         // (resource-style declarations are NOT idempotent, but include is)
@@ -3308,6 +3330,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
 
                 if (define_ptr) {
                     puppet_stmt_t *define_stmt = (puppet_stmt_t *)define_ptr->data.string.data;
+                    puppet_deadcode_mark_define_used(env->deadcode, stmt->data.resource.type.data);
 
                     /* Execute each instance of this defined type */
                     for (size_t i = 0; i < stmt->data.resource.instance_count; i++) {
@@ -4285,6 +4308,8 @@ static bool puppet_include_class_from_def(puppet_stmt_t *class_def, puppet_env_t
     if (strncmp(class_name, "::", 2) == 0) {
         class_name = class_name_raw + 2;
     }
+
+    puppet_deadcode_mark_class_used(env->deadcode, class_name);
 
     /* Check if this class is already included - classes are idempotent */
     if (puppet_hash_get(env->class_scopes, class_name, strlen(class_name))) {
@@ -6283,6 +6308,7 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
     env->data_providers = source->data_providers;  /* Shared Hiera etc */
     env->data_provider_count = source->data_provider_count;
     env->data_provider_capacity = source->data_provider_capacity;
+    env->deadcode = source->deadcode;  /* Shared dead-code tracker, thread-safe via mutex */
 
     /* Copy class definitions array (contains read-only AST pointers, but array itself must be per-thread) */
     env->class_def_capacity = source->class_def_capacity;

@@ -257,6 +257,9 @@ typedef struct puppet_env {
 
     /* Pending realizes for deferred virtual resources */
     puppet_hash_t *pending_realizes;              /**< resource_key -> true for deferred realize() calls */
+
+    /* Dead-code tracker (optional) */
+    struct puppet_deadcode *deadcode;             /**< NULL unless --dead-code mode is active */
 } puppet_env_t;
 
 /* Global verbose flag for use before environment is created */
