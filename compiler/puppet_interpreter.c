@@ -1478,7 +1478,18 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
                 // Compare control value with match value
                 bool is_match = false;
                 if (control && match) {
-                    if (control->type == match->type) {
+                    // String =~ Regexp selector case
+                    if (control->type == PUPPET_VALUE_STRING &&
+                        match->type == PUPPET_VALUE_REGEXP) {
+                        regex_t rx;
+                        int ret = puppet_regcomp(&rx, match->data.regexp.data,
+                                                 REG_EXTENDED | REG_NOSUB);
+                        if (ret == 0) {
+                            is_match = (regexec(&rx, control->data.string.data,
+                                                0, NULL, 0) == 0);
+                            regfree(&rx);
+                        }
+                    } else if (control->type == match->type) {
                         switch (control->type) {
                             case PUPPET_VALUE_STRING:
                                 is_match = (strcmp(control->data.string.data,
