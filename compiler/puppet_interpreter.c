@@ -2863,6 +2863,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
 
         case PUPPET_STMT_RESOURCE:
             puppet_debug("Executing resource: %s", stmt->data.resource.type.data);
+            puppet_deadcode_mark_type_used(env->deadcode, stmt->data.resource.type.data);
 
             // Handle class resources specially - they instantiate classes
             if (strcmp(stmt->data.resource.type.data, "class") == 0) {

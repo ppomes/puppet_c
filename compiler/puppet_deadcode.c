@@ -159,6 +159,46 @@ static void walk_templates_dir(puppet_deadcode_t *dc, const char *mod_name, cons
     closedir(d);
 }
 
+static void walk_rb_types_dir(puppet_deadcode_t *dc, const char *dir) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *ent;
+    while ((ent = readdir(d))) {
+        if (ent->d_name[0] == '.') continue;
+        char path[2048];
+        snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
+        struct stat st;
+        if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        size_t n = strlen(ent->d_name);
+        if (n < 4 || strcmp(ent->d_name + n - 3, ".rb") != 0) continue;
+        /* Scan for Puppet::Type.newtype(:<name>) */
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+        char line[2048];
+        while (fgets(line, sizeof(line), f)) {
+            const char *p = strstr(line, "Puppet::Type.newtype");
+            if (!p) continue;
+            p = strchr(p, '(');
+            if (!p) continue;
+            p++;
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p != ':') continue;
+            p++;
+            const char *start = p;
+            while (*p && (isalnum((unsigned char)*p) || *p == '_')) p++;
+            if (p == start) continue;
+            char *name = puppet_malloc(p - start + 1);
+            memcpy(name, start, p - start);
+            name[p - start] = '\0';
+            set_add_decl(&dc->declared_rb_types, &dc->rb_type_files, name, path);
+            puppet_free(name);
+            break;
+        }
+        fclose(f);
+    }
+    closedir(d);
+}
+
 static void walk_rb_funcs_dir(puppet_deadcode_t *dc, const char *dir, const char *ns_prefix) {
     DIR *d = opendir(dir);
     if (!d) return;
@@ -212,15 +252,17 @@ puppet_deadcode_t *puppet_deadcode_create(const char *modules_path) {
         struct stat st;
         if (stat(mod_root, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
 
-        char manifests[3072], templates[3072], old_funcs[3072], new_funcs[3072];
+        char manifests[3072], templates[3072], old_funcs[3072], new_funcs[3072], types_dir[3072];
         snprintf(manifests, sizeof(manifests), "%s/manifests", mod_root);
         snprintf(templates, sizeof(templates), "%s/templates", mod_root);
         snprintf(old_funcs, sizeof(old_funcs), "%s/lib/puppet/parser/functions", mod_root);
         snprintf(new_funcs, sizeof(new_funcs), "%s/lib/puppet/functions", mod_root);
+        snprintf(types_dir, sizeof(types_dir), "%s/lib/puppet/type", mod_root);
         walk_pp_dir(dc, manifests);
         walk_templates_dir(dc, ent->d_name, templates, "");
         walk_rb_funcs_dir(dc, old_funcs, "");
         walk_rb_funcs_dir(dc, new_funcs, "");
+        walk_rb_types_dir(dc, types_dir);
     }
     closedir(d);
 
@@ -251,6 +293,7 @@ puppet_deadcode_t *puppet_deadcode_create(const char *modules_path) {
     SORT_DECL(dc->declared_defines,   dc->define_files);
     SORT_DECL(dc->declared_pp_funcs,  dc->pp_func_files);
     SORT_DECL(dc->declared_rb_funcs,  dc->rb_func_files);
+    SORT_DECL(dc->declared_rb_types,  dc->rb_type_files);
     SORT_DECL(dc->declared_templates, dc->template_files);
     #undef SORT_DECL
 
@@ -273,11 +316,13 @@ void puppet_deadcode_destroy(puppet_deadcode_t *dc) {
     if (!dc) return;
     size_t nc = dc->declared_classes.count, nd = dc->declared_defines.count;
     size_t np = dc->declared_pp_funcs.count, nr = dc->declared_rb_funcs.count;
+    size_t nty = dc->declared_rb_types.count;
     size_t nt = dc->declared_templates.count;
     free_set(&dc->declared_classes);
     free_set(&dc->declared_defines);
     free_set(&dc->declared_pp_funcs);
     free_set(&dc->declared_rb_funcs);
+    free_set(&dc->declared_rb_types);
     free_set(&dc->declared_templates);
     free_set(&dc->used_classes);
     free_set(&dc->used_defines);
@@ -287,6 +332,7 @@ void puppet_deadcode_destroy(puppet_deadcode_t *dc) {
     free_file_array(dc->define_files, nd);
     free_file_array(dc->pp_func_files, np);
     free_file_array(dc->rb_func_files, nr);
+    free_file_array(dc->rb_type_files, nty);
     free_file_array(dc->template_files, nt);
     pthread_mutex_destroy(&dc->mutex);
     puppet_free(dc);
@@ -325,6 +371,15 @@ void puppet_deadcode_mark_template_used(puppet_deadcode_t *dc, const char *name)
     set_add_used(&dc->used_templates, name);
     pthread_mutex_unlock(&dc->mutex);
 }
+void puppet_deadcode_mark_type_used(puppet_deadcode_t *dc, const char *name) {
+    /* Shared 'used_defines' set — both user-defined types and Ruby custom types
+     * resolve to the same namespace of resource type names. */
+    if (!dc || !name) return;
+    name = strip_cc(name);
+    pthread_mutex_lock(&dc->mutex);
+    set_add_used(&dc->used_defines, name);
+    pthread_mutex_unlock(&dc->mutex);
+}
 
 /* ---------- report ---------- */
 
@@ -349,6 +404,7 @@ void puppet_deadcode_report(puppet_deadcode_t *dc, FILE *out) {
     fprintf(out, "\n=== Dead-code report ===\n");
     report_section(out, "Classes",        &dc->declared_classes,   dc->class_files,    &dc->used_classes);
     report_section(out, "Defines",        &dc->declared_defines,   dc->define_files,   &dc->used_defines);
+    report_section(out, "Ruby types",     &dc->declared_rb_types,  dc->rb_type_files,  &dc->used_defines);
     report_section(out, "Puppet functions", &dc->declared_pp_funcs, dc->pp_func_files, &dc->used_functions);
     report_section(out, "Ruby functions",   &dc->declared_rb_funcs, dc->rb_func_files, &dc->used_functions);
     report_section(out, "Templates",      &dc->declared_templates, dc->template_files, &dc->used_templates);

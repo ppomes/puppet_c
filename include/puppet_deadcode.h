@@ -25,9 +25,10 @@ typedef struct puppet_deadcode {
     puppet_deadcode_set_t declared_defines;
     puppet_deadcode_set_t declared_pp_funcs;
     puppet_deadcode_set_t declared_rb_funcs;
+    puppet_deadcode_set_t declared_rb_types;
     puppet_deadcode_set_t declared_templates;
     puppet_deadcode_set_t used_classes;
-    puppet_deadcode_set_t used_defines;
+    puppet_deadcode_set_t used_defines;       /* also bumped by resource declarations (custom types) */
     puppet_deadcode_set_t used_functions;
     puppet_deadcode_set_t used_templates;
     /* Map declaration name -> file path, for reporting. Parallel arrays to declared_* sets. */
@@ -35,6 +36,7 @@ typedef struct puppet_deadcode {
     char **define_files;
     char **pp_func_files;
     char **rb_func_files;
+    char **rb_type_files;
     char **template_files;
     pthread_mutex_t mutex;
 } puppet_deadcode_t;
@@ -48,6 +50,8 @@ void puppet_deadcode_mark_class_used(puppet_deadcode_t *dc, const char *name);
 void puppet_deadcode_mark_define_used(puppet_deadcode_t *dc, const char *name);
 void puppet_deadcode_mark_function_used(puppet_deadcode_t *dc, const char *name);
 void puppet_deadcode_mark_template_used(puppet_deadcode_t *dc, const char *name);
+/* Called for every resource declaration — marks a candidate custom type name as used. */
+void puppet_deadcode_mark_type_used(puppet_deadcode_t *dc, const char *name);
 
 /** Print a report of declared items that were never marked used. */
 void puppet_deadcode_report(puppet_deadcode_t *dc, FILE *out);
