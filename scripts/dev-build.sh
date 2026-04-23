@@ -34,3 +34,8 @@ fi
 echo
 echo "To publish on reprepro:"
 echo "  reprepro includedeb itrepo2 ../*_${VERSION}_*.deb"
+
+# Auto-revert changelog so the working tree stays clean for future commits.
+# The .deb artifacts in ../ remain intact.
+git checkout -- debian/changelog
+echo "debian/changelog reverted (artifacts kept in ../)."
