@@ -604,10 +604,13 @@ static void lint_ruby_file(puppet_lint_result_t *r, const char *path) {
     while (fgets(line, sizeof(line), f)) {
         lineno++;
 
-        /* Old Puppet 3.x function API — removed in Puppet 8 */
+        /* Old Puppet 3.x function API — deprecated in Puppet 8 but still accepted.
+         * Warning (not error): stdlib and other forge modules ship old-API wrappers
+         * for backwards compatibility; flagging as error produces too many CI
+         * failures on otherwise-working setups. */
         if (strstr(line, "Puppet::Parser::Functions.newfunction")) {
-            lint_file_error(r, path, lineno,
-                "Puppet::Parser::Functions.newfunction is removed in Puppet 8, "
+            lint_file_warning(r, path, lineno,
+                "Puppet::Parser::Functions.newfunction is deprecated in Puppet 8, "
                 "rewrite using Puppet::Functions.create_function (API 4.x+)");
         }
 
