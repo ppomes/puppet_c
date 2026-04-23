@@ -93,10 +93,12 @@ static void walk_pp_file(puppet_deadcode_t *dc, const char *path) {
         const char *start = p;
         while (*p && (isalnum((unsigned char)*p) || *p == '_' || *p == ':')) p++;
         if (p == start) continue;
-        /* Peek the next non-space char to confirm header form */
+        /* Confirm header form: next non-space char is (, {, or 'inherits'.
+         * Accept EOL/EOF too — many manifests put { on the next line. */
         const char *q = p;
         while (*q == ' ' || *q == '\t') q++;
-        if (*q != '(' && *q != '{' && strncmp(q, "inherits", 8) != 0) continue;
+        if (*q != '(' && *q != '{' && *q != '\0' && *q != '\n' &&
+            strncmp(q, "inherits", 8) != 0) continue;
         char *name = puppet_malloc(p - start + 1);
         memcpy(name, start, p - start);
         name[p - start] = '\0';
