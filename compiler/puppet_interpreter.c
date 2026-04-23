@@ -3337,6 +3337,14 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         puppet_hash_set(env->define_types, stmt->data.resource.type.data,
                                        strlen(stmt->data.resource.type.data), stmt_ptr);
                         define_ptr = stmt_ptr;
+                    } else {
+                        /* Namespaced type that can't be resolved — real Puppet would
+                         * fail the catalog with "Unknown resource type". Emit an error
+                         * so typos and stale references to deleted modules don't slip by. */
+                        puppet_error_at(stmt->loc,
+                            "Unknown resource type: '%s'",
+                            stmt->data.resource.type.data);
+                        puppet_env_increment_error(env);
                     }
                 }
 
