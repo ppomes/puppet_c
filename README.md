@@ -20,6 +20,7 @@ A fast, lightweight Puppet compiler written in C for local manifest development 
 - **Fast**: Compile a full catalog with templates in <1 second
 - **Parallel validation**: Check hundreds of nodes in parallel for CI/CD
 - **Puppet 8 linter**: Detect legacy facts, deprecated functions, ERB issues, Ruby API changes
+- **Dead-code detection**: Find classes, defines, types, functions and templates never reached at runtime
 - **Minimal dependencies**: Pure C with optional Ruby for ERB templates
 - **Complete toolchain**: Includes compiler, server, agent, and facter binaries
 
@@ -238,6 +239,49 @@ File scan results: 2 errors, 1 warning
 ```
 
 Exit code is 1 if errors (removed features) are found, 0 if only warnings or clean.
+
+#### Dead-code Detection
+
+```bash
+# Report unused classes / defines / functions / types / templates after a
+# full-site compile. Implies --all-nodes.
+puppetc-compile -X -P -f allfacts.yaml -m ./modules -D ./hieradata manifests/site.pp
+```
+
+The `-X` / `--dead-code` flag turns the compiler into a runtime usage tracker:
+
+1. At startup, the tracker walks `<modules>/*/manifests/`,
+   `<modules>/*/templates/`, and
+   `<modules>/*/lib/puppet/{type,functions,parser/functions}/` to build the
+   inventory of everything *declared*.
+2. During `--all-nodes` execution, the interpreter records every runtime
+   invocation (include / `class { ... }` / resource declaration / `template()`
+   / `epp()` / function call / custom type).
+3. After all nodes are compiled, the report lists everything that was declared
+   but never reached.
+
+Items are grouped by kind (Classes, Defines, Ruby types, Puppet functions,
+Ruby functions, Templates).
+
+**Example output:**
+```
+=== Classes: 407 declared, 271 unused ===
+  apache::gerrit        (modules/apache/manifests/gerrit.pp)
+  apache::modsec        (modules/apache/manifests/modsec.pp)
+  mysql::backup         (modules/mysql/manifests/backup.pp)
+  ...
+=== Defines: 115 declared, 62 unused ===
+  apache::sslsite       (modules/apache/manifests/sslsite.pp)
+  ...
+=== Ruby types: 22 declared, 7 unused ===
+  glusterfs_volume      (modules/rit_gluster/lib/puppet/type/glusterfs_volume.rb)
+  ...
+```
+
+Accuracy depends on the facts file: node blocks whose certname has no matching
+fact never fire, so their classes appear dead even when they are actually
+deployed. Dump real certnames from PuppetDB for a meaningful report (see
+`scripts/dump_puppetdb_facts.py`).
 
 Run `puppetc-compile --help` for all options.
 

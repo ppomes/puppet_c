@@ -87,6 +87,24 @@ metadata.json: version constraints incompatible with Puppet 8
 .sp
 Exit code is 1 if any errors (removed features) are found.
 .TP
+.BR \-X ", " \-\-dead\-code
+Report classes, defines, Ruby types/functions and templates that are declared
+in the modules tree but never invoked during a full compile. Implies
+\fB\-\-all\-nodes\fR and evaluation mode.
+.sp
+The tracker inventories every class, define, function and template
+declaration under \fB<modules>/*/manifests/\fR, \fB<modules>/*/templates/\fR
+and \fB<modules>/*/lib/puppet/{type,functions,parser/functions}/\fR at startup,
+then watches the interpreter for each runtime invocation (include / resource
+declaration / template() / epp() / function call / type declaration). After
+executing every node it prints the declared items that were never reached.
+.sp
+Items are grouped by kind (Classes, Defines, Ruby types, Puppet functions,
+Ruby functions, Templates). For accurate results the facts file should cover
+every real node from the matching PuppetDB; otherwise node blocks whose
+certname has no matching fact will never fire and their classes will appear
+dead even when deployed in production.
+.TP
 .BR \-v ", " \-\-verbose
 Enable verbose/debug output.
 .TP
@@ -138,6 +156,12 @@ Check a single manifest for Puppet 8 issues:
 .PP
 .RS
 puppetc-compile \-\-puppet8 manifests/site.pp
+.RE
+.PP
+Report dead code in a modules tree (needs complete facts for full coverage):
+.PP
+.RS
+puppetc-compile \-X \-P \-f allfacts.yaml \-m ./modules \-D ./hieradata manifests/site.pp
 .RE
 .SH FILES
 .TP
