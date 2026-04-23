@@ -1301,6 +1301,34 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
 
             // Resource creation
             else if (strcmp(func_name, "create_resources") == 0) {
+                /* create_resources('type', hash) invokes 'type' per hash entry.
+                 * Mark the target type as used so the dead-code tracker sees it
+                 * (the interpreter resolves it dynamically, not via the static
+                 * resource-declaration path the tracker hooks into). */
+                if (env->deadcode && expr->data.funcall.args.count >= 1) {
+                    puppet_value_t *tv = puppet_eval_expr(expr->data.funcall.args.exprs[0], env);
+                    if (tv && tv->type == PUPPET_VALUE_STRING && tv->data.string.data) {
+                        const char *t = tv->data.string.data;
+                        if (strncmp(t, "::", 2) == 0) t += 2;
+                        if (strcmp(t, "class") == 0 && expr->data.funcall.args.count >= 2) {
+                            /* create_resources('class', {'foo::bar' => {...}}) — keys are class names */
+                            puppet_value_t *hv = puppet_eval_expr(expr->data.funcall.args.exprs[1], env);
+                            if (hv && hv->type == PUPPET_VALUE_HASH) {
+                                for (size_t bi = 0; bi < hv->data.hash->bucket_count; bi++) {
+                                    puppet_hash_entry_t *e = hv->data.hash->buckets[bi];
+                                    while (e) {
+                                        puppet_deadcode_mark_class_used(env->deadcode, e->key.data);
+                                        e = e->next;
+                                    }
+                                }
+                            }
+                            if (hv) puppet_value_destroy(hv);
+                        } else {
+                            puppet_deadcode_mark_define_used(env->deadcode, t);
+                        }
+                    }
+                    if (tv) puppet_value_destroy(tv);
+                }
                 return puppet_func_create_resources(&expr->data.funcall.args, env);
             }
             else if (strcmp(func_name, "ensure_resource") == 0 ||
