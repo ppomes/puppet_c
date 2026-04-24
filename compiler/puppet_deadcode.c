@@ -78,6 +78,7 @@ static void walk_pp_file(puppet_deadcode_t *dc, const char *path) {
     FILE *f = fopen(path, "r");
     if (!f) return;
     char line[2048];
+    char enclosing_class[512] = ""; /* last 'class X' seen in this file */
     while (fgets(line, sizeof(line), f)) {
         const char *p = line;
         while (*p == ' ' || *p == '\t') p++;
@@ -104,9 +105,23 @@ static void walk_pp_file(puppet_deadcode_t *dc, const char *path) {
         name[p - start] = '\0';
         /* Strip leading :: if any */
         const char *nm = (strncmp(name, "::", 2) == 0) ? name + 2 : name;
-        if (kind[0] == 'c')      set_add_decl(&dc->declared_classes,   &dc->class_files,    nm, path);
-        else if (kind[0] == 'd') set_add_decl(&dc->declared_defines,   &dc->define_files,   nm, path);
-        else                     set_add_decl(&dc->declared_pp_funcs,  &dc->pp_func_files,  nm, path);
+        if (kind[0] == 'c') {
+            set_add_decl(&dc->declared_classes, &dc->class_files, nm, path);
+            /* Record enclosing class so nested defines get qualified names. */
+            snprintf(enclosing_class, sizeof(enclosing_class), "%s", nm);
+        } else if (kind[0] == 'd') {
+            /* If the define has no :: already and we're inside a class, qualify it.
+             * Matches Puppet autoloading: define foo inside class a::b::c resolves as a::b::c::foo. */
+            if (enclosing_class[0] && !strstr(nm, "::")) {
+                char qualified[1024];
+                snprintf(qualified, sizeof(qualified), "%s::%s", enclosing_class, nm);
+                set_add_decl(&dc->declared_defines, &dc->define_files, qualified, path);
+            } else {
+                set_add_decl(&dc->declared_defines, &dc->define_files, nm, path);
+            }
+        } else {
+            set_add_decl(&dc->declared_pp_funcs, &dc->pp_func_files, nm, path);
+        }
         puppet_free(name);
     }
     fclose(f);
