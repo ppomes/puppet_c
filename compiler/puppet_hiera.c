@@ -565,13 +565,26 @@ puppet_value_t *puppet_hiera_lookup(
         }
     }
 
-    /* Extract module_name from key (e.g., "tomee::wslist" -> "tomee") */
+    /* Extract module_name for %{module_name} interpolation. Two sources,
+     * in order: the key's own namespace prefix (e.g. "tomee::wslist" ->
+     * "tomee") and, if the key is unqualified, the calling class's
+     * module. Real Puppet uses the calling scope — hiera('foo') inside
+     * class tomee::config binds module_name to "tomee". Without this we
+     * drop the %{module_name}/... layers of the hierarchy whenever the
+     * key happens to be a bare name. */
     char module_name[256] = {0};
     const char *sep = strstr(key, "::");
     if (sep) {
         size_t len = sep - key;
         if (len < sizeof(module_name)) {
             memcpy(module_name, key, len);
+            module_name[len] = '\0';
+        }
+    } else if (context->env && context->env->caller_module_name) {
+        const char *cm = context->env->caller_module_name;
+        size_t len = strlen(cm);
+        if (len > 0 && len < sizeof(module_name)) {
+            memcpy(module_name, cm, len);
             module_name[len] = '\0';
         }
     }

@@ -434,8 +434,27 @@ bool puppet_loader_include_class(puppet_loader_t *loader,
         }
     }
 
+    /* Set caller_module_name for hiera interpolation (%{module_name}).
+     * Without this, hiera() calls made inside loader-autoloaded classes
+     * can't resolve module-relative hierarchy paths. Matches what
+     * puppet_include_class_from_def already does on its path. */
+    char *old_caller_module = env->caller_module_name;
+    const char *mod_sep = strstr(normalized_name, "::");
+    if (mod_sep) {
+        size_t mlen = mod_sep - normalized_name;
+        env->caller_module_name = puppet_malloc(mlen + 1);
+        memcpy(env->caller_module_name, normalized_name, mlen);
+        env->caller_module_name[mlen] = '\0';
+    } else {
+        env->caller_module_name = puppet_strdup(normalized_name);
+    }
+
     /* Execute the class body */
     puppet_exec_stmt_list(&class_def->data.class_def.body, env);
+
+    /* Restore caller_module_name */
+    puppet_free(env->caller_module_name);
+    env->caller_module_name = old_caller_module;
 
     /* Register in catalog so Class['x'] references and agent-side class
      * queries see it. Without this the class runs but is invisible to
