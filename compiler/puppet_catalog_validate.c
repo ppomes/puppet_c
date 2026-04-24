@@ -40,6 +40,18 @@ static int type_eq_ci(const char *a, const char *b) {
 static int catalog_has_resource(const puppet_catalog_t *cat,
                                 const char *type, const char *title) {
     if (!cat || !type || !title) return 0;
+    /* Class[foo::bar] isn't stored in resources[]; it lives in the
+     * classes[] list populated by include/require. Match there too. */
+    if (type_eq_ci(type, "class")) {
+        const char *t = title;
+        if (strncmp(t, "::", 2) == 0) t += 2;
+        for (size_t i = 0; i < cat->class_count; i++) {
+            const char *cn = cat->classes[i];
+            if (!cn) continue;
+            if (strncmp(cn, "::", 2) == 0) cn += 2;
+            if (strcmp(cn, t) == 0) return 1;
+        }
+    }
     for (size_t i = 0; i < cat->resource_count; i++) {
         const puppet_catalog_resource_t *r = &cat->resources[i];
         if (type_eq_ci(r->type, type) && r->title && strcmp(r->title, title) == 0) {
