@@ -154,10 +154,13 @@ void puppet_catalog_validate_refs(puppet_catalog_t *catalog) {
 
 /* ---------- source URL validation ---------- */
 
-/* Return 1 if path exists as a regular file. */
+/* Return 1 if path exists as a regular file or directory.
+ * File resources can source either — recurse-copying a directory
+ * is a legitimate pattern. */
 static int file_exists(const char *path) {
     struct stat st;
-    return stat(path, &st) == 0 && S_ISREG(st.st_mode);
+    if (stat(path, &st) != 0) return 0;
+    return S_ISREG(st.st_mode) || S_ISDIR(st.st_mode);
 }
 
 /* Try every entry in colon-separated modulepath and check whether
