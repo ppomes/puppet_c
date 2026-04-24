@@ -4485,6 +4485,12 @@ void puppet_exec_program(puppet_program_t *program, puppet_env_t *env) {
         puppet_debug("Facts DB iteration mode: collecting node definitions");
     }
 
+    /* Remember top-level statements so each per-node compilation can
+     * re-evaluate site.pp top-level assignments (e.g. "$jbossenv =
+     * $hostname ? {...}") with that node's facts bound, matching
+     * puppetresources' fresh-compiler-per-catalog semantics. */
+    env->top_level_stmts = &program->statements;
+
     /* Execute all statements (in defer mode, nodes are registered not executed) */
     puppet_exec_stmt_list(&program->statements, env);
 
@@ -4933,9 +4939,14 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
         }
     }
 
-    /* Create a new scope for the node using the certname */
+    /* Create a new scope for the node using the certname. Bind it as
+     * env->node_scope so that downstream class loads (which parent new
+     * class scopes under env->node_scope) can see vars we set here —
+     * in particular the re-evaluated top-level assignments below. */
     puppet_scope_t *node_scope = puppet_scope_create(env->current_scope, certname);
     puppet_scope_push(env, node_scope);
+    puppet_scope_t *saved_node_scope = env->node_scope;
+    env->node_scope = node_scope;
 
     /* Set $hostname from certname only if no hostname fact exists.
      * Facts take precedence since $hostname fact is the short hostname,
@@ -4949,8 +4960,26 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
         puppet_value_destroy(hostname_fact);
     }
 
+    /* Re-run site.pp top-level $var = ... assignments now that node
+     * facts ($hostname, $fqdn, $facts[...]) are bound in scope.
+     * puppetresources does this implicitly by starting a fresh
+     * compilation per node; we simulate it by replaying assignments.
+     * Only assignments are replayed to avoid re-registering class /
+     * define / node definitions (which would duplicate state). */
+    if (env->top_level_stmts) {
+        for (size_t i = 0; i < env->top_level_stmts->count; i++) {
+            puppet_stmt_t *s = env->top_level_stmts->stmts[i];
+            if (s && s->type == PUPPET_STMT_ASSIGNMENT) {
+                puppet_exec_stmt(s, env);
+            }
+        }
+    }
+
     /* Execute node body */
     puppet_exec_stmt_list(&node_stmt->data.node.body, env);
+
+    /* Restore the outer node_scope pointer before popping. */
+    env->node_scope = saved_node_scope;
 
     /* Pop the node scope */
     puppet_scope_t *old_scope = puppet_scope_pop(env);
@@ -6539,6 +6568,10 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
     env->stack_depth = 0;
     env->node_scope = puppet_scope_create(env->global_scope, "node");
     env->class_scope = NULL;
+
+    /* Propagate top-level stmt pointer so the worker can re-run site.pp
+     * top-level assignments with its own facts bound. */
+    env->top_level_stmts = source->top_level_stmts;
 
     /* Copy global scope variables from source (e.g., top-level $jbossenv = 'preprod')
      * These are needed for Hiera hierarchy path interpolation like %{::jbossenv} */

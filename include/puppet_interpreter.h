@@ -203,6 +203,12 @@ typedef struct puppet_env {
     /* Virtual resources storage */
     puppet_hash_t *virtual_resources;         /**< Virtual resources awaiting realization (type::title → stmt) */
 
+    /* Top-level statement list — shared with the parsed program so
+     * per-node compilation can re-run site.pp top-level assignments
+     * with that node's facts bound (matches puppetresources' "fresh
+     * compiler per catalog" model). Not owned. */
+    puppet_stmt_list_t *top_level_stmts;
+
     /* Ruby type registry (lazy-initialised).
      * Populated by scanning each module's lib/puppet/type directory for
      * Puppet::Type.newtype(:name) declarations. Keys are lowercased.
