@@ -437,6 +437,14 @@ bool puppet_loader_include_class(puppet_loader_t *loader,
     /* Execute the class body */
     puppet_exec_stmt_list(&class_def->data.class_def.body, env);
 
+    /* Register in catalog so Class['x'] references and agent-side class
+     * queries see it. Without this the class runs but is invisible to
+     * the catalog validator, producing false "Could not find resource
+     * Class[x]" errors for classes loaded via the module loader. */
+    if (env->build_catalog && env->catalog) {
+        puppet_catalog_add_class(env->catalog, normalized_name);
+    }
+
     /* Restore old class scope */
     env->class_scope = old_class_scope;
 
