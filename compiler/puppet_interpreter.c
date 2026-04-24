@@ -142,6 +142,145 @@ static puppet_stmt_t *puppet_find_matching_node(puppet_env_t *env, const char *c
 void puppet_exec_nodes_parallel(puppet_env_t *env, size_t node_count);
 static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *certname, puppet_env_t *env);
 static void puppet_exec_deferred_define(puppet_deferred_define_t *deferred, puppet_env_t *env);
+static bool puppet_type_is_known(puppet_env_t *env, const char *type_lower);
+
+#include <dirent.h>
+#include <sys/stat.h>
+
+/* ---------------------------------------------------------------------
+ * Known resource type check: builtin list + Ruby types scan + defines.
+ * Used to catch typos like 'fiel' / 'packge' at catalog time.
+ * --------------------------------------------------------------------- */
+
+/* Puppet built-in resource types that don't have a module/Ruby file
+ * and that the interpreter must accept without any autoload. Kept in
+ * lowercase; all lookups normalize. */
+static const char *const puppet_builtin_types[] = {
+    "augeas", "class", "component", "computer", "cron", "exec",
+    "file", "filebucket", "file_line", "group", "host", "k5login",
+    "macauthorization", "mailalias", "maillist", "mcx", "mount",
+    "nagios_command", "nagios_contact", "nagios_contactgroup",
+    "nagios_host", "nagios_hostdependency", "nagios_hostescalation",
+    "nagios_hostextinfo", "nagios_hostgroup", "nagios_service",
+    "nagios_servicedependency", "nagios_serviceescalation",
+    "nagios_serviceextinfo", "nagios_servicegroup",
+    "nagios_timeperiod", "node", "notify", "package", "resources",
+    "router", "schedule", "scheduled_task", "selboolean",
+    "selmodule", "service", "ssh_authorized_key",
+    "sshkey", "stage", "tidy", "user", "vlan", "yumrepo", "zfs",
+    "zone", "zpool",
+    NULL
+};
+
+static bool puppet_type_is_builtin(const char *type_lower) {
+    for (size_t i = 0; puppet_builtin_types[i]; i++) {
+        if (strcmp(puppet_builtin_types[i], type_lower) == 0) return true;
+    }
+    return false;
+}
+
+/* Scan a lib/puppet/type directory for Ruby type files and add each
+ * Puppet::Type.newtype(:name) to env->ruby_types. */
+static void puppet_scan_ruby_types_dir(puppet_env_t *env, const char *dir) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *ent;
+    while ((ent = readdir(d))) {
+        if (ent->d_name[0] == '.') continue;
+        char path[2048];
+        snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
+        struct stat st;
+        if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        size_t n = strlen(ent->d_name);
+        if (n < 4 || strcmp(ent->d_name + n - 3, ".rb") != 0) continue;
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+        char line[2048];
+        while (fgets(line, sizeof(line), f)) {
+            const char *p = strstr(line, "Puppet::Type.newtype");
+            if (!p) continue;
+            p = strchr(p, '(');
+            if (!p) continue;
+            p++;
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p != ':') continue;
+            p++;
+            const char *start = p;
+            while (*p && (isalnum((unsigned char)*p) || *p == '_')) p++;
+            if (p == start) continue;
+            size_t len = p - start;
+            char *name = puppet_malloc(len + 1);
+            for (size_t i = 0; i < len; i++) name[i] = tolower((unsigned char)start[i]);
+            name[len] = '\0';
+            /* Store with true marker. Duplicates just overwrite. */
+            puppet_value_t *marker = puppet_value_create_bool(true);
+            puppet_hash_set(env->ruby_types, name, len, marker);
+            puppet_free(name);
+            break;
+        }
+        fclose(f);
+    }
+    closedir(d);
+}
+
+/* For each module dir under modulepath, scan MOD/lib/puppet/type/ */
+static void puppet_scan_ruby_types_modulepath(puppet_env_t *env, const char *mp) {
+    if (!mp || !*mp) return;
+    const char *p = mp;
+    while (p && *p) {
+        const char *end = strchr(p, ':');
+        size_t seg_len = end ? (size_t)(end - p) : strlen(p);
+        if (seg_len > 0 && seg_len < 1024) {
+            char seg[1024];
+            memcpy(seg, p, seg_len); seg[seg_len] = '\0';
+            DIR *d = opendir(seg);
+            if (d) {
+                struct dirent *ent;
+                while ((ent = readdir(d))) {
+                    if (ent->d_name[0] == '.') continue;
+                    char types_dir[2048];
+                    snprintf(types_dir, sizeof(types_dir),
+                             "%s/%s/lib/puppet/type", seg, ent->d_name);
+                    puppet_scan_ruby_types_dir(env, types_dir);
+                }
+                closedir(d);
+            }
+        }
+        if (!end) break;
+        p = end + 1;
+    }
+}
+
+static void puppet_init_ruby_types(puppet_env_t *env) {
+    if (!env || env->ruby_types_initialized) return;
+    env->ruby_types_initialized = true;
+    if (env->loader && env->loader->modules_path) {
+        /* loader->modules_path is a single path, not colon-separated —
+         * but the caller may have passed a multi-root path that the
+         * loader split; scan the single base dir here. */
+        puppet_scan_ruby_types_modulepath(env, env->loader->modules_path);
+    }
+}
+
+static bool puppet_type_is_known(puppet_env_t *env, const char *type_lower) {
+    if (!type_lower || !*type_lower) return false;
+    /* 1. Built-in? */
+    if (puppet_type_is_builtin(type_lower)) return true;
+    /* 2. User-defined? (check both original and lowercase in case of
+     *    case-insensitive registration in define_types) */
+    if (env && env->define_types) {
+        if (puppet_hash_get(env->define_types, type_lower, strlen(type_lower))) return true;
+    }
+    /* 3. Ruby type under modulepath (lazy init)? */
+    if (env) {
+        puppet_init_ruby_types(env);
+        if (env->ruby_types &&
+            puppet_hash_get(env->ruby_types, type_lower, strlen(type_lower))) {
+            return true;
+        }
+    }
+    return false;
+}
 
 /**
  * Automatic Parameter Lookup (APL) for class parameters.
@@ -429,6 +568,12 @@ puppet_env_t *puppet_env_create(void) {
     env->virtual_resources = puppet_calloc(1, sizeof(puppet_hash_t));
     env->virtual_resources->bucket_count = 64;
     env->virtual_resources->buckets = puppet_calloc(env->virtual_resources->bucket_count, sizeof(puppet_hash_entry_t*));
+
+    /* Ruby types registry — populated lazily on first unknown-type check */
+    env->ruby_types = puppet_calloc(1, sizeof(puppet_hash_t));
+    env->ruby_types->bucket_count = 64;
+    env->ruby_types->buckets = puppet_calloc(env->ruby_types->bucket_count, sizeof(puppet_hash_entry_t*));
+    env->ruby_types_initialized = false;
 
     /* Initialize defined types registry */
     env->define_types = puppet_calloc(1, sizeof(puppet_hash_t));
@@ -3460,6 +3605,47 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                 if (fq_lookup_name) puppet_free(fq_lookup_name);
             }
 
+            /* Unnamespaced, non-define resource: validate it's a known
+             * built-in or Ruby type. Catches typos like 'fiel', 'packge',
+             * 'servic'. The namespaced counterpart is handled above in
+             * the define-loader branch. */
+            if (!strchr(stmt->data.resource.type.data, ':')) {
+                size_t tlen = strlen(stmt->data.resource.type.data);
+                char *type_lower = puppet_malloc(tlen + 1);
+                for (size_t i = 0; i < tlen; i++) {
+                    type_lower[i] = tolower((unsigned char)stmt->data.resource.type.data[i]);
+                }
+                type_lower[tlen] = '\0';
+                bool known = puppet_type_is_known(env, type_lower);
+                if (!known && env->loader) {
+                    /* Try autoload: module 'foo' owning define foo in
+                     * foo/manifests/init.pp is valid unnamespaced usage. */
+                    puppet_stmt_t *loaded = puppet_loader_load_define(env->loader,
+                        stmt->data.resource.type.data);
+                    if (loaded) {
+                        puppet_value_t *stmt_ptr = puppet_calloc(1, sizeof(puppet_value_t));
+                        stmt_ptr->type = PUPPET_VALUE_UNDEF;
+                        stmt_ptr->data.string.data = (char*)loaded;
+                        puppet_hash_set(env->define_types,
+                            stmt->data.resource.type.data,
+                            strlen(stmt->data.resource.type.data), stmt_ptr);
+                        /* Re-enter the define path by restarting the stmt. */
+                        puppet_free(type_lower);
+                        puppet_exec_stmt(stmt, env);
+                        break;
+                    }
+                }
+                if (!known) {
+                    puppet_error_at(stmt->loc,
+                        "Unknown resource type: '%s'",
+                        stmt->data.resource.type.data);
+                    puppet_env_increment_error(env);
+                    puppet_free(type_lower);
+                    break;
+                }
+                puppet_free(type_lower);
+            }
+
             // Normal resource execution
             // Evaluate resource titles and check for duplicates
             for (size_t i = 0; i < stmt->data.resource.instance_count; i++) {
@@ -6396,6 +6582,8 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
     env->class_resource_decls = create_hash(32);
     env->resource_catalog = create_hash(64);
     env->virtual_resources = create_hash(64);
+    env->ruby_types = create_hash(64);
+    env->ruby_types_initialized = false;
     env->defined_resources = create_hash(64);
     env->exported_resources = create_hash(64);
     env->classes_being_reexecuted = create_hash(32);

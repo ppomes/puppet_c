@@ -202,6 +202,14 @@ typedef struct puppet_env {
 
     /* Virtual resources storage */
     puppet_hash_t *virtual_resources;         /**< Virtual resources awaiting realization (type::title → stmt) */
+
+    /* Ruby type registry (lazy-initialised).
+     * Populated by scanning each module's lib/puppet/type directory for
+     * Puppet::Type.newtype(:name) declarations. Keys are lowercased.
+     * Used by the "Unknown resource type" check to avoid false positives
+     * for types registered by Ruby modules outside our define_types hash. */
+    puppet_hash_t *ruby_types;
+    bool ruby_types_initialized;
     
     /* Template output mode */
     char *template_output_target;             /**< Resource title to output template for (NULL = disabled) */
