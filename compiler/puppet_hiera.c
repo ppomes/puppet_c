@@ -211,11 +211,20 @@ puppet_hiera_config_t *puppet_hiera_config_create(const char *config_path) {
     config->version = 5;
     config->default_merge = HIERA_MERGE_FIRST;
 
-    /* Get datadir from :yaml: or :json: section, or use default */
+    /* Get datadir from :yaml / :json section, or use default. YAML keys
+     * like ":yaml:" parse as ":yaml" — the trailing colon is the key/value
+     * separator, not part of the name. Accept both spellings so typos in
+     * hand-written hiera.yaml files don't cause a silent fallback. */
     const char *rel_datadir = "hieradata";
-    puppet_value_t *yaml_section = puppet_hash_get(yaml_config->data.hash, ":yaml:", 6);
+    puppet_value_t *yaml_section = puppet_hash_get(yaml_config->data.hash, ":yaml", 5);
+    if (!yaml_section) {
+        yaml_section = puppet_hash_get(yaml_config->data.hash, ":yaml:", 6);
+    }
     if (yaml_section && yaml_section->type == PUPPET_VALUE_HASH) {
         puppet_value_t *datadir_val = puppet_hash_get(yaml_section->data.hash, ":datadir", 8);
+        if (!datadir_val) {
+            datadir_val = puppet_hash_get(yaml_section->data.hash, ":datadir:", 9);
+        }
         if (datadir_val && datadir_val->type == PUPPET_VALUE_STRING) {
             rel_datadir = datadir_val->data.string.data;
         }
@@ -648,13 +657,35 @@ puppet_value_t *puppet_hiera_data_provider_lookup(
  */
 int puppet_hiera_data_provider_init(void **provider_data, const char *config) {
     if (!provider_data) return -1;
-    
+
     puppet_hiera_config_t *hiera_config = NULL;
-    
+
     if (config) {
         struct stat st;
         if (stat(config, &st) == 0 && S_ISREG(st.st_mode)) {
+            /* File path: load it directly as hiera.yaml */
             hiera_config = puppet_hiera_config_create(config);
+        } else if (stat(config, &st) == 0 && S_ISDIR(st.st_mode)) {
+            /* Directory: the usual "-D hieralocal" invocation. Real
+             * Puppet expects a hiera.yaml at the environment root; look
+             * for it in the CWD (which is the site/env root) and fall
+             * back to the default single-level config otherwise. */
+            struct stat cfg_st;
+            if (stat("hiera.yaml", &cfg_st) == 0 && S_ISREG(cfg_st.st_mode)) {
+                hiera_config = puppet_hiera_config_create("hiera.yaml");
+                /* Override datadir with the explicit -D value so users can
+                 * point the same hiera.yaml at a different tree. */
+                if (hiera_config) {
+                    puppet_free(hiera_config->datadir);
+                    hiera_config->datadir = puppet_strdup(config);
+                    for (puppet_hiera_level_t *l = hiera_config->hierarchy; l; l = l->next) {
+                        puppet_free(l->datadir);
+                        l->datadir = puppet_strdup(config);
+                    }
+                }
+            } else {
+                hiera_config = puppet_hiera_config_create_default(config);
+            }
         } else {
             hiera_config = puppet_hiera_config_create_default(config);
         }
