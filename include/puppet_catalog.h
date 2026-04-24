@@ -241,4 +241,32 @@ const char *puppet_relationship_to_string(puppet_relationship_t rel);
  */
 void puppet_catalog_pretty_print(puppet_catalog_t *catalog, FILE *out, bool use_color);
 
+/**
+ * @brief Validate resource references in relationship metaparameters
+ *
+ * Walks every resource and checks that any Type[title] reference inside
+ * require/subscribe/before/notify points to a resource that actually
+ * exists in the catalog. Emits puppet_error_at() for each missing
+ * reference, which increments the error counter and marks the node as
+ * failed (same path as any evaluation error).
+ *
+ * Matches the standard Puppet catalog finalization check:
+ *   "Could not find resource 'X[Y]' in parameter 'param'"
+ */
+void puppet_catalog_validate_refs(puppet_catalog_t *catalog);
+
+/**
+ * @brief Validate puppet:///modules/MOD/PATH file sources
+ *
+ * For every File resource with a source attribute of the form
+ *   puppet:///modules/MOD/PATH
+ * maps it to $modulepath/MOD/files/PATH and checks that the file
+ * exists on disk. Catches references that would only fail at agent
+ * apply time (fileserver 404).
+ *
+ * @param catalog   Catalog to inspect
+ * @param modulepath Colon-separated module search path
+ */
+void puppet_catalog_validate_sources(puppet_catalog_t *catalog, const char *modulepath);
+
 #endif /* PUPPET_CATALOG_H */

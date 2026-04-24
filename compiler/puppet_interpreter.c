@@ -4770,6 +4770,18 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
     puppet_scope_t *old_scope = puppet_scope_pop(env);
     puppet_scope_destroy(old_scope);
 
+    /* Finalize validation: every catalog produced here is fully built.
+     * Check that relationship metaparameter refs (require/subscribe/
+     * before/notify) resolve and that puppet:///modules/... URLs point
+     * to real files. Errors go through puppet_error_at, which will mark
+     * current_node_failed via the standard path below. */
+    if (env->build_catalog && env->catalog) {
+        puppet_catalog_validate_refs(env->catalog);
+        if (env->loader && env->loader->modules_path) {
+            puppet_catalog_validate_sources(env->catalog, env->loader->modules_path);
+        }
+    }
+
     /* Track node failure for CI validation */
     if (env->current_node_failed) {
         env->nodes_failed++;
@@ -5000,6 +5012,14 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
         /* Pop the node scope */
         puppet_scope_t *old_scope = puppet_scope_pop(env);
         puppet_scope_destroy(old_scope);
+
+        /* Finalize validation: same hook as puppet_exec_node_for_certname. */
+        if (env->build_catalog && env->catalog) {
+            puppet_catalog_validate_refs(env->catalog);
+            if (env->loader && env->loader->modules_path) {
+                puppet_catalog_validate_sources(env->catalog, env->loader->modules_path);
+            }
+        }
 
         /* Track node failure for CI validation */
         if (env->current_node_failed) {

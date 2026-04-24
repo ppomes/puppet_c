@@ -6,6 +6,7 @@ bin_PROGRAMS = puppetc-compile
 libpuppetc_la_SOURCES = \
     puppet_ast.c \
     puppet_catalog.c \
+    puppet_catalog_validate.c \
     puppet_interpreter.c \
     puppet_json.c \
     puppet_json_parser.c \

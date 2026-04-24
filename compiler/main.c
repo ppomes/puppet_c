@@ -435,8 +435,11 @@ int main(int argc, char *argv[]) {
                 if (verbose) fprintf(stderr, "Template output mode for resource title: %s\n", template_output);
             }
 
-            /* Enable catalog building if requested */
-            if (catalog_mode || pretty_mode) {
+            /* Enable catalog building if requested. Also turn it on for
+             * --summary so the end-of-node validation pass (ref and
+             * puppet:///modules/ source URL checks) has a catalog to
+             * walk — cheap and lets CI flag latent agent-time errors. */
+            if (catalog_mode || pretty_mode || summary_mode) {
                 const char *certname = node_name ? node_name : "localhost";
                 puppet_env_enable_catalog(env, certname, "production");
                 if (verbose) fprintf(stderr, "Building catalog for: %s\n", certname);
@@ -510,7 +513,9 @@ int main(int argc, char *argv[]) {
 
             // In parallel mode, compilation_failed isn't set by worker threads —
             // propagate failure if any node errored out during aggregation.
-            if (env->nodes_failed > 0) {
+            // But when --summary is requested, always print the summary first
+            // so the user sees the failure counts; then exit non-zero below.
+            if (env->nodes_failed > 0 && !summary_mode) {
                 puppet_env_destroy(env);
                 puppet_program_destroy(program);
                 if (loader) puppet_loader_destroy(loader);
