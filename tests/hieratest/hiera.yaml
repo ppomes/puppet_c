@@ -1,0 +1,7 @@
+---
+:hierarchy:
+  - "%{module_name}/%{::env}"
+  - "%{module_name}/global"
+  - "global"
+:yaml:
+    :datadir: hieralocal

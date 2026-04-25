@@ -1,0 +1,8 @@
+---
+facts:
+  prod-x.example.com:
+    fqdn: prod-x.example.com
+    hostname: prod-x
+  stg-x.example.com:
+    fqdn: stg-x.example.com
+    hostname: stg-x

@@ -1,0 +1,17 @@
+---
+facts:
+  alpha.example.com:
+    fqdn: alpha.example.com
+    hostname: alpha
+    role: web
+    nodepath: /var/www/alpha
+  beta.example.com:
+    fqdn: beta.example.com
+    hostname: beta
+    role: db
+    nodepath: /var/lib/beta
+  gamma.example.com:
+    fqdn: gamma.example.com
+    hostname: gamma
+    role: cache
+    nodepath: /var/cache/gamma

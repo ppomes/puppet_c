@@ -1,0 +1,4 @@
+---
+mymod::shared: shared-from-global
+plain_key: from-global
+namespaced::key::from_global: yes-found

@@ -1,0 +1,18 @@
+---
+facts:
+  web1.example.com:
+    fqdn: web1.example.com
+    hostname: web1
+    role: web
+  db1.example.com:
+    fqdn: db1.example.com
+    hostname: db1
+    role: db
+  app1.example.com:
+    fqdn: app1.example.com
+    hostname: app1
+    role: app
+  cache1.example.com:
+    fqdn: cache1.example.com
+    hostname: cache1
+    role: cache

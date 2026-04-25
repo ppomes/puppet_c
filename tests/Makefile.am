@@ -91,6 +91,40 @@ EXTRA_DIST = \
     test_append.sh \
     test_tags.sh \
     test_virtual_override.sh \
+    test_parallel_consistency.sh \
+    test_multinode_isolation.sh \
+    test_class_loader.sh \
+    test_hiera_advanced.sh \
+    test_catalog_refs.sh \
+    test_source_url.sh \
+    test_unknown_type.sh \
+    test_template_fidelity.sh \
+    facts/multinode_topvar_facts.yaml \
+    facts/multinode_isolation_facts.yaml \
+    puppet/multinode_topvar.pp \
+    puppet/multinode_isolation.pp \
+    puppet/loader_includes.pp \
+    puppet/refs_ok.pp \
+    puppet/refs_missing_resource.pp \
+    puppet/refs_missing_class.pp \
+    puppet/source_ok.pp \
+    puppet/source_missing.pp \
+    puppet/erbtest_site.pp \
+    data/erbtest.cfg.expected \
+    hieratest/hiera.yaml \
+    hieratest/allfacts.yaml \
+    hieratest/manifests/site.pp \
+    hieratest/hieralocal/global.yaml \
+    hieratest/hieralocal/mymod/global.yaml \
+    hieratest/hieralocal/mymod/prod.yaml \
+    hieratest/modules/mymod/manifests/init.pp \
+    modules/loadertest/manifests/init.pp \
+    modules/loadertest/manifests/sub.pp \
+    modules/loadertest/lib/puppet/type/loadertest_type.rb \
+    modules/srctest/files/data.txt \
+    modules/srctest/files/sub/inner.txt \
+    modules/erbtest/manifests/init.pp \
+    modules/erbtest/templates/config.cfg.erb \
     modules/epp_test/templates/trim_basic.epp \
     modules/epp_test/templates/trim_newlines.epp \
     modules/epp_test/templates/if_elsif_else.epp \
@@ -99,7 +133,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity
 	@echo "All tests completed."
 
 check-parser:
@@ -513,4 +547,92 @@ check-virtual-override:
 		exit 1; \
 	fi
 
-.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-memory check-asan
+check-parallel-consistency:
+	@echo "Running parallel/sequential consistency tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_parallel_consistency.sh > output/parallel_consistency.out 2>&1; then \
+		echo "✅ All parallel-consistency tests passed!"; \
+	else \
+		echo "❌ Some parallel-consistency tests failed:"; \
+		sed 's/^/  /' output/parallel_consistency.out; \
+		exit 1; \
+	fi
+
+check-multinode-isolation:
+	@echo "Running multi-node isolation tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_multinode_isolation.sh > output/multinode_isolation.out 2>&1; then \
+		echo "✅ All multi-node isolation tests passed!"; \
+	else \
+		echo "❌ Some multi-node isolation tests failed:"; \
+		sed 's/^/  /' output/multinode_isolation.out; \
+		exit 1; \
+	fi
+
+check-class-loader:
+	@echo "Running class loader integration tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_class_loader.sh > output/class_loader.out 2>&1; then \
+		echo "✅ All class-loader tests passed!"; \
+	else \
+		echo "❌ Some class-loader tests failed:"; \
+		sed 's/^/  /' output/class_loader.out; \
+		exit 1; \
+	fi
+
+check-hiera-advanced:
+	@echo "Running advanced Hiera tests (datadir / module_name / interpolation)..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_hiera_advanced.sh > output/hiera_advanced.out 2>&1; then \
+		echo "✅ All hiera-advanced tests passed!"; \
+	else \
+		echo "❌ Some hiera-advanced tests failed:"; \
+		sed 's/^/  /' output/hiera_advanced.out; \
+		exit 1; \
+	fi
+
+check-catalog-refs:
+	@echo "Running catalog ref validation tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_catalog_refs.sh > output/catalog_refs.out 2>&1; then \
+		echo "✅ All catalog-refs tests passed!"; \
+	else \
+		echo "❌ Some catalog-refs tests failed:"; \
+		sed 's/^/  /' output/catalog_refs.out; \
+		exit 1; \
+	fi
+
+check-source-url:
+	@echo "Running puppet:/// source URL validation tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_source_url.sh > output/source_url.out 2>&1; then \
+		echo "✅ All source-URL tests passed!"; \
+	else \
+		echo "❌ Some source-URL tests failed:"; \
+		sed 's/^/  /' output/source_url.out; \
+		exit 1; \
+	fi
+
+check-unknown-type:
+	@echo "Running unknown resource type detection tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_unknown_type.sh > output/unknown_type.out 2>&1; then \
+		echo "✅ All unknown-type tests passed!"; \
+	else \
+		echo "❌ Some unknown-type tests failed:"; \
+		sed 's/^/  /' output/unknown_type.out; \
+		exit 1; \
+	fi
+
+check-template-fidelity:
+	@echo "Running ERB template fidelity tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_template_fidelity.sh > output/template_fidelity.out 2>&1; then \
+		echo "✅ All template-fidelity tests passed!"; \
+	else \
+		echo "❌ Some template-fidelity tests failed:"; \
+		sed 's/^/  /' output/template_fidelity.out; \
+		exit 1; \
+	fi
+
+.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-memory check-asan check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity
