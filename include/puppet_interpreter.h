@@ -204,8 +204,7 @@ typedef struct puppet_env {
     /* Resource-style class declarations - tracks class { } syntax (non-idempotent) */
     puppet_hash_t *class_resource_decls;      /**< class_name → true for class {} declarations */
     
-    /* Facts database */
-    puppet_facts_db_t *facts_db;              /**< Facts database for node-specific facts */
+    /* Facts database migrated to env->prog->facts_db */
     
     /* Resource catalog for duplicate detection */
     puppet_hash_t *resource_catalog;          /**< Track declared resources (type::title → true) */

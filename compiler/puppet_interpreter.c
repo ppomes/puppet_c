@@ -562,7 +562,7 @@ puppet_env_t *puppet_env_create(void) {
     env->class_resource_decls->buckets = puppet_calloc(env->class_resource_decls->bucket_count, sizeof(puppet_hash_entry_t*));
 
     /* Initialize facts database */
-    env->facts_db = NULL;
+    env->prog->facts_db = NULL;
     
     /* Initialize resource catalog for duplicate detection */
     env->resource_catalog = puppet_calloc(1, sizeof(puppet_hash_t));
@@ -662,13 +662,6 @@ void puppet_env_set_puppetdb(puppet_env_t *env, puppetdb_t *pdb) {
 void puppet_env_destroy(puppet_env_t *env) {
     if (!env) return;
 
-    /* Destroy the shared program-state only if THIS env owns it
-     * (i.e. it's the original creator, not a worker clone). */
-    if (env->owns_prog && env->prog) {
-        puppet_program_state_destroy(env->prog);
-        env->prog = NULL;
-    }
-
     if (env->deadcode) {
         puppet_deadcode_destroy(env->deadcode);
         env->deadcode = NULL;
@@ -735,8 +728,8 @@ void puppet_env_destroy(puppet_env_t *env) {
     }
 
     // Clean up facts database
-    if (env->facts_db) {
-        puppet_facts_db_destroy(env->facts_db);
+    if (env->prog->facts_db) {
+        puppet_facts_db_destroy(env->prog->facts_db);
     }
     
     // Clean up resource catalog
@@ -918,6 +911,15 @@ void puppet_env_destroy(puppet_env_t *env) {
     /* Destroy catalog if it was never retrieved by the caller */
     if (env->catalog) {
         puppet_catalog_destroy(env->catalog);
+    }
+
+    /* Destroy the shared program-state last — earlier cleanup paths
+     * still need to read env->prog (e.g. facts_db). Only the original
+     * creator env owns it; worker clones leave this NULL via
+     * owns_prog=false. */
+    if (env->owns_prog && env->prog) {
+        puppet_program_state_destroy(env->prog);
+        env->prog = NULL;
     }
 
     puppet_free(env);
@@ -4493,8 +4495,8 @@ void puppet_exec_program(puppet_program_t *program, puppet_env_t *env) {
      * as we encounter them.
      */
     bool facts_db_iteration_mode = env->execute_all_nodes &&
-                                    env->facts_db &&
-                                    puppet_facts_db_node_count(env->facts_db) > 0;
+                                    env->prog->facts_db &&
+                                    puppet_facts_db_node_count(env->prog->facts_db) > 0;
 
     if (facts_db_iteration_mode) {
         /* Enable deferred node execution - collect node definitions */
@@ -4516,7 +4518,7 @@ void puppet_exec_program(puppet_program_t *program, puppet_env_t *env) {
         env->defer_node_execution = false;
 
         /* Now iterate over all nodes in the facts database */
-        size_t node_count = puppet_facts_db_node_count(env->facts_db);
+        size_t node_count = puppet_facts_db_node_count(env->prog->facts_db);
         puppet_debug("Executing %zu nodes from facts database", node_count);
 
         if (env->parallel_nodes) {
@@ -4525,7 +4527,7 @@ void puppet_exec_program(puppet_program_t *program, puppet_env_t *env) {
         } else {
             /* Sequential execution */
             for (size_t i = 0; i < node_count; i++) {
-                const char *certname = puppet_facts_db_get_node_name(env->facts_db, i);
+                const char *certname = puppet_facts_db_get_node_name(env->prog->facts_db, i);
                 if (!certname) continue;
 
                 /* Find matching node definition */
@@ -4948,8 +4950,8 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
     }
 
     /* Switch to node-specific facts (skip in parallel mode - uses env->current_node_certname instead) */
-    if (env->facts_db && !env->parallel_nodes) {
-        if (puppet_facts_db_set_current_node(env->facts_db, certname) == 0) {
+    if (env->prog->facts_db && !env->parallel_nodes) {
+        if (puppet_facts_db_set_current_node(env->prog->facts_db, certname) == 0) {
             puppet_debug("Using facts for node: %s", certname);
         } else {
             puppet_warn("No facts found for node %s", certname);
@@ -5215,10 +5217,10 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
         }
 
         /* Switch to node-specific facts if available (skip in parallel mode - uses env->current_node_certname) */
-        if (env->facts_db && !env->parallel_nodes) {
+        if (env->prog->facts_db && !env->parallel_nodes) {
             /* Use the actual certname (from -n option) rather than node block name (e.g., "default") */
             const char *facts_node = env->current_node_certname ? env->current_node_certname : node_name;
-            if (puppet_facts_db_set_current_node(env->facts_db, facts_node) == 0) {
+            if (puppet_facts_db_set_current_node(env->prog->facts_db, facts_node) == 0) {
                 puppet_debug("Using facts for node: %s", facts_node);
             } else {
                 puppet_debug("No facts found for node %s, using default facts", facts_node);
@@ -5714,7 +5716,7 @@ puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name
     }
 
     // 5. Facts lookup
-    if (env->facts_db) {
+    if (env->prog->facts_db) {
         // Special handling for $facts - return the whole facts hash
         if (strcmp(lookup_name, "facts") == 0) {
             value = puppet_facts_get_all_as_hash(env);
@@ -6391,11 +6393,11 @@ puppet_value_t *puppet_facts_get(puppet_env_t *env, const char *fact_name) {
         return puppet_value_create_string("puppetc", 7);
     }
 
-    if (!env || !env->facts_db) {
+    if (!env || !env->prog->facts_db) {
         return NULL;
     }
 
-    puppet_facts_db_t *facts_db = env->facts_db;
+    puppet_facts_db_t *facts_db = env->prog->facts_db;
 
     /* Use env->current_node_certname for thread-safe access, fall back to facts_db->current_node */
     const char *certname = env->current_node_certname ? env->current_node_certname : facts_db->current_node;
@@ -6430,11 +6432,11 @@ puppet_value_t *puppet_facts_get(puppet_env_t *env, const char *fact_name) {
  * @brief Get all facts as a nested hash for $facts access
  */
 puppet_value_t *puppet_facts_get_all_as_hash(puppet_env_t *env) {
-    if (!env || !env->facts_db) {
+    if (!env || !env->prog->facts_db) {
         return NULL;
     }
 
-    puppet_facts_db_t *facts_db = env->facts_db;
+    puppet_facts_db_t *facts_db = env->prog->facts_db;
 
     /* Use env->current_node_certname for thread-safe access, fall back to facts_db->current_node */
     const char *certname = env->current_node_certname ? env->current_node_certname : facts_db->current_node;
@@ -6502,11 +6504,11 @@ puppet_value_t *puppet_facts_get_all_as_hash(puppet_env_t *env) {
 int puppet_env_set_facts_db(puppet_env_t *env, puppet_facts_db_t *facts_db) {
     if (!env) return -1;
 
-    if (env->facts_db) {
-        puppet_facts_db_destroy(env->facts_db);
+    if (env->prog->facts_db) {
+        puppet_facts_db_destroy(env->prog->facts_db);
     }
 
-    env->facts_db = facts_db;
+    env->prog->facts_db = facts_db;
     return 0;
 }
 
@@ -6612,9 +6614,8 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
     }
 
     /* Share read-only data from source.
-     * loader was migrated to env->prog and is already inherited
-     * through the shared prog pointer set above. */
-    env->facts_db = source->facts_db;  /* Shared, read-only per thread */
+     * loader and facts_db migrated to env->prog and are already
+     * inherited through the shared prog pointer set above. */
     env->data_providers = source->data_providers;  /* Shared Hiera etc */
     env->data_provider_count = source->data_provider_count;
     env->data_provider_capacity = source->data_provider_capacity;
@@ -7108,7 +7109,7 @@ void puppet_exec_nodes_parallel(puppet_env_t *env, size_t node_count) {
 
     /* Create threads for each node */
     for (size_t i = 0; i < node_count; i++) {
-        const char *certname = puppet_facts_db_get_node_name(env->facts_db, i);
+        const char *certname = puppet_facts_db_get_node_name(env->prog->facts_db, i);
         if (!certname) continue;
 
         /* Find matching node definition */

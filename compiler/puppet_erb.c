@@ -405,16 +405,16 @@ static void puppet_export_env_to_ruby(puppet_env_t *env, puppet_ruby_context_t *
     }
 
     // Export facts as variables too (facts become @factname in ERB)
-    if (env->facts_db && env->facts_db->current_node) {
+    if (env->prog->facts_db && env->prog->facts_db->current_node) {
         
         // Find the current node's facts
-        puppet_value_t *node_lookup = puppet_hash_get(env->facts_db->node_index, 
-                                                      env->facts_db->current_node, 
-                                                      strlen(env->facts_db->current_node));
+        puppet_value_t *node_lookup = puppet_hash_get(env->prog->facts_db->node_index, 
+                                                      env->prog->facts_db->current_node, 
+                                                      strlen(env->prog->facts_db->current_node));
         if (node_lookup && node_lookup->type == PUPPET_VALUE_NUMBER) {
             size_t node_idx = (size_t)node_lookup->data.number;
-            if (node_idx < env->facts_db->node_count) {
-                puppet_node_facts_t *node_facts = &env->facts_db->nodes[node_idx];
+            if (node_idx < env->prog->facts_db->node_count) {
+                puppet_node_facts_t *node_facts = &env->prog->facts_db->nodes[node_idx];
                 
                 // Export all facts as @variables
                 for (size_t i = 0; i < node_facts->facts->bucket_count; i++) {

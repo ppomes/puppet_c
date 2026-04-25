@@ -36,6 +36,13 @@ typedef struct puppet_program_state {
      * env->prog->loader. */
     struct puppet_loader *loader;
 
+    /* Facts database. Read-only once loaded from yaml/json/puppetdb;
+     * shared across all per-node compilations. The active node is
+     * tracked separately in env->current_node_certname (per-node)
+     * because puppet_facts_db_set_current_node mutates a shared
+     * field and isn't thread-safe in parallel mode. */
+    struct puppet_facts_db *facts_db;
+
     /* Pointer back to the parsed top-level statement list, so each
      * per-node compilation can replay top-level $var = $hostname?{...}
      * style assignments with the node's facts bound. Not owned. */
