@@ -1,4 +1,5 @@
 #include "puppet_interpreter.h"
+#include "puppet_program_state.h"
 #include "puppet_erb.h"
 #include "puppet_stdlib.h"
 #include "puppet_loader.h"
@@ -512,6 +513,15 @@ static void puppet_value_to_string_buffer(puppet_value_t *value, char *buf, size
 
 puppet_env_t *puppet_env_create(void) {
     puppet_env_t *env = puppet_calloc(1, sizeof(puppet_env_t));
+
+    /* Allocate the shared program-state container. The "creator" env
+     * owns it; worker envs (clone_for_node) just borrow the pointer.
+     * As individual fields migrate from env->X to env->prog->X, the
+     * creator initialises them here and workers see them through
+     * the shared pointer. */
+    env->prog = puppet_program_state_create();
+    env->owns_prog = true;
+
     env->global_scope = puppet_scope_create(NULL, "global");
     env->current_scope = env->global_scope;
     env->stack_capacity = 16;
@@ -651,6 +661,13 @@ void puppet_env_set_puppetdb(puppet_env_t *env, puppetdb_t *pdb) {
 
 void puppet_env_destroy(puppet_env_t *env) {
     if (!env) return;
+
+    /* Destroy the shared program-state only if THIS env owns it
+     * (i.e. it's the original creator, not a worker clone). */
+    if (env->owns_prog && env->prog) {
+        puppet_program_state_destroy(env->prog);
+        env->prog = NULL;
+    }
 
     if (env->deadcode) {
         puppet_deadcode_destroy(env->deadcode);
@@ -6559,6 +6576,11 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
     if (!source) return NULL;
 
     puppet_env_t *env = puppet_calloc(1, sizeof(puppet_env_t));
+
+    /* Share the program-state with the source. The worker does NOT
+     * own it; only the creator env destroys it. */
+    env->prog = source->prog;
+    env->owns_prog = false;
 
     /* Create new scopes (fresh per node) */
     env->global_scope = puppet_scope_create(NULL, "global");

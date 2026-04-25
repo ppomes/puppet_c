@@ -151,7 +151,20 @@ typedef struct puppet_deferred_define {
  * and global scope for top-level variables. Provides the context needed
  * for expression evaluation and statement execution.
  */
+/* Forward-declare the shared program-state container (see
+ * puppet_program_state.h). Each puppet_env_t holds a pointer to
+ * one; the "creator" env owns it and frees it in env_destroy,
+ * worker envs (created by puppet_env_clone_for_node) just borrow
+ * the pointer. */
+struct puppet_program_state;
+
 typedef struct puppet_env {
+    /* Shared, parse-once state (loader, top-level stmt pointer,
+     * autoload-cache mutex, etc.). Borrowed by worker envs. */
+    struct puppet_program_state *prog;
+    /* True iff this env owns *prog and must destroy it. */
+    bool owns_prog;
+
     puppet_scope_t *global_scope;   /**< Top-level variables */
     puppet_scope_t *current_scope;  /**< Currently active scope */
     puppet_scope_t **scope_stack;   /**< Stack of nested scopes */
