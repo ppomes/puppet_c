@@ -225,8 +225,7 @@ typedef struct puppet_env {
     bool compilation_failed;                  /**< Flag for fail() function */
     char *failure_message;                    /**< Error message from fail() function */
 
-    /* Output control */
-    bool verbose;                             /**< Enable verbose/debug output */
+    /* verbose migrated to env->prog->verbose */
 
     /* Hiera recursion guard */
     bool in_hiera_interpolation;              /**< Prevent recursive hiera lookups in path interpolation */
@@ -247,7 +246,7 @@ typedef struct puppet_env {
 
     /* Parallel node processing */
     bool parallel_nodes;                      /**< Process nodes in parallel */
-    bool skip_erb;                            /**< Skip ERB template rendering (for parallel mode) */
+    /* skip_erb migrated to env->prog->skip_erb */
 
     /* Output buffering for parallel mode (ordered output) */
     char *output_buffer;                      /**< Buffer for capturing output */

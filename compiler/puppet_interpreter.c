@@ -610,7 +610,7 @@ puppet_env_t *puppet_env_create(void) {
     env->failure_message = NULL;
 
     /* Initialize output control */
-    env->verbose = puppet_verbose;  /* Inherit from global flag */
+    env->prog->verbose = puppet_verbose;  /* Inherit from global flag */
 
     /* Initialize catalog building (disabled by default) */
     env->catalog = NULL;
@@ -628,7 +628,7 @@ puppet_env_t *puppet_env_create(void) {
 
     /* Initialize parallel processing */
     env->parallel_nodes = false;
-    env->skip_erb = false;
+    env->prog->skip_erb = false;
     env->stats_mutex = NULL;  /* Allocated only when needed */
 
     /* Initialize deferred define execution */
@@ -655,7 +655,7 @@ puppet_env_t *puppet_env_create(void) {
 
 void puppet_env_set_verbose(puppet_env_t *env, bool verbose) {
     if (env) {
-        env->verbose = verbose;
+        env->prog->verbose = verbose;
     }
     puppet_verbose = verbose;  /* Also set global flag */
 }
@@ -5300,7 +5300,7 @@ void puppet_env_set_execute_all_nodes(puppet_env_t *env, bool execute_all) {
     if (execute_all) {
         puppet_free(env->node_name);
         env->node_name = NULL;  /* Clear specific node when in all-nodes mode */
-        env->skip_erb = true;   /* Skip ERB in all-nodes mode for performance */
+        env->prog->skip_erb = true;   /* Skip ERB in all-nodes mode for performance */
     }
 }
 
@@ -6562,7 +6562,7 @@ void puppet_env_increment_warning(puppet_env_t *env) {
 void puppet_env_set_parallel_nodes(puppet_env_t *env, bool parallel) {
     if (!env) return;
     env->parallel_nodes = parallel;
-    env->skip_erb = parallel;  /* Skip ERB in parallel mode for thread safety */
+    env->prog->skip_erb = parallel;  /* Skip ERB in parallel mode for thread safety */
 
     /* Allocate stats mutex if enabling parallel mode */
     if (parallel && !env->stats_mutex) {
@@ -6682,8 +6682,7 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
     env->node_matched = false;
     env->default_node = source->default_node;
 
-    /* Copy output settings */
-    env->verbose = source->verbose;
+    /* verbose lives on prog; inherited via the shared prog pointer. */
     env->template_output_target = NULL;
     env->template_output_found = false;
 
@@ -6707,9 +6706,8 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
     env->current_tags = NULL;
     env->in_hiera_interpolation = false;
 
-    /* Share the stats mutex for aggregation */
+    /* skip_erb lives on prog; inherited via shared prog pointer. */
     env->parallel_nodes = true;
-    env->skip_erb = source->skip_erb;
     env->stats_mutex = source->stats_mutex;
 
     /* Initialize output buffer for ordered output in parallel mode */
@@ -7096,7 +7094,7 @@ static void *parallel_node_worker(void *arg) {
  * @brief Execute nodes in parallel using pthreads
  *
  * Uses native pthreads for true parallelism. ERB template rendering is
- * skipped in parallel mode (env->skip_erb = true), allowing thread-safe
+ * skipped in parallel mode (env->prog->skip_erb = true), allowing thread-safe
  * execution without Ruby threading issues.
  */
 void puppet_exec_nodes_parallel(puppet_env_t *env, size_t node_count) {

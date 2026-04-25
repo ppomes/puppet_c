@@ -6729,7 +6729,7 @@ puppet_value_t *puppet_func_inline_template(puppet_expr_list_t *args, puppet_env
     }
 
     /* Skip ERB in parallel mode - return placeholder */
-    if (env && env->skip_erb) {
+    if (env && env->prog->skip_erb) {
         return puppet_value_create_string("[inline_template skipped in parallel mode]",
                                           strlen("[inline_template skipped in parallel mode]"));
     }

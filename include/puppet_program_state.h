@@ -67,10 +67,26 @@ typedef struct puppet_program_state {
     struct puppet_hash *ruby_types;
     bool ruby_types_initialized;
 
-    /* Mutex protecting writes to the registries below. Reads on
-     * read-mostly data may go un-locked once parse is complete; any
-     * mutation (autoload of a previously-unseen class, for example)
-     * must hold this lock. */
+    /* Pure config flags, set once before any per-node compile and
+     * read everywhere. NOT per-worker overridable — these are the
+     * ones that genuinely belong to "the run", not "this node":
+     *  - skip_erb: forced true in --parallel mode for thread safety
+     *  - verbose:  -v / --verbose CLI flag */
+    bool skip_erb;
+    bool verbose;
+
+    /* Mutex protecting concurrent writes against parallel reads.
+     * Currently only used by puppet_init_ruby_types' lazy population.
+     *
+     * Phase 1F attempted to migrate class_definitions, node_definitions
+     * and define_types here too. The difficulty: those three are
+     * written from autoload paths *during* compilation, and a coarse-
+     * grain mutex around every puppet_hash_get/set proved fragile in
+     * parallel mode (the hash carriers point into AST that other
+     * workers may also be inspecting). Proper fix is per-compile
+     * autoload caches (Phase 2: a puppet_compile_t separate from
+     * puppet_env_t) rather than a shared registry; until then those
+     * three stay in puppet_env_t and are copied on clone_for_node. */
     pthread_mutex_t reg_mutex;
 
     /* True if reg_mutex was successfully initialised. */

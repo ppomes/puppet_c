@@ -431,7 +431,7 @@ static void puppet_export_env_to_ruby(puppet_env_t *env, puppet_ruby_context_t *
 
 char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx, const char *template_name) {
     // Skip ERB rendering if flag is set (for parallel mode)
-    if (env && env->skip_erb) {
+    if (env && env->prog->skip_erb) {
         return puppet_strdup("[ERB skipped in parallel mode]");
     }
 
@@ -635,7 +635,7 @@ puppet_value_t *puppet_func_template(puppet_expr_list_t *args, puppet_env_t *env
     }
 
     // Skip ERB in parallel mode - return placeholder
-    if (env && env->skip_erb) {
+    if (env && env->prog->skip_erb) {
         return puppet_value_create_string("[template skipped in parallel mode]",
                                           strlen("[template skipped in parallel mode]"));
     }
@@ -1359,7 +1359,7 @@ puppet_value_t *puppet_func_epp(puppet_expr_list_t *args, puppet_env_t *env) {
     }
 
     // Skip EPP in parallel mode - return placeholder
-    if (env && env->skip_erb) {
+    if (env && env->prog->skip_erb) {
         return puppet_value_create_string("[epp template skipped in parallel mode]",
                                           strlen("[epp template skipped in parallel mode]"));
     }
