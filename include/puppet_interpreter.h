@@ -177,10 +177,7 @@ typedef struct puppet_env {
     bool node_matched;             /**< Whether a matching node was found/executed */
     puppet_stmt_t *default_node;   /**< Pointer to 'default' node for fallback */
     
-    /* Enhanced variable system */
-    puppet_data_provider_t **data_providers;  /**< External data providers (Hiera, etc.) */
-    size_t data_provider_count;               /**< Number of registered providers */
-    size_t data_provider_capacity;            /**< Provider array capacity */
+    /* Enhanced variable system. data_providers migrated to env->prog. */
     puppet_scope_t *node_scope;               /**< Node-specific variables */
     puppet_scope_t *class_scope;              /**< Current class scope */
     
@@ -285,8 +282,7 @@ typedef struct puppet_env {
     /* Pending realizes for deferred virtual resources */
     puppet_hash_t *pending_realizes;              /**< resource_key -> true for deferred realize() calls */
 
-    /* Dead-code tracker (optional) */
-    struct puppet_deadcode *deadcode;             /**< NULL unless --dead-code mode is active */
+    /* Dead-code tracker migrated to env->prog->deadcode */
 } puppet_env_t;
 
 /* Global verbose flag for use before environment is created */

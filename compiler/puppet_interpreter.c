@@ -298,8 +298,8 @@ static puppet_value_t *puppet_apl_lookup(const char *class_name, const char *par
 
     /* Look up in data providers (Hiera) */
     puppet_value_t *result = NULL;
-    for (size_t i = 0; i < env->data_provider_count; i++) {
-        puppet_data_provider_t *provider = env->data_providers[i];
+    for (size_t i = 0; i < env->prog->data_provider_count; i++) {
+        puppet_data_provider_t *provider = env->prog->data_providers[i];
         if (provider && provider->lookup) {
             result = provider->lookup(key, env, provider->data);
             if (result) {
@@ -534,9 +534,9 @@ puppet_env_t *puppet_env_create(void) {
     env->default_node = NULL;
     
     /* Initialize enhanced variable system */
-    env->data_provider_capacity = 4;
-    env->data_providers = puppet_calloc(env->data_provider_capacity, sizeof(puppet_data_provider_t*));
-    env->data_provider_count = 0;
+    env->prog->data_provider_capacity = 4;
+    env->prog->data_providers = puppet_calloc(env->prog->data_provider_capacity, sizeof(puppet_data_provider_t*));
+    env->prog->data_provider_count = 0;
     env->node_scope = puppet_scope_create(env->global_scope, "node");
     env->class_scope = NULL;  /* Set when entering class context */
     
@@ -662,9 +662,9 @@ void puppet_env_set_puppetdb(puppet_env_t *env, puppetdb_t *pdb) {
 void puppet_env_destroy(puppet_env_t *env) {
     if (!env) return;
 
-    if (env->deadcode) {
-        puppet_deadcode_destroy(env->deadcode);
-        env->deadcode = NULL;
+    if (env->prog->deadcode) {
+        puppet_deadcode_destroy(env->prog->deadcode);
+        env->prog->deadcode = NULL;
     }
 
     // Clean up scope stack
@@ -678,15 +678,15 @@ void puppet_env_destroy(puppet_env_t *env) {
     if (env->class_scope) puppet_scope_destroy(env->class_scope);
     
     // Clean up data providers
-    for (size_t i = 0; i < env->data_provider_count; i++) {
-        puppet_data_provider_t *provider = env->data_providers[i];
+    for (size_t i = 0; i < env->prog->data_provider_count; i++) {
+        puppet_data_provider_t *provider = env->prog->data_providers[i];
         if (provider && provider->cleanup) {
             provider->cleanup(provider->data);
         }
         puppet_free(provider->name);
         puppet_free(provider);
     }
-    puppet_free(env->data_providers);
+    puppet_free(env->prog->data_providers);
     
     // Clean up class definition registry (don't destroy statements, they're owned by AST)
     puppet_free(env->class_definitions);
@@ -1095,16 +1095,16 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
                 return puppet_value_create_undef();
             }
 
-            puppet_deadcode_mark_function_used(env->deadcode, func_name);
+            puppet_deadcode_mark_function_used(env->prog->deadcode, func_name);
 
             // Track template/epp target path for dead-code mode
-            if (env->deadcode && expr->data.funcall.args.count >= 1 &&
+            if (env->prog->deadcode && expr->data.funcall.args.count >= 1 &&
                 (strcmp(func_name, "template") == 0 ||
                  strcmp(func_name, "epp") == 0 ||
                  strcmp(func_name, "stdlib::deferrable_epp") == 0)) {
                 puppet_value_t *pv = puppet_eval_expr(expr->data.funcall.args.exprs[0], env);
                 if (pv && pv->type == PUPPET_VALUE_STRING && pv->data.string.data) {
-                    puppet_deadcode_mark_template_used(env->deadcode, pv->data.string.data);
+                    puppet_deadcode_mark_template_used(env->prog->deadcode, pv->data.string.data);
                 }
                 if (pv) puppet_value_destroy(pv);
             }
@@ -1469,7 +1469,7 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
                  * Mark the target type as used so the dead-code tracker sees it
                  * (the interpreter resolves it dynamically, not via the static
                  * resource-declaration path the tracker hooks into). */
-                if (env->deadcode && expr->data.funcall.args.count >= 1) {
+                if (env->prog->deadcode && expr->data.funcall.args.count >= 1) {
                     puppet_value_t *tv = puppet_eval_expr(expr->data.funcall.args.exprs[0], env);
                     if (tv && tv->type == PUPPET_VALUE_STRING && tv->data.string.data) {
                         const char *t = tv->data.string.data;
@@ -1481,14 +1481,14 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
                                 for (size_t bi = 0; bi < hv->data.hash->bucket_count; bi++) {
                                     puppet_hash_entry_t *e = hv->data.hash->buckets[bi];
                                     while (e) {
-                                        puppet_deadcode_mark_class_used(env->deadcode, e->key.data);
+                                        puppet_deadcode_mark_class_used(env->prog->deadcode, e->key.data);
                                         e = e->next;
                                     }
                                 }
                             }
                             if (hv) puppet_value_destroy(hv);
                         } else {
-                            puppet_deadcode_mark_define_used(env->deadcode, t);
+                            puppet_deadcode_mark_define_used(env->prog->deadcode, t);
                         }
                     }
                     if (tv) puppet_value_destroy(tv);
@@ -2834,7 +2834,7 @@ static void puppet_exec_collector(puppet_stmt_t *stmt, puppet_env_t *env) {
                     if (define_ptr) {
                         /* Execute the defined type body */
                         puppet_stmt_t *define_stmt = (puppet_stmt_t *)define_ptr->data.string.data;
-                        puppet_deadcode_mark_define_used(env->deadcode, vres->type);
+                        puppet_deadcode_mark_define_used(env->prog->deadcode, vres->type);
 
                         puppet_debug("Collector: executing defined type %s[%s]", vres->type, vres->title);
 
@@ -3066,7 +3066,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
 
         case PUPPET_STMT_RESOURCE:
             puppet_debug("Executing resource: %s", stmt->data.resource.type.data);
-            puppet_deadcode_mark_type_used(env->deadcode, stmt->data.resource.type.data);
+            puppet_deadcode_mark_type_used(env->prog->deadcode, stmt->data.resource.type.data);
 
             // Handle class resources specially - they instantiate classes
             if (strcmp(stmt->data.resource.type.data, "class") == 0) {
@@ -3082,7 +3082,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                             class_name = class_name_raw + 2;
                         }
                         puppet_debug("  Class resource: %s", class_name);
-                        puppet_deadcode_mark_class_used(env->deadcode, class_name);
+                        puppet_deadcode_mark_class_used(env->prog->deadcode, class_name);
 
                         // Check if this class was already declared with class { } syntax
                         // (resource-style declarations are NOT idempotent, but include is)
@@ -3542,7 +3542,7 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
 
                 if (define_ptr) {
                     puppet_stmt_t *define_stmt = (puppet_stmt_t *)define_ptr->data.string.data;
-                    puppet_deadcode_mark_define_used(env->deadcode, stmt->data.resource.type.data);
+                    puppet_deadcode_mark_define_used(env->prog->deadcode, stmt->data.resource.type.data);
 
                     /* Execute each instance of this defined type */
                     for (size_t i = 0; i < stmt->data.resource.instance_count; i++) {
@@ -4568,7 +4568,7 @@ static bool puppet_include_class_from_def(puppet_stmt_t *class_def, puppet_env_t
         class_name = class_name_raw + 2;
     }
 
-    puppet_deadcode_mark_class_used(env->deadcode, class_name);
+    puppet_deadcode_mark_class_used(env->prog->deadcode, class_name);
 
     /* Check if this class is already included - classes are idempotent */
     if (puppet_hash_get(env->class_scopes, class_name, strlen(class_name))) {
@@ -5730,8 +5730,8 @@ puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name
     // 6. Data providers (Hiera, external data sources)
     // Skip if we're in hiera path interpolation to prevent infinite recursion
     if (!top_level_only && !env->in_hiera_interpolation) {
-        for (size_t i = 0; i < env->data_provider_count; i++) {
-            puppet_data_provider_t *provider = env->data_providers[i];
+        for (size_t i = 0; i < env->prog->data_provider_count; i++) {
+            puppet_data_provider_t *provider = env->prog->data_providers[i];
             if (provider && provider->lookup) {
                 value = provider->lookup(lookup_name, env, provider->data);
                 if (value) return value;
@@ -5772,8 +5772,8 @@ puppet_value_t *puppet_variable_lookup_scoped(puppet_env_t *env, const char *nam
         case PUPPET_VAR_FACT:
             // Facts would be handled by a fact provider
             // For now, fall through to data providers
-            for (size_t i = 0; i < env->data_provider_count; i++) {
-                puppet_data_provider_t *provider = env->data_providers[i];
+            for (size_t i = 0; i < env->prog->data_provider_count; i++) {
+                puppet_data_provider_t *provider = env->prog->data_providers[i];
                 if (provider && provider->lookup) {
                     puppet_value_t *value = provider->lookup(name, env, provider->data);
                     if (value) return value;
@@ -5845,18 +5845,18 @@ int puppet_register_data_provider(puppet_env_t *env, puppet_data_provider_t *pro
     if (!env || !provider) return -1;
     
     // Expand provider array if needed
-    if (env->data_provider_count >= env->data_provider_capacity) {
-        env->data_provider_capacity *= 2;
-        env->data_providers = puppet_realloc(env->data_providers, 
-            env->data_provider_capacity * sizeof(puppet_data_provider_t*));
-        if (!env->data_providers) {
+    if (env->prog->data_provider_count >= env->prog->data_provider_capacity) {
+        env->prog->data_provider_capacity *= 2;
+        env->prog->data_providers = puppet_realloc(env->prog->data_providers, 
+            env->prog->data_provider_capacity * sizeof(puppet_data_provider_t*));
+        if (!env->prog->data_providers) {
             return -1;
         }
     }
     
     // Add provider to array
-    env->data_providers[env->data_provider_count] = provider;
-    env->data_provider_count++;
+    env->prog->data_providers[env->prog->data_provider_count] = provider;
+    env->prog->data_provider_count++;
     
     return 0;
 }
@@ -5870,8 +5870,8 @@ int puppet_register_data_provider(puppet_env_t *env, puppet_data_provider_t *pro
 void puppet_unregister_data_provider(puppet_env_t *env, const char *name) {
     if (!env || !name) return;
     
-    for (size_t i = 0; i < env->data_provider_count; i++) {
-        puppet_data_provider_t *provider = env->data_providers[i];
+    for (size_t i = 0; i < env->prog->data_provider_count; i++) {
+        puppet_data_provider_t *provider = env->prog->data_providers[i];
         if (provider && provider->name && strcmp(provider->name, name) == 0) {
             // Clean up provider
             if (provider->cleanup) {
@@ -5881,10 +5881,10 @@ void puppet_unregister_data_provider(puppet_env_t *env, const char *name) {
             puppet_free(provider);
             
             // Shift remaining providers down
-            for (size_t j = i; j < env->data_provider_count - 1; j++) {
-                env->data_providers[j] = env->data_providers[j + 1];
+            for (size_t j = i; j < env->prog->data_provider_count - 1; j++) {
+                env->prog->data_providers[j] = env->prog->data_providers[j + 1];
             }
-            env->data_provider_count--;
+            env->prog->data_provider_count--;
             break;
         }
     }
@@ -5900,8 +5900,8 @@ void puppet_unregister_data_provider(puppet_env_t *env, const char *name) {
 puppet_data_provider_t *puppet_get_data_provider(puppet_env_t *env, const char *name) {
     if (!env || !name) return NULL;
     
-    for (size_t i = 0; i < env->data_provider_count; i++) {
-        puppet_data_provider_t *provider = env->data_providers[i];
+    for (size_t i = 0; i < env->prog->data_provider_count; i++) {
+        puppet_data_provider_t *provider = env->prog->data_providers[i];
         if (provider && provider->name && strcmp(provider->name, name) == 0) {
             return provider;
         }
@@ -6614,12 +6614,8 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
     }
 
     /* Share read-only data from source.
-     * loader and facts_db migrated to env->prog and are already
-     * inherited through the shared prog pointer set above. */
-    env->data_providers = source->data_providers;  /* Shared Hiera etc */
-    env->data_provider_count = source->data_provider_count;
-    env->data_provider_capacity = source->data_provider_capacity;
-    env->deadcode = source->deadcode;  /* Shared dead-code tracker, thread-safe via mutex */
+     * loader, facts_db, data_providers, deadcode all migrated to
+     * env->prog and inherited through the shared prog pointer above. */
 
     /* Copy class definitions array (contains read-only AST pointers, but array itself must be per-thread) */
     env->class_def_capacity = source->class_def_capacity;

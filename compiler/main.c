@@ -31,6 +31,7 @@
 #include "puppet_hiera.h"
 #include "puppet_lint.h"
 #include "puppet_deadcode.h"
+#include "puppet_program_state.h"
 
 /**
  * @brief Print command-line usage information
@@ -479,7 +480,7 @@ int main(int argc, char *argv[]) {
             puppet_deadcode_t *dc = NULL;
             if (dead_code_mode && loader) {
                 dc = puppet_deadcode_create(loader->modules_path);
-                env->deadcode = dc;
+                env->prog->deadcode = dc;
                 if (verbose) fprintf(stderr, "Dead-code tracker: %zu classes, %zu defines, %zu pp-funcs, %zu rb-funcs, %zu templates declared.\n",
                     dc->declared_classes.count, dc->declared_defines.count,
                     dc->declared_pp_funcs.count, dc->declared_rb_funcs.count,

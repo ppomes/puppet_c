@@ -43,6 +43,17 @@ typedef struct puppet_program_state {
      * field and isn't thread-safe in parallel mode. */
     struct puppet_facts_db *facts_db;
 
+    /* External data providers (Hiera and friends). Set up once at
+     * configure-time; read by every per-node hiera() call. Provider
+     * implementations must be thread-safe. */
+    struct puppet_data_provider **data_providers;
+    size_t data_provider_count;
+    size_t data_provider_capacity;
+
+    /* Dead-code tracker. NULL unless --dead-code mode is active.
+     * Owns its own mutex for cross-thread mark_*_used calls. */
+    struct puppet_deadcode *deadcode;
+
     /* Pointer back to the parsed top-level statement list, so each
      * per-node compilation can replay top-level $var = $hostname?{...}
      * style assignments with the node's facts bound. Not owned. */

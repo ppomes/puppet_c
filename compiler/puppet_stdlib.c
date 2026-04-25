@@ -830,9 +830,9 @@ puppet_value_t *puppet_func_lookup(puppet_expr_list_t *args, puppet_env_t *env) 
         puppet_value_t *result = NULL;
         
         // Try data provider lookup first
-        for (size_t i = 0; i < env->data_provider_count; i++) {
-            if (env->data_providers[i] && env->data_providers[i]->lookup) {
-                result = env->data_providers[i]->lookup(key, env, env->data_providers[i]->data);
+        for (size_t i = 0; i < env->prog->data_provider_count; i++) {
+            if (env->prog->data_providers[i] && env->prog->data_providers[i]->lookup) {
+                result = env->prog->data_providers[i]->lookup(key, env, env->prog->data_providers[i]->data);
                 if (result) break;
             }
         }
@@ -870,9 +870,9 @@ puppet_value_t *puppet_func_lookup(puppet_expr_list_t *args, puppet_env_t *env) 
     // Perform lookup - try data providers first
     puppet_value_t *result = NULL;
     
-    for (size_t i = 0; i < env->data_provider_count; i++) {
-        if (env->data_providers[i] && env->data_providers[i]->lookup) {
-            result = env->data_providers[i]->lookup(key, env, env->data_providers[i]->data);
+    for (size_t i = 0; i < env->prog->data_provider_count; i++) {
+        if (env->prog->data_providers[i] && env->prog->data_providers[i]->lookup) {
+            result = env->prog->data_providers[i]->lookup(key, env, env->prog->data_providers[i]->data);
             if (result) break;
         }
     }
@@ -6586,8 +6586,8 @@ puppet_value_t *puppet_func_hiera(puppet_expr_list_t *args, puppet_env_t *env) {
     puppet_value_t *result = NULL;
 
     /* Check data providers (Hiera should be registered as one) */
-    for (size_t i = 0; i < env->data_provider_count; i++) {
-        puppet_data_provider_t *provider = env->data_providers[i];
+    for (size_t i = 0; i < env->prog->data_provider_count; i++) {
+        puppet_data_provider_t *provider = env->prog->data_providers[i];
         if (provider && provider->lookup) {
             result = provider->lookup(key, env, provider->data);
             if (result) {
