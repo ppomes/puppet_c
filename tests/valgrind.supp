@@ -1,0 +1,55 @@
+# Valgrind suppressions for puppetc tests.
+#
+# Ruby's interpreter does a lot of "still reachable" / "possibly lost"
+# allocations as part of its normal startup state — they're not real
+# leaks, just objects kept alive for the lifetime of the process and
+# released en bloc at exit. We're interested in *definite* leaks and
+# invalid memory accesses, not these.
+
+{
+   ruby-init-still-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:ruby_init
+}
+
+{
+   ruby-setup-possibly-lost
+   Memcheck:Leak
+   match-leak-kinds: possible
+   ...
+   fun:ruby_init
+}
+
+{
+   ruby-encoding-init
+   Memcheck:Leak
+   match-leak-kinds: reachable,possible
+   ...
+   obj:*libruby*
+}
+
+{
+   openssl-init-still-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable,possible
+   ...
+   obj:*libcrypto*
+}
+
+{
+   openssl-init-still-reachable-libssl
+   Memcheck:Leak
+   match-leak-kinds: reachable,possible
+   ...
+   obj:*libssl*
+}
+
+{
+   tree-sitter-still-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   obj:*libtree-sitter*
+}

@@ -125,6 +125,7 @@ EXTRA_DIST = \
     modules/srctest/files/sub/inner.txt \
     modules/erbtest/manifests/init.pp \
     modules/erbtest/templates/config.cfg.erb \
+    valgrind.supp \
     modules/epp_test/templates/trim_basic.epp \
     modules/epp_test/templates/trim_newlines.epp \
     modules/epp_test/templates/if_elsif_else.epp \
@@ -412,11 +413,65 @@ check-memory: $(top_builddir)/compiler/puppetc-compile
 	fi
 
 # Test with address sanitizer
-check-asan: 
+check-asan:
 	@echo "To run with AddressSanitizer, rebuild with:"
 	@echo "  ./configure CFLAGS='-fsanitize=address -g'"
 	@echo "  make clean && make"
 	@echo "  make check"
+
+# Comprehensive memory check across the curated test fixtures.
+# Linux-only (Valgrind doesn't ship on macOS or BSDs without effort).
+# Not part of the default `make check` since each run is slow.
+# Invoke with `make check-valgrind`.
+check-valgrind: $(top_builddir)/compiler/puppetc-compile
+	@echo "Running comprehensive memory checks with Valgrind..."
+	@$(MKDIR_P) output
+	@if [ "$$(uname -s)" != "Linux" ]; then \
+		echo "  check-valgrind is Linux-only — skipping on $$(uname -s)"; \
+		exit 0; \
+	fi; \
+	if ! command -v valgrind >/dev/null 2>&1; then \
+		echo "  valgrind not found. Install with: apt-get install valgrind"; \
+		exit 1; \
+	fi; \
+	supp="$(srcdir)/valgrind.supp"; \
+	vg="valgrind --tool=memcheck --leak-check=full \
+	    --errors-for-leak-kinds=definite --suppressions=$$supp \
+	    --error-exitcode=1 --quiet --num-callers=20"; \
+	total=0; passed=0; failed=0; \
+	run_case () { \
+	    label="$$1"; shift; \
+	    out="output/valgrind_$$label.out"; \
+	    printf "  %-40s " "$$label"; \
+	    if $$vg "$$@" > "$$out" 2>&1; then \
+	        echo "✓"; passed=$$((passed + 1)); \
+	    else \
+	        echo "✗"; failed=$$((failed + 1)); \
+	        sed 's/^/      /' "$$out" | tail -30; \
+	    fi; \
+	    total=$$((total + 1)); \
+	}; \
+	C="$(top_builddir)/compiler/puppetc-compile"; \
+	S="$(srcdir)"; \
+	run_case parser-only          "$$C" -j "$$S/puppet/basic.pp"; \
+	run_case eval-default          "$$C" -e "$$S/puppet/class.pp"; \
+	run_case multinode-parallel    "$$C" -s -a -P -f "$$S/facts/multinode_topvar_facts.yaml" \
+	                                  "$$S/puppet/multinode_topvar.pp"; \
+	run_case multinode-sequential  "$$C" -s -a -f "$$S/facts/multinode_isolation_facts.yaml" \
+	                                  "$$S/puppet/multinode_isolation.pp"; \
+	run_case hiera-classes         "$$C" -p -n prod-x.example.com \
+	                                  -f "$$S/hieratest/allfacts.yaml" \
+	                                  -m "$$S/hieratest/modules" \
+	                                  -D "$$S/hieratest/hieralocal" \
+	                                  "$$S/hieratest/manifests/site.pp"; \
+	run_case template-render       "$$C" -e -n test.example.com \
+	                                  -t /tmp/erbtest.cfg -m "$$S/modules" \
+	                                  "$$S/puppet/erbtest_site.pp"; \
+	run_case validate-refs-ok      "$$C" -s "$$S/puppet/refs_ok.pp"; \
+	run_case unknown-type-ok       "$$C" -s -m "$$S/modules" "$$S/puppet/loader_includes.pp"; \
+	echo; \
+	echo "Valgrind results: $$passed passed, $$failed failed (of $$total)"; \
+	test "$$failed" = 0
 
 # Clean test outputs
 clean-local:
@@ -635,4 +690,4 @@ check-template-fidelity:
 		exit 1; \
 	fi
 
-.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-memory check-asan check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity
+.PHONY: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-memory check-asan check-valgrind check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity
