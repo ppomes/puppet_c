@@ -54,10 +54,18 @@ typedef struct puppet_program_state {
      * Owns its own mutex for cross-thread mark_*_used calls. */
     struct puppet_deadcode *deadcode;
 
-    /* Pointer back to the parsed top-level statement list, so each
-     * per-node compilation can replay top-level $var = $hostname?{...}
-     * style assignments with the node's facts bound. Not owned. */
+    /* Pointer to the parsed program's top-level statement list, so
+     * each per-node compilation can replay top-level $var =
+     * $hostname?{...} style assignments with that node's facts
+     * bound. Not owned by program-state; the parser owns the AST. */
     puppet_stmt_list_t *top_level_stmts;
+
+    /* Ruby type registry (lazy-initialised) — populated by scanning
+     * each module's lib/puppet/type for Puppet::Type.newtype(:name).
+     * Lookups happen during the unknown-type check; lazy init must
+     * take reg_mutex to avoid races between worker threads. */
+    struct puppet_hash *ruby_types;
+    bool ruby_types_initialized;
 
     /* Mutex protecting writes to the registries below. Reads on
      * read-mostly data may go un-locked once parse is complete; any

@@ -181,7 +181,7 @@ static bool puppet_type_is_builtin(const char *type_lower) {
 }
 
 /* Scan a lib/puppet/type directory for Ruby type files and add each
- * Puppet::Type.newtype(:name) to env->ruby_types. */
+ * Puppet::Type.newtype(:name) to env->prog->ruby_types. */
 static void puppet_scan_ruby_types_dir(puppet_env_t *env, const char *dir) {
     DIR *d = opendir(dir);
     if (!d) return;
@@ -215,7 +215,7 @@ static void puppet_scan_ruby_types_dir(puppet_env_t *env, const char *dir) {
             name[len] = '\0';
             /* Store with true marker. Duplicates just overwrite. */
             puppet_value_t *marker = puppet_value_create_bool(true);
-            puppet_hash_set(env->ruby_types, name, len, marker);
+            puppet_hash_set(env->prog->ruby_types, name, len, marker);
             puppet_free(name);
             break;
         }
@@ -253,14 +253,21 @@ static void puppet_scan_ruby_types_modulepath(puppet_env_t *env, const char *mp)
 }
 
 static void puppet_init_ruby_types(puppet_env_t *env) {
-    if (!env || env->ruby_types_initialized) return;
-    env->ruby_types_initialized = true;
-    if (env->prog->loader && env->prog->loader->modules_path) {
-        /* loader->modules_path is a single path, not colon-separated —
-         * but the caller may have passed a multi-root path that the
-         * loader split; scan the single base dir here. */
-        puppet_scan_ruby_types_modulepath(env, env->prog->loader->modules_path);
+    if (!env || !env->prog) return;
+    /* Fast path: already initialised. */
+    if (env->prog->ruby_types_initialized) return;
+    /* Slow path: take the registry mutex and re-check, then scan.
+     * Without the lock, two parallel workers could both see
+     * ruby_types_initialized=false and race on populating the same
+     * shared hash, leaving it partially filled or corrupt. */
+    pthread_mutex_lock(&env->prog->reg_mutex);
+    if (!env->prog->ruby_types_initialized) {
+        if (env->prog->loader && env->prog->loader->modules_path) {
+            puppet_scan_ruby_types_modulepath(env, env->prog->loader->modules_path);
+        }
+        env->prog->ruby_types_initialized = true;
     }
+    pthread_mutex_unlock(&env->prog->reg_mutex);
 }
 
 static bool puppet_type_is_known(puppet_env_t *env, const char *type_lower) {
@@ -275,8 +282,8 @@ static bool puppet_type_is_known(puppet_env_t *env, const char *type_lower) {
     /* 3. Ruby type under modulepath (lazy init)? */
     if (env) {
         puppet_init_ruby_types(env);
-        if (env->ruby_types &&
-            puppet_hash_get(env->ruby_types, type_lower, strlen(type_lower))) {
+        if (env->prog->ruby_types &&
+            puppet_hash_get(env->prog->ruby_types, type_lower, strlen(type_lower))) {
             return true;
         }
     }
@@ -580,10 +587,10 @@ puppet_env_t *puppet_env_create(void) {
     env->virtual_resources->buckets = puppet_calloc(env->virtual_resources->bucket_count, sizeof(puppet_hash_entry_t*));
 
     /* Ruby types registry — populated lazily on first unknown-type check */
-    env->ruby_types = puppet_calloc(1, sizeof(puppet_hash_t));
-    env->ruby_types->bucket_count = 64;
-    env->ruby_types->buckets = puppet_calloc(env->ruby_types->bucket_count, sizeof(puppet_hash_entry_t*));
-    env->ruby_types_initialized = false;
+    env->prog->ruby_types = puppet_calloc(1, sizeof(puppet_hash_t));
+    env->prog->ruby_types->bucket_count = 64;
+    env->prog->ruby_types->buckets = puppet_calloc(env->prog->ruby_types->bucket_count, sizeof(puppet_hash_entry_t*));
+    env->prog->ruby_types_initialized = false;
 
     /* Initialize defined types registry */
     env->define_types = puppet_calloc(1, sizeof(puppet_hash_t));
@@ -4508,7 +4515,7 @@ void puppet_exec_program(puppet_program_t *program, puppet_env_t *env) {
      * re-evaluate site.pp top-level assignments (e.g. "$jbossenv =
      * $hostname ? {...}") with that node's facts bound, matching
      * puppetresources' fresh-compiler-per-catalog semantics. */
-    env->top_level_stmts = &program->statements;
+    env->prog->top_level_stmts = &program->statements;
 
     /* Execute all statements (in defer mode, nodes are registered not executed) */
     puppet_exec_stmt_list(&program->statements, env);
@@ -4985,9 +4992,9 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
      * compilation per node; we simulate it by replaying assignments.
      * Only assignments are replayed to avoid re-registering class /
      * define / node definitions (which would duplicate state). */
-    if (env->top_level_stmts) {
-        for (size_t i = 0; i < env->top_level_stmts->count; i++) {
-            puppet_stmt_t *s = env->top_level_stmts->stmts[i];
+    if (env->prog->top_level_stmts) {
+        for (size_t i = 0; i < env->prog->top_level_stmts->count; i++) {
+            puppet_stmt_t *s = env->prog->top_level_stmts->stmts[i];
             if (s && s->type == PUPPET_STMT_ASSIGNMENT) {
                 puppet_exec_stmt(s, env);
             }
@@ -6593,9 +6600,8 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
     env->node_scope = puppet_scope_create(env->global_scope, "node");
     env->class_scope = NULL;
 
-    /* Propagate top-level stmt pointer so the worker can re-run site.pp
-     * top-level assignments with its own facts bound. */
-    env->top_level_stmts = source->top_level_stmts;
+    /* top_level_stmts lives in env->prog and is already inherited
+     * via the shared prog pointer — no need to copy it here. */
 
     /* Copy global scope variables from source (e.g., top-level $jbossenv = 'preprod')
      * These are needed for Hiera hierarchy path interpolation like %{::jbossenv} */
@@ -6630,13 +6636,14 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
     memcpy(env->node_definitions, source->node_definitions, env->node_def_count * sizeof(puppet_stmt_t*));
     env->defer_node_execution = false;
 
-    /* Create fresh hashes for per-node state */
+    /* Create fresh hashes for per-node state.
+     * ruby_types lives in the shared prog so we don't recreate it
+     * here — sharing the registry avoids re-scanning the modulepath
+     * per worker. */
     env->class_scopes = create_hash(32);
     env->class_resource_decls = create_hash(32);
     env->resource_catalog = create_hash(64);
     env->virtual_resources = create_hash(64);
-    env->ruby_types = create_hash(64);
-    env->ruby_types_initialized = false;
     env->defined_resources = create_hash(64);
     env->exported_resources = create_hash(64);
     env->classes_being_reexecuted = create_hash(32);
