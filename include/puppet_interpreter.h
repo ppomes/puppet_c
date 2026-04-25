@@ -26,6 +26,7 @@
 /* Forward declarations */
 typedef struct puppet_env puppet_env_t;
 typedef struct puppetdb puppetdb_t;
+struct puppet_loader;  /* forward decl, see puppet_loader.h */
 
 /*
  * ===========================================================================
@@ -170,7 +171,7 @@ typedef struct puppet_env {
     puppet_scope_t **scope_stack;   /**< Stack of nested scopes */
     size_t stack_depth;            /**< Current stack depth */
     size_t stack_capacity;         /**< Maximum stack capacity */
-    struct puppet_loader *loader;   /**< Module loader for includes */
+    /* loader migrated to env->prog->loader */
     char *node_name;               /**< Current node name (for filtering) */
     bool execute_all_nodes;        /**< Execute all nodes regardless of name */
     bool node_matched;             /**< Whether a matching node was found/executed */

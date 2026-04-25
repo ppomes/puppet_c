@@ -32,7 +32,8 @@ struct puppet_hash;
 
 typedef struct puppet_program_state {
     /* Module loader. Owns its own internal mutex for the autoload
-     * cache, so it can be shared as-is across workers. */
+     * cache, so it can be shared as-is across workers. Read via
+     * env->prog->loader. */
     struct puppet_loader *loader;
 
     /* Pointer back to the parsed top-level statement list, so each

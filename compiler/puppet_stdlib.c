@@ -9,6 +9,7 @@
 #include "puppet_memory.h"
 #include "puppet_loader.h"
 #include "puppet_interpreter.h"
+#include "puppet_program_state.h"
 #include "puppet_erb.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -430,7 +431,7 @@ puppet_value_t *puppet_func_defined(puppet_expr_list_t *args, puppet_env_t *env)
         const char *name = arg->data.string.data;
 
         // Check if it's a class that's been loaded
-        if (env->loader && puppet_loader_is_class_loaded(env->loader, name)) {
+        if (env->prog->loader && puppet_loader_is_class_loaded(env->prog->loader, name)) {
             is_defined = true;
         }
 
@@ -479,7 +480,7 @@ puppet_value_t *puppet_func_defined(puppet_expr_list_t *args, puppet_env_t *env)
                 // Special handling for Class references: Class['nginx'] checks if class is included
                 if (strcasecmp(type, "Class") == 0) {
                     // Check if class has been included
-                    if (env->loader && puppet_loader_is_class_loaded(env->loader, title)) {
+                    if (env->prog->loader && puppet_loader_is_class_loaded(env->prog->loader, title)) {
                         is_defined = true;
                     }
                     // Also check class_scopes for included classes
@@ -5689,8 +5690,8 @@ puppet_value_t *puppet_func_create_resources(puppet_expr_list_t *args, puppet_en
     }
 
     /* Try to autoload the define if not already registered */
-    if (!define_ptr && env->loader && strchr(res_type, ':')) {
-        puppet_stmt_t *loaded_def = puppet_loader_load_define(env->loader, res_type);
+    if (!define_ptr && env->prog->loader && strchr(res_type, ':')) {
+        puppet_stmt_t *loaded_def = puppet_loader_load_define(env->prog->loader, res_type);
         if (loaded_def) {
             puppet_debug("create_resources: Autoloaded defined type: %s", res_type);
             puppet_value_t *stmt_ptr = puppet_calloc(1, sizeof(puppet_value_t));
@@ -5978,8 +5979,8 @@ puppet_value_t *puppet_func_ensure_resource(puppet_expr_list_t *args, puppet_env
     puppet_value_t *define_ptr = puppet_hash_get(env->define_types, res_type, strlen(res_type));
 
     /* Try to autoload the define if not already registered */
-    if (!define_ptr && env->loader && strchr(res_type, ':')) {
-        puppet_stmt_t *loaded_def = puppet_loader_load_define(env->loader, res_type);
+    if (!define_ptr && env->prog->loader && strchr(res_type, ':')) {
+        puppet_stmt_t *loaded_def = puppet_loader_load_define(env->prog->loader, res_type);
         if (loaded_def) {
             puppet_debug("ensure_resource: Autoloaded defined type: %s", res_type);
             puppet_value_t *stmt_ptr = puppet_calloc(1, sizeof(puppet_value_t));
@@ -6677,7 +6678,7 @@ puppet_value_t *puppet_func_file(puppet_expr_list_t *args, puppet_env_t *env) {
             /* Module-relative path: module_name/file_path */
             /* Try to find in module's files directory */
             const char *slash = strchr(path, '/');
-            if (slash && env->loader && env->loader->modules_path) {
+            if (slash && env->prog->loader && env->prog->loader->modules_path) {
                 size_t module_len = slash - path;
                 char module_name[256];
                 if (module_len < sizeof(module_name)) {
@@ -6686,7 +6687,7 @@ puppet_value_t *puppet_func_file(puppet_expr_list_t *args, puppet_env_t *env) {
 
                     /* Look in the modules path */
                     snprintf(fullpath, sizeof(fullpath), "%s/%s/files/%s",
-                             env->loader->modules_path, module_name, slash + 1);
+                             env->prog->loader->modules_path, module_name, slash + 1);
                     fp = fopen(fullpath, "r");
                 }
             }

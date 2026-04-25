@@ -16,6 +16,7 @@
 #include "puppet_memory.h"
 #include "puppet_stdlib.h"
 #include "puppet_loader.h"
+#include "puppet_program_state.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -448,8 +449,8 @@ char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_
     (void)rb_eval_string_protect("$puppet_vars = {}", &state);
 
     // Set modules path for nested template resolution (scope.function_template)
-    if (env && env->loader && env->loader->modules_path) {
-        VALUE modules_path = rb_str_new2(env->loader->modules_path);
+    if (env && env->prog->loader && env->prog->loader->modules_path) {
+        VALUE modules_path = rb_str_new2(env->prog->loader->modules_path);
         rb_gv_set("$puppet_modules_path", modules_path);
     } else {
         rb_gv_set("$puppet_modules_path", Qnil);
@@ -583,8 +584,8 @@ static char *resolve_template_path(const char *template_path, puppet_env_t *env)
 
     // Get the modules path from loader
     const char *modules_path = NULL;
-    if (env && env->loader && env->loader->modules_path) {
-        modules_path = env->loader->modules_path;
+    if (env && env->prog->loader && env->prog->loader->modules_path) {
+        modules_path = env->prog->loader->modules_path;
     }
 
     // Build full path: modules_path/module_name/templates/template_file
@@ -741,8 +742,8 @@ static char *resolve_epp_template_path(const char *template_name, puppet_env_t *
 
     // Get the modules path from loader (same as ERB)
     const char *modules_path = NULL;
-    if (env && env->loader && env->loader->modules_path) {
-        modules_path = env->loader->modules_path;
+    if (env && env->prog->loader && env->prog->loader->modules_path) {
+        modules_path = env->prog->loader->modules_path;
     }
 
     // Build full path: modules_path/module_name/templates/template_file

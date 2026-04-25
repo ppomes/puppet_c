@@ -255,11 +255,11 @@ static void puppet_scan_ruby_types_modulepath(puppet_env_t *env, const char *mp)
 static void puppet_init_ruby_types(puppet_env_t *env) {
     if (!env || env->ruby_types_initialized) return;
     env->ruby_types_initialized = true;
-    if (env->loader && env->loader->modules_path) {
+    if (env->prog->loader && env->prog->loader->modules_path) {
         /* loader->modules_path is a single path, not colon-separated —
          * but the caller may have passed a multi-root path that the
          * loader split; scan the single base dir here. */
-        puppet_scan_ruby_types_modulepath(env, env->loader->modules_path);
+        puppet_scan_ruby_types_modulepath(env, env->prog->loader->modules_path);
     }
 }
 
@@ -527,7 +527,7 @@ puppet_env_t *puppet_env_create(void) {
     env->stack_capacity = 16;
     env->scope_stack = puppet_calloc(env->stack_capacity, sizeof(puppet_scope_t*));
     env->stack_depth = 0;
-    env->loader = NULL;  /* Loader is optional, set separately */
+    env->prog->loader = NULL;  /* Loader is optional, set separately */
     env->node_name = NULL;  /* No node filtering by default */
     env->execute_all_nodes = false;
     env->node_matched = false;
@@ -1558,7 +1558,7 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
 
             else {
                 /* Check if it's a custom Ruby function in a module */
-                if (env->loader && puppet_loader_has_custom_function(env->loader, func_name)) {
+                if (env->prog->loader && puppet_loader_has_custom_function(env->prog->loader, func_name)) {
                     /* Custom function found - return placeholder for catalog */
                     puppet_debug("Custom function %s() - returning placeholder", func_name);
 
@@ -2817,8 +2817,8 @@ static void puppet_exec_collector(puppet_stmt_t *stmt, puppet_env_t *env) {
                     }
 
                     /* Try to autoload the define if not found */
-                    if (!define_ptr && env->loader && strchr(vres->type, ':')) {
-                        puppet_stmt_t *loaded_def = puppet_loader_load_define(env->loader, vres->type);
+                    if (!define_ptr && env->prog->loader && strchr(vres->type, ':')) {
+                        puppet_stmt_t *loaded_def = puppet_loader_load_define(env->prog->loader, vres->type);
                         if (loaded_def) {
                             puppet_debug("Collector: autoloaded defined type: %s", vres->type);
                             puppet_value_t *stmt_ptr = puppet_calloc(1, sizeof(puppet_value_t));
@@ -3120,8 +3120,8 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
 
                                 // Find the class definition
                                 puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
-                                if (!class_def && env->loader) {
-                                    class_def = puppet_loader_load_class(env->loader, class_name);
+                                if (!class_def && env->prog->loader) {
+                                    class_def = puppet_loader_load_class(env->prog->loader, class_name);
                                 }
 
                                 if (class_def) {
@@ -3182,8 +3182,8 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
 
                         // Find the class definition
                         puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
-                        if (!class_def && env->loader) {
-                            class_def = puppet_loader_load_class(env->loader, class_name);
+                        if (!class_def && env->prog->loader) {
+                            class_def = puppet_loader_load_class(env->prog->loader, class_name);
                         }
 
                         if (!class_def) {
@@ -3205,8 +3205,8 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                             puppet_debug("Class %s inherits from %s", class_name, parent_name);
 
                             puppet_stmt_t *parent_def = puppet_find_class_def(env, parent_lookup_name);
-                            if (!parent_def && env->loader) {
-                                parent_def = puppet_loader_load_class(env->loader, parent_lookup_name);
+                            if (!parent_def && env->prog->loader) {
+                                parent_def = puppet_loader_load_class(env->prog->loader, parent_lookup_name);
                             }
 
                             if (parent_def) {
@@ -3515,8 +3515,8 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                 }
 
                 /* Try to autoload the define if not already registered */
-                if (!define_ptr && env->loader && strchr(stmt->data.resource.type.data, ':')) {
-                    puppet_stmt_t *loaded_def = puppet_loader_load_define(env->loader,
+                if (!define_ptr && env->prog->loader && strchr(stmt->data.resource.type.data, ':')) {
+                    puppet_stmt_t *loaded_def = puppet_loader_load_define(env->prog->loader,
                         stmt->data.resource.type.data);
                     if (loaded_def) {
                         /* Register the loaded define */
@@ -3634,10 +3634,10 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                 }
                 type_lower[tlen] = '\0';
                 bool known = puppet_type_is_known(env, type_lower);
-                if (!known && env->loader) {
+                if (!known && env->prog->loader) {
                     /* Try autoload: module 'foo' owning define foo in
                      * foo/manifests/init.pp is valid unnamespaced usage. */
-                    puppet_stmt_t *loaded = puppet_loader_load_define(env->loader,
+                    puppet_stmt_t *loaded = puppet_loader_load_define(env->prog->loader,
                         stmt->data.resource.type.data);
                     if (loaded) {
                         puppet_value_t *stmt_ptr = puppet_calloc(1, sizeof(puppet_value_t));
@@ -4591,8 +4591,8 @@ static bool puppet_include_class_from_def(puppet_stmt_t *class_def, puppet_env_t
 
         /* Find and include the parent class */
         puppet_stmt_t *parent_def = puppet_find_class_def(env, parent_lookup_name);
-        if (!parent_def && env->loader) {
-            parent_def = puppet_loader_load_class(env->loader, parent_lookup_name);
+        if (!parent_def && env->prog->loader) {
+            parent_def = puppet_loader_load_class(env->prog->loader, parent_lookup_name);
         }
 
         if (parent_def) {
@@ -4724,8 +4724,8 @@ void puppet_exec_include(puppet_stmt_t *include_stmt, puppet_env_t *env) {
         }
 
         /* If not found, try to load from module files using the loader */
-        if (env->loader) {
-            if (!puppet_loader_include_class(env->loader, class_name, env)) {
+        if (env->prog->loader) {
+            if (!puppet_loader_include_class(env->prog->loader, class_name, env)) {
                 puppet_warning_at(name_expr->loc, "Failed to include class '%s'", class_name);
                 puppet_env_increment_warning(env);
             }
@@ -4764,8 +4764,8 @@ void puppet_exec_require(puppet_stmt_t *require_stmt, puppet_env_t *env) {
             }
 
             /* If not found, try to load from module files using the loader */
-            if (env->loader) {
-                if (!puppet_loader_include_class(env->loader, class_name, env)) {
+            if (env->prog->loader) {
+                if (!puppet_loader_include_class(env->prog->loader, class_name, env)) {
                     puppet_warning_at(name_expr->loc, "Failed to require class '%s'", class_name);
                     puppet_env_increment_warning(env);
                 }
@@ -4804,8 +4804,8 @@ void puppet_exec_contain(puppet_stmt_t *contain_stmt, puppet_env_t *env) {
             }
 
             /* If not found, try to load from module files using the loader */
-            if (env->loader) {
-                if (!puppet_loader_include_class(env->loader, class_name, env)) {
+            if (env->prog->loader) {
+                if (!puppet_loader_include_class(env->prog->loader, class_name, env)) {
                     puppet_warning_at(name_expr->loc, "Failed to contain class '%s'", class_name);
                     puppet_env_increment_warning(env);
                 }
@@ -4817,9 +4817,9 @@ void puppet_exec_contain(puppet_stmt_t *contain_stmt, puppet_env_t *env) {
     }
 }
 
-void puppet_env_set_loader(puppet_env_t *env, puppet_loader_t *loader) {
-    if (!env) return;
-    env->loader = loader;
+void puppet_env_set_loader(puppet_env_t *env, struct puppet_loader *loader) {
+    if (!env || !env->prog) return;
+    env->prog->loader = loader;
 }
 
 /**
@@ -5009,8 +5009,8 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
      * current_node_failed via the standard path below. */
     if (env->build_catalog && env->catalog) {
         puppet_catalog_validate_refs(env->catalog);
-        if (env->loader && env->loader->modules_path) {
-            puppet_catalog_validate_sources(env->catalog, env->loader->modules_path);
+        if (env->prog->loader && env->prog->loader->modules_path) {
+            puppet_catalog_validate_sources(env->catalog, env->prog->loader->modules_path);
         }
     }
 
@@ -5248,8 +5248,8 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
         /* Finalize validation: same hook as puppet_exec_node_for_certname. */
         if (env->build_catalog && env->catalog) {
             puppet_catalog_validate_refs(env->catalog);
-            if (env->loader && env->loader->modules_path) {
-                puppet_catalog_validate_sources(env->catalog, env->loader->modules_path);
+            if (env->prog->loader && env->prog->loader->modules_path) {
+                puppet_catalog_validate_sources(env->catalog, env->prog->loader->modules_path);
             }
         }
 
@@ -5327,8 +5327,8 @@ void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t
     puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
 
     // If not found in registered definitions, try to load from module files
-    if (!class_def && env->loader) {
-        class_def = puppet_loader_load_class(env->loader, class_name);
+    if (!class_def && env->prog->loader) {
+        class_def = puppet_loader_load_class(env->prog->loader, class_name);
     }
 
     if (!class_def) {
@@ -5666,9 +5666,9 @@ puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name
         // Class not found in scopes - try to auto-include it
         // This is Puppet's behavior when referencing $class::var before include
         puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
-        if (!class_def && env->loader) {
+        if (!class_def && env->prog->loader) {
             // Try to autoload the class from its manifest file
-            class_def = puppet_loader_load_class(env->loader, class_name);
+            class_def = puppet_loader_load_class(env->prog->loader, class_name);
         }
         if (class_def) {
             puppet_include_class_from_def(class_def, env);
@@ -6611,8 +6611,9 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
         }
     }
 
-    /* Share read-only data from source */
-    env->loader = source->loader;  /* Shared, thread-safe */
+    /* Share read-only data from source.
+     * loader was migrated to env->prog and is already inherited
+     * through the shared prog pointer set above. */
     env->facts_db = source->facts_db;  /* Shared, read-only per thread */
     env->data_providers = source->data_providers;  /* Shared Hiera etc */
     env->data_provider_count = source->data_provider_count;
