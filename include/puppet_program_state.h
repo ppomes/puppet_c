@@ -70,7 +70,11 @@ typedef struct puppet_program_state {
     /* Pure config flags, set once before any per-node compile and
      * read everywhere. NOT per-worker overridable — these are the
      * ones that genuinely belong to "the run", not "this node":
-     *  - skip_erb: forced true in --parallel mode for thread safety
+     *  - skip_erb: explicit opt-in for "render no ERB at all" (CI fast
+     *              path). No longer coupled to --parallel — that mode
+     *              now uses the thread-safe native ERB engine with a
+     *              ruby_mutex-serialised fallback for unsupported
+     *              templates.
      *  - verbose:  -v / --verbose CLI flag */
     bool skip_erb;
     bool verbose;

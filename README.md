@@ -22,6 +22,7 @@ A fast, lightweight Puppet compiler written in C for local manifest development 
 - **Puppet 8 linter**: Detect legacy facts, deprecated functions, ERB issues, Ruby API changes
 - **Dead-code detection**: Find classes, defines, types, functions and templates never reached at runtime
 - **Minimal dependencies**: Pure C with optional Ruby for ERB templates
+- **Native ERB engine**: Renders the common ERB subset directly in C (cached AST). Halves sequential `--all-nodes` time. Parallel mode (`-P`) parallelises the native renders across worker threads; templates outside the subset are marshalled to a single Ruby daemon thread (puppetresources-style) so libruby is only ever called from one OS thread
 - **Complete toolchain**: Includes compiler, server, agent, and facter binaries
 
 ## Quick Start
@@ -515,7 +516,7 @@ docker compose -f docker-compose.demo.yml down
 - Classes, resources, nodes, defined types
 - Conditionals: if/elsif/else, unless, case, ternary, selector
 - Variable scoping, string interpolation, heredocs
-- ERB templates (via embedded Ruby)
+- ERB templates: native C engine for the common subset (instance vars, `scope.lookupvar`, indexing, comments, trim markers), embedded Ruby fallback for the rest
 - EPP templates (native Puppet templating)
 - Hiera lookups (YAML backend)
 - Module autoloading
@@ -575,7 +576,7 @@ docker compose -f docker-compose.demo.yml down
 ### Known Limitations
 
 - **Type matching**: `=~ Type` syntax parsed but not evaluated
-- **All-nodes mode**: ERB templates skipped for faster CI/CD validation
+- **Ruby fallback throughput in `-P`**: templates outside the native engine's subset are rendered by a single Ruby daemon thread (libruby is not safe to call from arbitrary pthread workers). The native engine still parallelises across worker threads, so `-P` remains faster than sequential — but Ruby fallbacks queue up serially on the daemon
 
 ## Security
 
@@ -681,6 +682,17 @@ Agents validate server certificates against CA, and servers can validate client 
 | - CA signing    |  |                  |  |                 |
 +-----------------+  +------------------+  +-----------------+
 ```
+
+### ERB Rendering
+
+Two-tier engine, inspired by [language-puppet](https://github.com/bartavelle/language-puppet):
+
+1. **Native C engine** (`compiler/puppet_erb_native.c`) — parses + evaluates the common subset (`<%= @var %>`, `scope.lookupvar('x')`, `scope['x']`, `expr[idx]` chains, `'literal'` / `"literal"` without `#{}`, comments, `<%-` / `-%>` trim markers). Parsed ASTs are cached per template path and shared across nodes.
+2. **Ruby fallback via daemon thread** (`compiler/puppet_erb.c`) — embedded Ruby ERB for everything the native engine doesn't recognise (control flow, arithmetic, method calls, `#{}` interpolation). All Ruby calls are marshalled to a single dedicated OS thread that owns the libruby VM, following the pattern used by Haskell language-puppet's `templateDaemon`. Worker threads (sequential or `-P`) push render requests to a condvar-protected queue and block until the daemon completes. A `$puppet_erb_cache` Ruby hash caches parsed `ERB.new` objects per path inside the daemon.
+
+The renderer always tries the native path first; if it returns NULL the template is enqueued to the daemon. The native engine's "unsupported" decision is also cached so a template is parsed at most once.
+
+This decoupling makes parallel mode safe: libruby is never touched from worker threads, only from the single daemon. Ruby fallbacks queue up serially through the daemon, but the native renders execute concurrently. Skip-ERB (`env->prog->skip_erb`) remains an explicit opt-in for pure-validation CI runs.
 
 ## Why C?
 

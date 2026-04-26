@@ -13,6 +13,7 @@
  */
 
 #include "puppet_erb.h"
+#include "puppet_erb_native.h"
 #include "puppet_memory.h"
 #include "puppet_stdlib.h"
 #include "puppet_loader.h"
@@ -166,6 +167,9 @@ puppet_ruby_context_t *puppet_ruby_init(void) {
         "end\n"
         "$puppet_vars = {}\n"
         "$puppet_modules_path = nil\n"
+        "# Cache of parsed ERB objects keyed by template path. Reused across\n"
+        "# nodes so the same template is parsed only once per process.\n"
+        "$puppet_erb_cache = {}\n"
         "# Define has_variable? in main scope for templates that call it directly\n"
         "def has_variable?(name)\n"
         "  $scope.has_variable?(name) if $scope\n"
@@ -429,26 +433,58 @@ static void puppet_export_env_to_ruby(puppet_env_t *env, puppet_ruby_context_t *
     }
 }
 
-char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx, const char *template_name) {
-    // Skip ERB rendering if flag is set (for parallel mode)
-    if (env && env->prog->skip_erb) {
-        return puppet_strdup("[ERB skipped in parallel mode]");
-    }
+/* ---------------- Ruby daemon thread ----------------
+ *
+ * libruby is not safe to call from arbitrary pthread workers: the GVL
+ * is not enough — Ruby keeps per-thread VM state that must be set up
+ * through its own threading API. Rather than fight that, we adopt the
+ * pattern used by Haskell language-puppet: one dedicated OS thread owns
+ * the Ruby VM, and all Ruby calls are marshalled to it via a queue.
+ *
+ * Worker threads (sequential or `-P` parallel) push a request and block
+ * on a per-request condvar; the daemon dequeues, renders synchronously
+ * with its single Ruby VM, and signals completion.
+ *
+ * The daemon is started lazily on first use, so callers that never need
+ * the Ruby fallback (everything fits the native engine + skip_erb runs)
+ * never pay the libruby startup cost.
+ */
 
-    // Use Ruby ERB - this is now required
-    if (!ruby_ctx || !ruby_ctx->initialized) {
-        printf("Error: Ruby ERB context not initialized\n");
-        return NULL;
-    }
+typedef struct erb_request {
+    const char *template_content;
+    puppet_env_t *env;
+    const char *template_name;
+    char *result;          /* owned by caller after wait completes */
+    bool done;
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
+    struct erb_request *next;
+} erb_request_t;
 
-    // Acquire Ruby mutex for thread-safety (Ruby VM is not thread-safe)
-    pthread_mutex_lock(&ruby_mutex);
+static pthread_t ruby_daemon_tid;
+static bool ruby_daemon_started = false;
+static bool ruby_daemon_failed = false;
+static pthread_mutex_t ruby_daemon_init_mu = PTHREAD_MUTEX_INITIALIZER;
 
-    // Clear $puppet_vars hash before populating
+static erb_request_t *queue_head = NULL;
+static erb_request_t *queue_tail = NULL;
+static pthread_mutex_t queue_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t queue_cv = PTHREAD_COND_INITIALIZER;
+
+/*
+ * Render a template synchronously using the Ruby VM. MUST be called
+ * from the daemon thread that initialised Ruby; otherwise libruby will
+ * crash. ruby_ctx is just the daemon's own VM handle.
+ */
+static char *ruby_render_in_daemon(const char *template_content,
+                                   puppet_env_t *env,
+                                   puppet_ruby_context_t *ruby_ctx,
+                                   const char *template_name) {
+    if (!ruby_ctx || !ruby_ctx->initialized) return NULL;
+
     int state = 0;
     (void)rb_eval_string_protect("$puppet_vars = {}", &state);
 
-    // Set modules path for nested template resolution (scope.function_template)
     if (env && env->prog->loader && env->prog->loader->modules_path) {
         VALUE modules_path = rb_str_new2(env->prog->loader->modules_path);
         rb_gv_set("$puppet_modules_path", modules_path);
@@ -456,46 +492,158 @@ char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_
         rb_gv_set("$puppet_modules_path", Qnil);
     }
 
-    // Export Puppet variables to Ruby globals
     puppet_export_env_to_ruby(env, ruby_ctx);
 
-    // Create scope object for scope.lookupvar() support in templates
-    // Use a method to define local 'scope' variable in the ERB binding context
     (void)rb_eval_string_protect("$scope = PuppetScope.new($puppet_vars)", &state);
-    if (state != 0) {
-        printf("Warning: Failed to create scope object (state=%d)\n", state);
-    }
 
-    // Create ERB template string
     VALUE template_str = rb_str_new2(template_content);
     rb_gv_set("$template_content", template_str);
 
-    // Process with ERB - define 'scope' as local variable in the binding
-    // Use trim_mode: '-' to handle -%> (strip trailing newlines after tags)
+    if (template_name) {
+        rb_gv_set("$template_key", rb_str_new2(template_name));
+    } else {
+        rb_gv_set("$template_key", Qnil);
+    }
+
     VALUE result = rb_eval_string_protect(
-        "scope = $scope; erb = ERB.new($template_content, trim_mode: '-'); erb.result(binding)", &state);
-    
+        "scope = $scope\n"
+        "erb = $template_key ? $puppet_erb_cache[$template_key] : nil\n"
+        "unless erb\n"
+        "  erb = ERB.new($template_content, trim_mode: '-')\n"
+        "  $puppet_erb_cache[$template_key] = erb if $template_key\n"
+        "end\n"
+        "erb.result(binding)", &state);
+
     if (state == 0) {
         const char *rendered = StringValueCStr(result);
-        char *result_str = puppet_strdup(rendered);
-        pthread_mutex_unlock(&ruby_mutex);
-        return result_str;
+        return puppet_strdup(rendered);
+    }
+
+    if (template_name) {
+        fprintf(stderr, "Error: ERB processing failed in %s (state=%d)\n", template_name, state);
     } else {
-        if (template_name) {
-            printf("Error: ERB processing failed in %s (state=%d)\n", template_name, state);
-        } else {
-            printf("Error: ERB processing failed (state=%d)\n", state);
+        fprintf(stderr, "Error: ERB processing failed (state=%d)\n", state);
+    }
+    if (state == 6) {  /* TAG_RAISE */
+        VALUE exception = rb_errinfo();
+        if (!NIL_P(exception)) {
+            VALUE message = rb_obj_as_string(exception);
+            fprintf(stderr, "Ruby exception: %s\n", StringValueCStr(message));
         }
-        if (state == 6) {  // TAG_RAISE - exception occurred
-            VALUE exception = rb_errinfo();
-            if (!NIL_P(exception)) {
-                VALUE message = rb_obj_as_string(exception);
-                printf("Ruby exception: %s\n", StringValueCStr(message));
-            }
-        }
-        pthread_mutex_unlock(&ruby_mutex);
+    }
+    return NULL;
+}
+
+static void *ruby_daemon_loop(void *arg) {
+    (void)arg;
+    /* Initialise Ruby in this thread — it stays bound to the daemon for
+     * the lifetime of the process. */
+    puppet_ruby_context_t *ruby_ctx = puppet_ruby_init();
+    if (!ruby_ctx || !ruby_ctx->initialized) {
+        pthread_mutex_lock(&ruby_daemon_init_mu);
+        ruby_daemon_failed = true;
+        pthread_mutex_unlock(&ruby_daemon_init_mu);
         return NULL;
     }
+
+    for (;;) {
+        pthread_mutex_lock(&queue_mu);
+        while (!queue_head) pthread_cond_wait(&queue_cv, &queue_mu);
+        erb_request_t *req = queue_head;
+        queue_head = req->next;
+        if (!queue_head) queue_tail = NULL;
+        pthread_mutex_unlock(&queue_mu);
+
+        char *rendered = ruby_render_in_daemon(req->template_content,
+                                               req->env,
+                                               ruby_ctx,
+                                               req->template_name);
+
+        pthread_mutex_lock(&req->mu);
+        req->result = rendered;
+        req->done = true;
+        pthread_cond_signal(&req->cv);
+        pthread_mutex_unlock(&req->mu);
+    }
+    /* unreachable */
+    return NULL;
+}
+
+static void ensure_ruby_daemon(void) {
+    pthread_mutex_lock(&ruby_daemon_init_mu);
+    if (!ruby_daemon_started && !ruby_daemon_failed) {
+        if (pthread_create(&ruby_daemon_tid, NULL, ruby_daemon_loop, NULL) == 0) {
+            ruby_daemon_started = true;
+            pthread_detach(ruby_daemon_tid);
+        } else {
+            ruby_daemon_failed = true;
+        }
+    }
+    pthread_mutex_unlock(&ruby_daemon_init_mu);
+}
+
+/*
+ * Push a render request to the daemon and block until the response.
+ * Returns the rendered string (caller frees with puppet_free) or NULL
+ * on Ruby error / daemon startup failure.
+ */
+static char *ruby_daemon_render(const char *template_content,
+                                puppet_env_t *env,
+                                const char *template_name) {
+    ensure_ruby_daemon();
+    pthread_mutex_lock(&ruby_daemon_init_mu);
+    bool failed = ruby_daemon_failed;
+    pthread_mutex_unlock(&ruby_daemon_init_mu);
+    if (failed) return NULL;
+
+    erb_request_t req;
+    req.template_content = template_content;
+    req.env = env;
+    req.template_name = template_name;
+    req.result = NULL;
+    req.done = false;
+    req.next = NULL;
+    pthread_mutex_init(&req.mu, NULL);
+    pthread_cond_init(&req.cv, NULL);
+
+    pthread_mutex_lock(&queue_mu);
+    if (queue_tail) queue_tail->next = &req;
+    else queue_head = &req;
+    queue_tail = &req;
+    pthread_cond_signal(&queue_cv);
+    pthread_mutex_unlock(&queue_mu);
+
+    pthread_mutex_lock(&req.mu);
+    while (!req.done) pthread_cond_wait(&req.cv, &req.mu);
+    pthread_mutex_unlock(&req.mu);
+
+    pthread_mutex_destroy(&req.mu);
+    pthread_cond_destroy(&req.cv);
+    return req.result;
+}
+
+char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx, const char *template_name) {
+    (void)ruby_ctx;  /* legacy parameter — Ruby context is owned by the daemon */
+
+    // Skip ERB rendering when explicitly requested (CI fast path).
+    if (env && env->prog->skip_erb) {
+        return puppet_strdup("[ERB rendering disabled]");
+    }
+
+    // Fast path: native (Ruby-free) renderer for the supported subset.
+    // The native engine caches its parsed AST per template_name and is
+    // thread-safe (mutex-protected AST cache), so it parallelises
+    // straightforwardly across worker threads.
+    {
+        char *native = puppet_erb_native_render(template_content, template_name, env);
+        if (native) return native;
+    }
+
+    // Fallback: route to the Ruby daemon thread so the libruby VM is
+    // only ever touched from one OS thread (libruby is not pthread-safe
+    // even with a mutex). Workers — sequential or `-P` — block on the
+    // request's condvar until the daemon completes the render.
+    return ruby_daemon_render(template_content, env, template_name);
 }
 
 char *puppet_erb_file(const char *template_path, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx) {
@@ -634,25 +782,16 @@ puppet_value_t *puppet_func_template(puppet_expr_list_t *args, puppet_env_t *env
         return puppet_value_create_undef();
     }
 
-    // Skip ERB in parallel mode - return placeholder
+    // Skip when ERB rendering is disabled (env->prog->skip_erb).
     if (env && env->prog->skip_erb) {
-        return puppet_value_create_string("[template skipped in parallel mode]",
-                                          strlen("[template skipped in parallel mode]"));
+        return puppet_value_create_string("[template rendering disabled]",
+                                          strlen("[template rendering disabled]"));
     }
 
-    // Initialize Ruby if needed (once for all templates)
-    static puppet_ruby_context_t *ruby_ctx = NULL;
-    static pthread_mutex_t ruby_init_mutex = PTHREAD_MUTEX_INITIALIZER;
-    if (!ruby_ctx) {
-        pthread_mutex_lock(&ruby_init_mutex);
-        if (!ruby_ctx) {  /* Double-check after acquiring lock */
-            ruby_ctx = puppet_ruby_init();
-        }
-        pthread_mutex_unlock(&ruby_init_mutex);
-        if (!ruby_ctx) {
-            return puppet_value_create_undef();
-        }
-    }
+    // Ruby init is owned by the Ruby daemon thread (see ruby_daemon_loop);
+    // we only ever call puppet_erb_file from the main thread, which routes
+    // to the daemon. Pass NULL — puppet_erb_render ignores the parameter.
+    puppet_ruby_context_t *ruby_ctx = NULL;
 
     // Concatenate all template outputs
     char *full_output = NULL;
@@ -1358,10 +1497,10 @@ puppet_value_t *puppet_func_epp(puppet_expr_list_t *args, puppet_env_t *env) {
         return puppet_value_create_undef();
     }
 
-    // Skip EPP in parallel mode - return placeholder
+    // Skip when ERB/EPP rendering is disabled (env->prog->skip_erb).
     if (env && env->prog->skip_erb) {
-        return puppet_value_create_string("[epp template skipped in parallel mode]",
-                                          strlen("[epp template skipped in parallel mode]"));
+        return puppet_value_create_string("[epp template rendering disabled]",
+                                          strlen("[epp template rendering disabled]"));
     }
 
     // Get template path

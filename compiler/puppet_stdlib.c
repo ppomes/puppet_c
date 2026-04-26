@@ -6728,21 +6728,15 @@ puppet_value_t *puppet_func_inline_template(puppet_expr_list_t *args, puppet_env
         return puppet_value_create_undef();
     }
 
-    /* Skip ERB in parallel mode - return placeholder */
+    /* Skip when ERB rendering is disabled (env->prog->skip_erb). */
     if (env && env->prog->skip_erb) {
-        return puppet_value_create_string("[inline_template skipped in parallel mode]",
-                                          strlen("[inline_template skipped in parallel mode]"));
+        return puppet_value_create_string("[inline_template rendering disabled]",
+                                          strlen("[inline_template rendering disabled]"));
     }
 
-    /* Initialize Ruby if needed (shared context) */
-    static puppet_ruby_context_t *ruby_ctx = NULL;
-    if (!ruby_ctx) {
-        ruby_ctx = puppet_ruby_init();
-        if (!ruby_ctx) {
-            puppet_log(PUPPET_LOG_ERROR, "inline_template(): failed to initialize Ruby");
-            return puppet_value_create_undef();
-        }
-    }
+    /* Ruby init is owned by the Ruby daemon thread; puppet_erb_render
+     * routes to the daemon and ignores the ruby_ctx parameter. */
+    puppet_ruby_context_t *ruby_ctx = NULL;
 
     /* Concatenate all template outputs */
     char *full_output = NULL;

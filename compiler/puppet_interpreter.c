@@ -5300,7 +5300,11 @@ void puppet_env_set_execute_all_nodes(puppet_env_t *env, bool execute_all) {
     if (execute_all) {
         puppet_free(env->node_name);
         env->node_name = NULL;  /* Clear specific node when in all-nodes mode */
-        env->prog->skip_erb = true;   /* Skip ERB in all-nodes mode for performance */
+        /* ERB stays enabled in --all-nodes: the native C engine renders
+         * the common subset directly (cache shared via puppet_program_state),
+         * and the Ruby fallback serialises through ruby_mutex when needed.
+         * Parallel mode (-P) keeps ERB enabled too — see
+         * puppet_env_set_parallel_nodes. */
     }
 }
 
@@ -6562,7 +6566,10 @@ void puppet_env_increment_warning(puppet_env_t *env) {
 void puppet_env_set_parallel_nodes(puppet_env_t *env, bool parallel) {
     if (!env) return;
     env->parallel_nodes = parallel;
-    env->prog->skip_erb = parallel;  /* Skip ERB in parallel mode for thread safety */
+    /* ERB stays enabled in parallel mode: the native engine is thread-safe
+     * (mutex-protected AST cache), and Ruby fallbacks serialise via
+     * ruby_mutex inside puppet_erb_render. Skip-ERB remains an explicit
+     * opt-in (env->prog->skip_erb), no longer coupled to -P. */
 
     /* Allocate stats mutex if enabling parallel mode */
     if (parallel && !env->stats_mutex) {
@@ -7093,14 +7100,16 @@ static void *parallel_node_worker(void *arg) {
 /**
  * @brief Execute nodes in parallel using pthreads
  *
- * Uses native pthreads for true parallelism. ERB template rendering is
- * skipped in parallel mode (env->prog->skip_erb = true), allowing thread-safe
- * execution without Ruby threading issues.
+ * Uses native pthreads for true parallelism. ERB rendering is enabled:
+ * the native C engine handles the common subset under a short cache
+ * mutex, and Ruby fallbacks are serialised through ruby_mutex inside
+ * puppet_erb_render. Set env->prog->skip_erb explicitly if you want to
+ * bypass ERB entirely (CI fast path).
  */
 void puppet_exec_nodes_parallel(puppet_env_t *env, size_t node_count) {
     if (!env || node_count == 0) return;
 
-    puppet_debug("Starting parallel execution of %zu nodes using pthreads (ERB skipped)", node_count);
+    puppet_debug("Starting parallel execution of %zu nodes using pthreads", node_count);
 
     /* Allocate thread array and work items */
     pthread_t *threads = puppet_calloc(node_count, sizeof(pthread_t));
