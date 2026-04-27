@@ -1841,7 +1841,15 @@ puppet_value_t *puppet_eval_variable(const char *name, puppet_location_t loc, pu
     puppet_value_t *value = puppet_variable_lookup_chain(env, name);
 
     if (!value) {
-        puppet_warning_at(loc, "Undefined variable: %s", name);
+        /* Suppress the warning during the deferred top-level pre-pass:
+         * site.pp is executed once with no current node (just to register
+         * node/class definitions), so $facts and other per-node bindings
+         * are legitimately absent. Real lookups happen again when each
+         * node is compiled — that's where genuinely missing variables
+         * surface. */
+        if (!env->defer_node_execution) {
+            puppet_warning_at(loc, "Undefined variable: %s", name);
+        }
         return puppet_value_create_undef();
     }
 
