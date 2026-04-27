@@ -110,6 +110,8 @@ run_test "regex_case_absent" "$SCRIPT_DIR/puppet/regex_case_test.pp" "Regex case
 run_test "regex_case_default" "$SCRIPT_DIR/puppet/regex_case_test.pp" "Regex case 3: unknown"
 run_test "regex_case_os" "$SCRIPT_DIR/puppet/regex_case_test.pp" "OS package manager: apt"
 run_test "regex_case_file" "$SCRIPT_DIR/puppet/regex_case_test.pp" "File type: puppet"
+run_test "selector_inline_indexed_control" "$SCRIPT_DIR/puppet/regex_case_test.pp" "Selector inline indexed control: staging"
+run_test "selector_nested_indexed_control" "$SCRIPT_DIR/puppet/regex_case_test.pp" "Selector nested indexed control: staging_nested"
 
 echo ""
 echo "=== Hash/Array Subtraction Tests ==="

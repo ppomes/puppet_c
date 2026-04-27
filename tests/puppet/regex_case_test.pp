@@ -52,4 +52,30 @@ case $filename {
 }
 notice("File type: ${result5}")
 
+# Regression: selector with an indexed control expression.
+# Earlier versions only fed the bare variable to the selector control,
+# dropping any [..] access nodes — so $h['k'] ? { /re/ => v } would
+# match against the *whole* hash instead of the looked-up string.
+$hosts = {
+  'fqdn' => 'web1.staging.example.com',
+}
+$selector_inline_index = $hosts['fqdn'] ? {
+  /\.staging\.example\.com$/ => 'staging',
+  /\.prod\.example\.com$/    => 'prod',
+  default                    => 'NO_MATCH',
+}
+notice("Selector inline indexed control: ${selector_inline_index}")
+
+# Same with two levels of indexing
+$nested = {
+  'networking' => {
+    'fqdn' => 'db1.staging.example.com',
+  },
+}
+$selector_nested_index = $nested['networking']['fqdn'] ? {
+  /\.staging\.example\.com$/ => 'staging_nested',
+  default                    => 'NO_MATCH',
+}
+notice("Selector nested indexed control: ${selector_nested_index}")
+
 notice('Regex case tests completed')

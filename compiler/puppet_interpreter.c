@@ -330,14 +330,18 @@ static puppet_value_t *puppet_apl_lookup(const char *class_name, const char *par
             module_name = puppet_strdup(class_name);
         }
 
-        /* Get environment name from scope (try jbossenv, then env) */
+        /* Get environment name from scope (try jbossenv, then env).
+         * Use puppet_variable_lookup_chain so we cross class/node boundaries
+         * and reach the top scope where these variables are typically set. */
         const char *env_name = NULL;
-        puppet_value_t *env_val = puppet_scope_get_var(env->current_scope, "jbossenv", true);
+        puppet_value_t *env_val = puppet_variable_lookup_chain(env, "jbossenv");
+        if (!env_val) env_val = puppet_variable_lookup_chain(env, "::jbossenv");
         if (env_val && env_val->type == PUPPET_VALUE_STRING) {
             env_name = env_val->data.string.data;
         }
         if (!env_name) {
-            env_val = puppet_scope_get_var(env->current_scope, "environment", true);
+            env_val = puppet_variable_lookup_chain(env, "environment");
+            if (!env_val) env_val = puppet_variable_lookup_chain(env, "::environment");
             if (env_val && env_val->type == PUPPET_VALUE_STRING) {
                 env_name = env_val->data.string.data;
             }

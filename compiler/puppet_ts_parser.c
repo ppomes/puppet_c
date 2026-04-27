@@ -1506,9 +1506,29 @@ static puppet_stmt_t *convert_assignment(TSNode node, const char *source) {
             }
         }
 
-        /* Build selector expression with control from lhs: */
+        /* Build selector expression with control from lhs:
+         *
+         * The lhs field points only at the bare variable. When the source
+         * is `$x[a][b] ? { ... }` the access nodes sit between lhs and the
+         * selector as siblings — we must fold them into the control so the
+         * full indexed expression is what's matched against, not just $x.
+         */
         puppet_expr_t *selector_expr = convert_selector(selector_node, source);
-        selector_expr->data.selector.control = convert_expression(lhs_node, source);
+        puppet_expr_t *control = convert_expression(lhs_node, source);
+        bool past_lhs = false;
+        uint32_t cnt2 = ts_node_named_child_count(node);
+        for (uint32_t i = 0; i < cnt2; i++) {
+            TSNode child = ts_node_named_child(node, i);
+            if (!past_lhs) {
+                if (ts_node_eq(child, lhs_node)) past_lhs = true;
+                continue;
+            }
+            if (ts_node_eq(child, selector_node)) break;
+            if (strcmp(ts_node_type(child), "access") == 0) {
+                control = build_index_expr(control, child, source);
+            }
+        }
+        selector_expr->data.selector.control = control;
         stmt->data.assignment.value = selector_expr;
         return stmt;
     }
