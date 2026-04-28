@@ -4744,11 +4744,14 @@ void puppet_exec_include(puppet_stmt_t *include_stmt, puppet_env_t *env) {
             continue;
         }
 
-        /* If not found, try to load from module files using the loader */
+        /* If not found, try to load from module files using the loader.
+         * A missing class is a real bug — typically an orphan `include`
+         * left behind after the class was removed. Surface it as an
+         * error so CI catches the mismatch before it ships. */
         if (env->prog->loader) {
             if (!puppet_loader_include_class(env->prog->loader, class_name, env)) {
-                puppet_warning_at(name_expr->loc, "Failed to include class '%s'", class_name);
-                puppet_env_increment_warning(env);
+                puppet_error_at(name_expr->loc, "Failed to include class '%s'", class_name);
+                puppet_env_increment_error(env);
             }
         } else {
             puppet_error_at(name_expr->loc, "Class '%s' not found", class_name);
