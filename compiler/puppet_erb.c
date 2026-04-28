@@ -643,7 +643,12 @@ char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_
     // only ever touched from one OS thread (libruby is not pthread-safe
     // even with a mutex). Workers — sequential or `-P` — block on the
     // request's condvar until the daemon completes the render.
-    return ruby_daemon_render(template_content, env, template_name);
+    char *rendered = ruby_daemon_render(template_content, env, template_name);
+    if (!rendered && env) {
+        /* Ruby raised — count it as a real error so CI fails the catalog. */
+        puppet_env_increment_error(env);
+    }
+    return rendered;
 }
 
 char *puppet_erb_file(const char *template_path, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx) {
