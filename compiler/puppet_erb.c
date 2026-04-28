@@ -444,7 +444,8 @@ static void puppet_export_env_to_ruby(puppet_env_t *env, puppet_ruby_context_t *
             if (node_idx < env->prog->facts_db->node_count) {
                 puppet_node_facts_t *node_facts = &env->prog->facts_db->nodes[node_idx];
                 
-                // Export all facts as @variables
+                // Export all facts as individual @variables (legacy
+                // top-level fact access: @fqdn, @hostname, ...).
                 for (size_t i = 0; i < node_facts->facts->bucket_count; i++) {
                     puppet_hash_entry_t *entry = node_facts->facts->buckets[i];
                     while (entry) {
@@ -452,6 +453,24 @@ static void puppet_export_env_to_ruby(puppet_env_t *env, puppet_ruby_context_t *
                         entry = entry->next;
                     }
                 }
+
+                // Also build a @facts / $facts hash for the Puppet 4+
+                // structured-fact pattern: scope['facts']['networking']['fqdn'].
+                // Templates migrated to Puppet 8 access nested facts that
+                // way, so without this they trip on @facts being nil.
+                VALUE facts_hash = rb_hash_new();
+                for (size_t i = 0; i < node_facts->facts->bucket_count; i++) {
+                    puppet_hash_entry_t *entry = node_facts->facts->buckets[i];
+                    while (entry) {
+                        VALUE key = rb_str_new(entry->key.data, entry->key.len);
+                        VALUE val = (VALUE)puppet_value_to_ruby(entry->value, ruby_ctx);
+                        rb_hash_aset(facts_hash, key, val);
+                        entry = entry->next;
+                    }
+                }
+                VALUE main_obj = rb_eval_string("self");
+                rb_iv_set(main_obj, "@facts", facts_hash);
+                rb_gv_set("$facts", facts_hash);
             }
         }
     }
@@ -533,7 +552,15 @@ static char *ruby_render_in_daemon(const char *template_content,
         "scope = $scope\n"
         "erb = $template_key ? $puppet_erb_cache[$template_key] : nil\n"
         "unless erb\n"
-        "  erb = ERB.new($template_content, trim_mode: '-')\n"
+        /* Puppet-ERB sugar: @class::var (and @a::b::c) is documented to
+         * resolve as scope.lookupvar('class::var'), but Ruby has no such
+         * thing — `@x::y` is an instance var followed by a constant. The
+         * real puppetmaster's TemplateWrapper rewrites these references
+         * before evaluation; do the same here so prod templates that use
+         * the syntax compile correctly. Bare @ident is left alone
+         * (regular instance variable). */
+        "  content = $template_content.gsub(/@([A-Za-z_]\\w*(?:::[A-Za-z_]\\w*)+)/) { \"scope.lookupvar('#{$1}')\" }\n"
+        "  erb = ERB.new(content, trim_mode: '-')\n"
         "  $puppet_erb_cache[$template_key] = erb if $template_key\n"
         "end\n"
         "erb.result(binding)", &state);
