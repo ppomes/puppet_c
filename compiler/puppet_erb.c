@@ -173,6 +173,15 @@ puppet_ruby_context_t *puppet_ruby_init(void) {
         "# Define has_variable? in main scope for templates that call it directly\n"
         "def has_variable?(name)\n"
         "  $scope.has_variable?(name) if $scope\n"
+        "end\n"
+        "# Make `scope` callable from inside `def`s defined inside ERB\n"
+        "# templates. Without this, `scope` is only available as a local\n"
+        "# variable of the template's binding, so any `def` that calls\n"
+        "# scope.lookupvar(...) raises NoMethodError. Real puppetmaster\n"
+        "# resolves `scope` because templates run as instance methods of\n"
+        "# a Puppet::Parser::TemplateWrapper object that exposes it.\n"
+        "def scope\n"
+        "  $scope\n"
         "end\n",
         &state);
     if (state != 0) {
@@ -408,14 +417,29 @@ static void puppet_export_env_to_ruby(puppet_env_t *env, puppet_ruby_context_t *
         }
     }
 
-    // Export facts as variables too (facts become @factname in ERB)
-    if (env->prog->facts_db && env->prog->facts_db->current_node) {
-        
-        // Find the current node's facts
-        puppet_value_t *node_lookup = puppet_hash_get(env->prog->facts_db->node_index, 
-                                                      env->prog->facts_db->current_node, 
-                                                      strlen(env->prog->facts_db->current_node));
-        if (node_lookup && node_lookup->type == PUPPET_VALUE_NUMBER) {
+    // Export facts as variables too (facts become @factname in ERB).
+    // Look up the node by certname. We try env->current_node_certname
+    // first (per-thread, set in clone_for_node and exec_node_for_certname)
+    // because facts_db->current_node is a shared field that races between
+    // parallel workers. But the per-env certname may be the node-block
+    // name (e.g. "web01") rather than the fqdn used as the facts_db key
+    // (e.g. "web01.example.com") in single-node compiles, so fall back
+    // to facts_db->current_node if the per-env one doesn't resolve.
+    puppet_value_t *node_lookup = NULL;
+    if (env->prog->facts_db) {
+        if (env->current_node_certname) {
+            node_lookup = puppet_hash_get(env->prog->facts_db->node_index,
+                                          env->current_node_certname,
+                                          strlen(env->current_node_certname));
+        }
+        if (!node_lookup && env->prog->facts_db->current_node) {
+            node_lookup = puppet_hash_get(env->prog->facts_db->node_index,
+                                          env->prog->facts_db->current_node,
+                                          strlen(env->prog->facts_db->current_node));
+        }
+    }
+    if (node_lookup) {
+        if (node_lookup->type == PUPPET_VALUE_NUMBER) {
             size_t node_idx = (size_t)node_lookup->data.number;
             if (node_idx < env->prog->facts_db->node_count) {
                 puppet_node_facts_t *node_facts = &env->prog->facts_db->nodes[node_idx];
