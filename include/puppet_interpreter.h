@@ -270,6 +270,12 @@ typedef struct puppet_env {
     puppet_hash_t *pending_realizes;              /**< resource_key -> true for deferred realize() calls */
 
     /* Dead-code tracker migrated to env->prog->deadcode */
+
+    /* Set while evaluating an `if`/`unless` condition or an operand of
+     * `and`/`or`/`!`. Suppresses the "Undefined variable" warning for
+     * variables read in those contexts — Puppet semantics treat undef
+     * as false in a boolean test, so it's not noise worth flagging. */
+    int in_truthiness_check;
 } puppet_env_t;
 
 /* Global verbose flag for use before environment is created */

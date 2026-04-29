@@ -1081,16 +1081,26 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
                     return puppet_value_create_bool(matched);
                 }
             }
+            /* and / or evaluate their operands purely for truthiness —
+             * propagate the no-warn-on-undef context to them. */
+            bool boolean_op = (expr->data.binop.op == PUPPET_OP_AND ||
+                               expr->data.binop.op == PUPPET_OP_OR);
+            if (boolean_op) env->in_truthiness_check++;
             puppet_value_t *left = puppet_eval_expr(expr->data.binop.left, env);
             puppet_value_t *right = puppet_eval_expr(expr->data.binop.right, env);
+            if (boolean_op) env->in_truthiness_check--;
             puppet_value_t *result = puppet_eval_binop(expr->data.binop.op, left, right);
             puppet_value_destroy(left);
             puppet_value_destroy(right);
             return result;
         }
-            
+
         case PUPPET_EXPR_UNOP: {
+            /* `!x` reads x for truthiness only. */
+            bool boolean_op = (expr->data.unop.op == PUPPET_UNOP_NOT);
+            if (boolean_op) env->in_truthiness_check++;
             puppet_value_t *operand = puppet_eval_expr(expr->data.unop.expr, env);
+            if (boolean_op) env->in_truthiness_check--;
             puppet_value_t *result = puppet_eval_unop(expr->data.unop.op, operand);
             puppet_value_destroy(operand);
             return result;
@@ -1846,8 +1856,12 @@ puppet_value_t *puppet_eval_variable(const char *name, puppet_location_t loc, pu
          * node/class definitions), so $facts and other per-node bindings
          * are legitimately absent. Real lookups happen again when each
          * node is compiled — that's where genuinely missing variables
-         * surface. */
-        if (!env->defer_node_execution) {
+         * surface.
+         *
+         * Also suppress in a truthiness context (`if $x`, `unless $x`,
+         * `$x and $y`, `! $x`): Puppet semantics treat undef as false
+         * there, so it's not a real bug — just a defensive check. */
+        if (!env->defer_node_execution && env->in_truthiness_check == 0) {
             puppet_warning_at(loc, "Undefined variable: %s", name);
         }
         return puppet_value_create_undef();
@@ -3835,7 +3849,9 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
             bool executed = false;
 
             while (branch && !executed) {
+                env->in_truthiness_check++;
                 puppet_value_t *cond = puppet_eval_expr(branch->condition, env);
+                env->in_truthiness_check--;
                 bool is_true = false;
 
                 // Evaluate truthiness: false and undef are falsy, everything else is truthy
@@ -3866,7 +3882,9 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
 
         case PUPPET_STMT_UNLESS: {
             // Execute unless (inverse of if)
+            env->in_truthiness_check++;
             puppet_value_t *cond = puppet_eval_expr(stmt->data.unless_stmt.condition, env);
+            env->in_truthiness_check--;
             bool is_false = true;
 
             if (cond) {
