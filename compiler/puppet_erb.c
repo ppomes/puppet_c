@@ -561,6 +561,10 @@ static char *ruby_render_in_daemon(const char *template_content,
          * (regular instance variable). */
         "  content = $template_content.gsub(/@([A-Za-z_]\\w*(?:::[A-Za-z_]\\w*)+)/) { \"scope.lookupvar('#{$1}')\" }\n"
         "  erb = ERB.new(content, trim_mode: '-')\n"
+        /* Tag the compiled template with the source path so Ruby
+         * exception backtraces report '<path>:<line>' instead of the
+         * useless default '(erb):<line>'. */
+        "  erb.filename = $template_key if $template_key\n"
         "  $puppet_erb_cache[$template_key] = erb if $template_key\n"
         "end\n"
         "erb.result(binding)", &state);
@@ -580,6 +584,17 @@ static char *ruby_render_in_daemon(const char *template_content,
         if (!NIL_P(exception)) {
             VALUE message = rb_obj_as_string(exception);
             fprintf(stderr, "Ruby exception: %s\n", StringValueCStr(message));
+            /* Pull the first frame from the backtrace — when erb.filename
+             * is set, it reads "<template_path>:<line>:in <method>" which
+             * gives the operator the exact line of the template that
+             * blew up. */
+            VALUE bt = rb_funcall(exception, rb_intern("backtrace"), 0);
+            if (!NIL_P(bt) && TYPE(bt) == T_ARRAY && RARRAY_LEN(bt) > 0) {
+                VALUE first = rb_ary_entry(bt, 0);
+                if (TYPE(first) == T_STRING) {
+                    fprintf(stderr, "  at %s\n", StringValueCStr(first));
+                }
+            }
         }
     }
     return NULL;
