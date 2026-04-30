@@ -102,48 +102,40 @@ static int ensure_ssh_dir(const char *username) {
         return -1;
     }
 
-    size_t path_len = strlen(home) + strlen("/.ssh") + 1;
-    char *ssh_dir = puppet_malloc(path_len);
-    if (!ssh_dir) {
-        puppet_free(home);
+    /* Open the home directory once, then do every step on .ssh relative
+     * to that fd via *at() syscalls. This closes the TOCTOU windows that
+     * a separate stat()/mkdir()/open() chain on the full path leaves
+     * open: a user owning their $home can otherwise race a symlink swap
+     * between any two steps (CodeQL: cpp/toctou-race-condition).
+     * O_NOFOLLOW refuses to follow $home itself if it's a symlink. */
+    int home_fd = open(home, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    puppet_free(home);
+    if (home_fd < 0) {
         return -1;
     }
 
-    snprintf(ssh_dir, path_len, "%s/.ssh", home);
-
-    struct stat st;
-    if (stat(ssh_dir, &st) == 0) {
-        /* Directory exists */
-        puppet_free(home);
-        puppet_free(ssh_dir);
-        return 0;
-    }
-
-    /* Create directory */
-    if (mkdir(ssh_dir, 0700) != 0) {
-        puppet_free(home);
-        puppet_free(ssh_dir);
+    /* Try to create .ssh; EEXIST is fine, anything else is fatal. */
+    if (mkdirat(home_fd, ".ssh", 0700) != 0 && errno != EEXIST) {
+        close(home_fd);
         return -1;
     }
 
-    /* Set ownership (ignore errors - best effort).
-     * Open the directory we just created and fchown the fd rather
-     * than chown'ing the path: a malicious user owning $home could
-     * race a symlink swap between mkdir and chown otherwise (CodeQL:
-     * cpp/toctou-race-condition). O_NOFOLLOW refuses to follow a
-     * symlink the user might have planted in place of .ssh. */
+    /* Open the directory we just created (or that already existed)
+     * relative to home_fd, refusing to follow a symlink. */
+    int ssh_fd = openat(home_fd, ".ssh", O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    close(home_fd);
+    if (ssh_fd < 0) {
+        return -1;
+    }
+
+    /* Set ownership (ignore errors - best effort). */
     uid_t uid = get_user_uid(username);
     gid_t gid = get_user_gid(username);
     if (uid != (uid_t)-1 && gid != (gid_t)-1) {
-        int dfd = open(ssh_dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-        if (dfd >= 0) {
-            (void)fchown(dfd, uid, gid);
-            close(dfd);
-        }
+        (void)fchown(ssh_fd, uid, gid);
     }
 
-    puppet_free(home);
-    puppet_free(ssh_dir);
+    close(ssh_fd);
     return 0;
 }
 
