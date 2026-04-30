@@ -19,6 +19,7 @@
 #include <string.h>
 #include <errno.h>
 #include <pwd.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -125,11 +126,20 @@ static int ensure_ssh_dir(const char *username) {
         return -1;
     }
 
-    /* Set ownership (ignore errors - best effort) */
+    /* Set ownership (ignore errors - best effort).
+     * Open the directory we just created and fchown the fd rather
+     * than chown'ing the path: a malicious user owning $home could
+     * race a symlink swap between mkdir and chown otherwise (CodeQL:
+     * cpp/toctou-race-condition). O_NOFOLLOW refuses to follow a
+     * symlink the user might have planted in place of .ssh. */
     uid_t uid = get_user_uid(username);
     gid_t gid = get_user_gid(username);
     if (uid != (uid_t)-1 && gid != (gid_t)-1) {
-        if (chown(ssh_dir, uid, gid) != 0) { /* ignore errors */ }
+        int dfd = open(ssh_dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+        if (dfd >= 0) {
+            (void)fchown(dfd, uid, gid);
+            close(dfd);
+        }
     }
 
     puppet_free(home);
@@ -177,22 +187,26 @@ static int write_authorized_keys(const char *path, const char *content,
 
     size_t len = strlen(content);
     size_t written = fwrite(content, 1, len, fp);
-    fclose(fp);
 
     if (written != len) {
+        fclose(fp);
         return -1;
     }
 
-    /* Set proper permissions (0600) */
-    (void)chmod(path, 0600);
+    /* Apply the perms and ownership through the open file descriptor.
+     * fchmod/fchown act on the fd, so a malicious symlink swap on the
+     * path between fclose and chmod can't redirect us elsewhere
+     * (CodeQL: cpp/toctou-race-condition). */
+    int fd = fileno(fp);
+    (void)fchmod(fd, 0600);
 
-    /* Set ownership (ignore errors - best effort) */
     uid_t uid = get_user_uid(username);
     gid_t gid = get_user_gid(username);
     if (uid != (uid_t)-1 && gid != (gid_t)-1) {
-        if (chown(path, uid, gid) != 0) { /* ignore errors */ }
+        (void)fchown(fd, uid, gid);
     }
 
+    fclose(fp);
     return 0;
 }
 

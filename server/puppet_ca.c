@@ -933,19 +933,13 @@ int puppet_ca_load_signed_cert(puppet_ca_ctx_t *ctx,
         return -1;
     }
 
-    /* Check if file exists */
-    if (access(cert_path, R_OK) != 0) {
-        snprintf(ctx->last_error, sizeof(ctx->last_error),
-                "Certificate file not found: %s", cert_path);
-        puppet_free(cert_path);
-        return -1;
-    }
-
-    /* Read certificate file */
+    /* Open directly — let fopen report ENOENT/EACCES rather than
+     * pre-checking with access(), which leaves a TOCTOU window
+     * (CodeQL: cpp/toctou-race-condition). */
     FILE *cert_file = fopen(cert_path, "r");
     if (!cert_file) {
         snprintf(ctx->last_error, sizeof(ctx->last_error),
-                "Failed to open certificate file: %s", strerror(errno));
+                "Failed to open certificate file %s: %s", cert_path, strerror(errno));
         puppet_free(cert_path);
         return -1;
     }
@@ -1077,18 +1071,18 @@ int puppet_ca_load_serial(puppet_ca_ctx_t *ctx) {
         return -1;
     }
 
-    /* Check if file exists */
-    if (access(serial_path, R_OK) != 0) {
-        /* File doesn't exist, initialize to 1 */
-        ctx->serial_number = 1;
-        puppet_free(serial_path);
-        return 0;
-    }
-
+    /* Try to open directly — single syscall, no TOCTOU between
+     * access() and fopen() (CodeQL: cpp/toctou-race-condition). */
     FILE *serial_file = fopen(serial_path, "r");
     if (!serial_file) {
+        if (errno == ENOENT) {
+            /* No serial file yet, initialize to 1 */
+            ctx->serial_number = 1;
+            puppet_free(serial_path);
+            return 0;
+        }
         snprintf(ctx->last_error, sizeof(ctx->last_error),
-                "Failed to open serial file: %s", strerror(errno));
+                "Failed to open serial file %s: %s", serial_path, strerror(errno));
         puppet_free(serial_path);
         return -1;
     }

@@ -182,15 +182,20 @@ static void walk_rb_types_dir(puppet_deadcode_t *dc, const char *dir) {
     struct dirent *ent;
     while ((ent = readdir(d))) {
         if (ent->d_name[0] == '.') continue;
-        char path[2048];
-        snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
-        struct stat st;
-        if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
         size_t n = strlen(ent->d_name);
         if (n < 4 || strcmp(ent->d_name + n - 3, ".rb") != 0) continue;
-        /* Scan for Puppet::Type.newtype(:<name>) */
+        char path[2048];
+        snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
+        /* Scan for Puppet::Type.newtype(:<name>). Open first, then
+         * fstat the fd — avoids the TOCTOU window between stat() and
+         * fopen() (CodeQL: cpp/toctou-race-condition). */
         FILE *f = fopen(path, "r");
         if (!f) continue;
+        struct stat st;
+        if (fstat(fileno(f), &st) != 0 || !S_ISREG(st.st_mode)) {
+            fclose(f);
+            continue;
+        }
         char line[2048];
         while (fgets(line, sizeof(line), f)) {
             const char *p = strstr(line, "Puppet::Type.newtype");

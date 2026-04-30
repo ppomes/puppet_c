@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
 #include <sys/stat.h>
 #include <pthread.h>
 
@@ -718,20 +719,18 @@ char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_
 }
 
 char *puppet_erb_file(const char *template_path, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx) {
-    /* Check if path is a directory (happens with invalid template paths) */
-    struct stat st;
-    if (stat(template_path, &st) != 0) {
-        printf("Error: Cannot stat template file: %s\n", template_path);
-        return NULL;
-    }
-    if (S_ISDIR(st.st_mode)) {
-        printf("Error: Template path is a directory, not a file: %s\n", template_path);
-        return NULL;
-    }
-
+    /* Open first, then fstat the resulting fd. Doing stat() then fopen()
+     * leaves a TOCTOU window where the path could be swapped between the
+     * two calls (CodeQL: cpp/toctou-race-condition). */
     FILE *file = fopen(template_path, "r");
     if (!file) {
-        printf("Error: Cannot open template file: %s\n", template_path);
+        printf("Error: Cannot open template file %s: %s\n", template_path, strerror(errno));
+        return NULL;
+    }
+    struct stat st;
+    if (fstat(fileno(file), &st) != 0 || !S_ISREG(st.st_mode)) {
+        printf("Error: Template path is not a regular file: %s\n", template_path);
+        fclose(file);
         return NULL;
     }
 

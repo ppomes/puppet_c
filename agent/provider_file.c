@@ -399,31 +399,41 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
         }
     }
 
-    /* Handle ownership */
+    /* Handle ownership.
+     *
+     * Open the path with O_NOFOLLOW once and operate on the fd from
+     * then on (fstat/fchown/fchmod). This avoids the TOCTOU window
+     * between stat and chown/chmod where a malicious actor could swap
+     * the path for a symlink to a different file (CodeQL:
+     * cpp/toctou-race-condition). */
     if (owner || group) {
         uid_t uid = owner ? get_uid(owner) : (uid_t)-1;
         gid_t gid = group ? get_gid(group) : (gid_t)-1;
 
         if (uid != (uid_t)-1 || gid != (gid_t)-1) {
-            struct stat st;
-            if (stat(path, &st) == 0) {
-                bool needs_chown = false;
-                if (uid != (uid_t)-1 && st.st_uid != uid) needs_chown = true;
-                if (gid != (gid_t)-1 && st.st_gid != gid) needs_chown = true;
+            int fd = open(path, O_RDONLY | O_NOFOLLOW);
+            if (fd >= 0) {
+                struct stat st;
+                if (fstat(fd, &st) == 0) {
+                    bool needs_chown = false;
+                    if (uid != (uid_t)-1 && st.st_uid != uid) needs_chown = true;
+                    if (gid != (gid_t)-1 && st.st_gid != gid) needs_chown = true;
 
-                if (needs_chown) {
-                    if (ctx->noop) {
-                        print_resource_noop("File", path, "owner", "would be changed");
-                    } else {
-                        if (chown(path, uid, gid) != 0) {
+                    if (needs_chown) {
+                        if (ctx->noop) {
+                            print_resource_noop("File", path, "owner", "would be changed");
+                        } else if (fchown(fd, uid, gid) != 0) {
                             apply_context_set_error(ctx, "Failed to chown %s: %s",
                                                    path, strerror(errno));
+                            close(fd);
                             return APPLY_FAILED;
+                        } else {
+                            print_resource_change("File", path, "owner", "changed");
+                            changed = true;
                         }
-                        print_resource_change("File", path, "owner", "changed");
-                        changed = true;
                     }
                 }
+                close(fd);
             }
         }
     }
@@ -432,24 +442,28 @@ static apply_result_t file_apply(const resource_t *resource, apply_context_t *ct
     if (mode) {
         mode_t new_mode = parse_mode(mode);
         if (new_mode != 0) {
-            struct stat st;
-            if (stat(path, &st) == 0) {
-                mode_t current_mode = st.st_mode & 07777;
-                if (current_mode != new_mode) {
-                    if (ctx->noop) {
-                        char msg[64];
-                        snprintf(msg, sizeof(msg), "would be changed to %04o", new_mode);
-                        print_resource_noop("File", path, "mode", msg);
-                    } else {
-                        if (chmod(path, new_mode) != 0) {
+            int fd = open(path, O_RDONLY | O_NOFOLLOW);
+            if (fd >= 0) {
+                struct stat st;
+                if (fstat(fd, &st) == 0) {
+                    mode_t current_mode = st.st_mode & 07777;
+                    if (current_mode != new_mode) {
+                        if (ctx->noop) {
+                            char msg[64];
+                            snprintf(msg, sizeof(msg), "would be changed to %04o", new_mode);
+                            print_resource_noop("File", path, "mode", msg);
+                        } else if (fchmod(fd, new_mode) != 0) {
                             apply_context_set_error(ctx, "Failed to chmod %s: %s",
                                                    path, strerror(errno));
+                            close(fd);
                             return APPLY_FAILED;
+                        } else {
+                            print_resource_change("File", path, "mode", "changed to %04o", new_mode);
+                            changed = true;
                         }
-                        print_resource_change("File", path, "mode", "changed to %04o", new_mode);
-                        changed = true;
                     }
                 }
+                close(fd);
             }
         }
     }
