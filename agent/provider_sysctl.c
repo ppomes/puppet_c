@@ -316,7 +316,10 @@ static apply_result_t sysctl_apply(const resource_t *resource, apply_context_t *
             puppet_free(current);
             return APPLY_FAILED;
         }
-        print_resource_change("Sysctl", name, "value", current, value);
+        /* fmt must be a literal — `current` came from fgets() and could
+         * contain %-specifiers that would otherwise be interpreted by
+         * vprintf. CodeQL: cpp/tainted-format-string. */
+        print_resource_change("Sysctl", name, "value", "%s -> %s", current, value);
     }
 
     if (permanent_changed) {

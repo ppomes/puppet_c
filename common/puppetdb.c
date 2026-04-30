@@ -366,7 +366,12 @@ char *puppetdb_query_exported(puppetdb_t *db, const char *type) {
             buf = new_buf;
         }
 
-        buf_len += snprintf(buf + buf_len, buf_size - buf_len,
+        /* Capture snprintf's return separately and verify it fit before
+         * advancing buf_len. snprintf can return a value greater than
+         * the size argument when the output was truncated, so adding
+         * it directly back to buf_len would let the next write run
+         * past the buffer. CodeQL: cpp/overflowing-snprintf. */
+        int written = snprintf(buf + buf_len, buf_size - buf_len,
             "%s{\"type\":\"%s\",\"title\":\"%s\",\"parameters\":%s,\"tags\":%s,\"certname\":\"%s\"}",
             first ? "" : ",",
             res_type ? res_type : "",
@@ -374,6 +379,15 @@ char *puppetdb_query_exported(puppetdb_t *db, const char *type) {
             params ? params : "{}",
             tags ? tags : "[]",
             certname ? certname : "");
+        if (written < 0 || (size_t)written >= buf_size - buf_len) {
+            /* Should not happen — the realloc loop above adds `needed`
+             * bytes of slack, more than any single resource entry can
+             * possibly need. Bail out rather than corrupt the buffer. */
+            puppet_free(buf);
+            sqlite3_finalize(stmt);
+            return NULL;
+        }
+        buf_len += (size_t)written;
         first = 0;
     }
     sqlite3_finalize(stmt);
