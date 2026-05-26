@@ -142,6 +142,12 @@ typedef struct puppet_deferred_define {
     char *resource_id;
     puppet_hash_t *override_attrs;  /* attr_name -> puppet_value_t* */
     bool class_reexecuting;         /* preserve class_reexecuting state at deferral time */
+    /* Scope of the class/define that declared this resource. Resource
+     * attribute values are evaluated lazily at deferred-execution time
+     * — without remembering the caller's scope, local variables defined
+     * in that class (e.g. `$x = epp(...)` then `apt::setting { content
+     * => "${x}" }`) are no longer reachable. */
+    struct puppet_scope *caller_scope;
 } puppet_deferred_define_t;
 
 /**

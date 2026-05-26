@@ -3691,6 +3691,11 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         deferred->override_attrs->bucket_count = 8;
                         deferred->override_attrs->buckets = puppet_calloc(8, sizeof(puppet_hash_entry_t*));
                         deferred->class_reexecuting = env->class_reexecuting;
+                        /* Snapshot the caller's scope so that lazy
+                         * attribute evaluation can still see the local
+                         * variables that were in scope at declaration
+                         * time. */
+                        deferred->caller_scope = env->current_scope;
 
                         }  /* End of array title expansion loop */
 
@@ -4342,8 +4347,20 @@ static void puppet_exec_deferred_define(puppet_deferred_define_t *deferred, pupp
     bool saved_class_reexecuting = env->class_reexecuting;
     env->class_reexecuting = deferred->class_reexecuting;
 
+    /* Temporarily restore the caller's scope as current so that
+     * (1) the new define_scope is parented under it, and
+     * (2) attribute values that interpolate caller-local variables
+     *     (e.g. content => "${x}") resolve them correctly.
+     * Without this they look up against whatever scope happens to be
+     * current at the end-of-statement-list deferred execution pass,
+     * which doesn't see the declaring class's locals. */
+    puppet_scope_t *saved_current_scope = env->current_scope;
+    puppet_scope_t *parent_scope = deferred->caller_scope
+        ? deferred->caller_scope : env->current_scope;
+    env->current_scope = parent_scope;
+
     /* Create new scope for the define execution */
-    puppet_scope_t *define_scope = puppet_scope_create(env->current_scope,
+    puppet_scope_t *define_scope = puppet_scope_create(parent_scope,
                                                       deferred->type_name);
     puppet_scope_push(env, define_scope);
 
@@ -4473,6 +4490,9 @@ static void puppet_exec_deferred_define(puppet_deferred_define_t *deferred, pupp
     /* Pop the define scope */
     puppet_scope_t *popped = puppet_scope_pop(env);
     puppet_scope_destroy(popped);
+
+    /* Restore current_scope (was temporarily swapped to caller_scope) */
+    env->current_scope = saved_current_scope;
 
     /* Restore class_reexecuting state */
     env->class_reexecuting = saved_class_reexecuting;
