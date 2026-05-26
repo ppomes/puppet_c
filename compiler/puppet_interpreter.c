@@ -202,27 +202,68 @@ static void puppet_scan_ruby_types_dir(puppet_env_t *env, const char *dir) {
             continue;
         }
         char line[2048];
+        bool in_resource_api = false;
+        const char *type_start = NULL;
+        size_t type_len = 0;
+        char ra_buf[256];
         while (fgets(line, sizeof(line), f)) {
+            /* Legacy: Puppet::Type.newtype(:name) on a single line. */
             const char *p = strstr(line, "Puppet::Type.newtype");
-            if (!p) continue;
-            p = strchr(p, '(');
-            if (!p) continue;
-            p++;
-            while (*p == ' ' || *p == '\t') p++;
-            if (*p != ':') continue;
-            p++;
-            const char *start = p;
-            while (*p && (isalnum((unsigned char)*p) || *p == '_')) p++;
-            if (p == start) continue;
-            size_t len = p - start;
-            char *name = puppet_malloc(len + 1);
-            for (size_t i = 0; i < len; i++) name[i] = tolower((unsigned char)start[i]);
-            name[len] = '\0';
+            if (p) {
+                p = strchr(p, '(');
+                if (!p) continue;
+                p++;
+                while (*p == ' ' || *p == '\t') p++;
+                if (*p != ':') continue;
+                p++;
+                const char *start = p;
+                while (*p && (isalnum((unsigned char)*p) || *p == '_')) p++;
+                if (p > start) {
+                    type_start = start;
+                    type_len = (size_t)(p - start);
+                }
+                break;
+            }
+            /* Modern Resource API:
+             *   Puppet::ResourceApi.register_type(
+             *     name: 'firewall',
+             *     ...
+             *   )
+             * The opening call and the `name:` key are on separate
+             * lines. Set a flag when we see register_type, then look
+             * for `name:` in subsequent lines. */
+            if (strstr(line, "Puppet::ResourceApi.register_type")) {
+                in_resource_api = true;
+            }
+            if (in_resource_api) {
+                const char *np = strstr(line, "name:");
+                if (np) {
+                    np += 5;
+                    while (*np == ' ' || *np == '\t') np++;
+                    char quote = *np;
+                    if (quote == '\'' || quote == '"') {
+                        np++;
+                        const char *start = np;
+                        while (*np && *np != quote) np++;
+                        if (np > start && (size_t)(np - start) < sizeof(ra_buf)) {
+                            type_len = (size_t)(np - start);
+                            memcpy(ra_buf, start, type_len);
+                            ra_buf[type_len] = '\0';
+                            type_start = ra_buf;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if (type_start && type_len > 0) {
+            char *name = puppet_malloc(type_len + 1);
+            for (size_t i = 0; i < type_len; i++) name[i] = tolower((unsigned char)type_start[i]);
+            name[type_len] = '\0';
             /* Store with true marker. Duplicates just overwrite. */
             puppet_value_t *marker = puppet_value_create_bool(true);
-            puppet_hash_set(env->prog->ruby_types, name, len, marker);
+            puppet_hash_set(env->prog->ruby_types, name, type_len, marker);
             puppet_free(name);
-            break;
         }
         fclose(f);
     }
