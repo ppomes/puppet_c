@@ -3009,6 +3009,55 @@ static void puppet_exec_collector(puppet_stmt_t *stmt, puppet_env_t *env) {
 void puppet_exec_require(puppet_stmt_t *require_stmt, puppet_env_t *env);
 void puppet_exec_contain(puppet_stmt_t *contain_stmt, puppet_env_t *env);
 
+/* Metaparameters accepted on any class declaration without being declared. */
+static const char *const puppet_class_metaparams[] = {
+    "alias", "audit", "before", "consume", "export", "loglevel",
+    "noop", "notify", "require", "schedule", "stage", "subscribe", "tag",
+    NULL
+};
+
+/*
+ * Verify every provided attribute matches a declared class parameter.
+ * Puppet rejects unknown class params with "no parameter named X" — silently
+ * accepting them lets interface-drift bugs (e.g. a site.pp adding
+ * `mount_innodbtmp => true` before the module grows the param) ship to
+ * production without warning. Metaparameters are always allowed, and splat
+ * attributes (NULL name, `* => $hash`) are skipped. Emits one error per
+ * unknown attribute via puppet_error_at + puppet_env_increment_error.
+ */
+static void puppet_validate_class_args(const puppet_stmt_t *class_def,
+                                       const puppet_attribute_t *attrs,
+                                       size_t attr_count,
+                                       const char *class_name,
+                                       puppet_location_t loc,
+                                       puppet_env_t *env) {
+    if (!class_def) return;
+    const puppet_param_list_t *params = &class_def->data.class_def.params;
+    for (size_t ai = 0; ai < attr_count; ai++) {
+        const char *aname = attrs[ai].name.data;
+        if (!aname) continue;  /* splat (* => $hash) */
+        bool matched = false;
+        for (size_t pi = 0; pi < params->count; pi++) {
+            if (strcmp(aname, params->params[pi].name.data) == 0) {
+                matched = true;
+                break;
+            }
+        }
+        if (matched) continue;
+        for (size_t mi = 0; puppet_class_metaparams[mi]; mi++) {
+            if (strcmp(aname, puppet_class_metaparams[mi]) == 0) {
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) {
+            puppet_error_at(loc, "Class '%s' has no parameter named '%s'",
+                            class_name, aname);
+            puppet_env_increment_error(env);
+        }
+    }
+}
+
 void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
     if (!stmt) return;
     
@@ -3206,6 +3255,13 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                                 }
 
                                 if (class_def) {
+                                    // Reject unknown params here too — otherwise an
+                                    // already-included class would silently accept bogus
+                                    // attributes that a fresh declaration would reject.
+                                    puppet_validate_class_args(class_def, instance->attributes,
+                                                               instance->attr_count, class_name,
+                                                               stmt->loc, env);
+
                                     // Update parameters in existing scope
                                     for (size_t ai = 0; ai < instance->attr_count; ai++) {
                                         if (instance->attributes[ai].name.data) {
@@ -3304,37 +3360,9 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         }
 
                         // Verify every provided attribute matches a declared class param.
-                        // Puppet rejects unknown class params; silently accepting them lets
-                        // interface-drift bugs ship (e.g. a site.pp adding
-                        // `mount_innodbtmp => true` before puppet-modules grows the param).
-                        // Meta-parameters are always allowed.
-                        static const char *const cls_metaparams[] = {
-                            "alias", "audit", "before", "consume", "export", "loglevel",
-                            "noop", "notify", "require", "schedule", "stage", "subscribe", "tag",
-                            NULL
-                        };
-                        for (size_t ai = 0; ai < instance->attr_count; ai++) {
-                            const char *aname = instance->attributes[ai].name.data;
-                            if (!aname) continue;
-                            bool matched = false;
-                            for (size_t pi = 0; pi < class_def->data.class_def.params.count; pi++) {
-                                if (strcmp(aname, class_def->data.class_def.params.params[pi].name.data) == 0) {
-                                    matched = true; break;
-                                }
-                            }
-                            if (matched) continue;
-                            for (size_t mi = 0; cls_metaparams[mi]; mi++) {
-                                if (strcmp(aname, cls_metaparams[mi]) == 0) {
-                                    matched = true; break;
-                                }
-                            }
-                            if (!matched) {
-                                puppet_error_at(stmt->loc,
-                                                "Class '%s' has no parameter named '%s'",
-                                                class_name, aname);
-                                puppet_env_increment_error(env);
-                            }
-                        }
+                        puppet_validate_class_args(class_def, instance->attributes,
+                                                   instance->attr_count, class_name,
+                                                   stmt->loc, env);
 
                         // Pre-evaluate all attribute values in CALLER's scope (before pushing new class scope)
                         // This is critical - variables like $backups in "directories => $backups" must
@@ -5501,6 +5529,7 @@ void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t
 
         for (size_t j = 0; j < class_instance_stmt->data.class_instance.arg_count; j++) {
             puppet_attribute_t *arg = &class_instance_stmt->data.class_instance.arguments[j];
+            if (!arg->name.data) continue;  /* splat (* => $hash) has no name */
             if (strcmp(arg->name.data, param_name) == 0) {
                 param_value = puppet_eval_expr(arg->value, env);
                 found_arg = true;
@@ -5551,41 +5580,10 @@ void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t
     }
 
     // Verify every provided argument matches a declared class parameter.
-    // Puppet rejects unknown class params with "no parameter named X" —
-    // silently accepting them let interface-drift bugs (e.g. a site.pp
-    // adding a `mount_innodbtmp => true` before puppet-modules grows
-    // the param) ship to production without warning. Meta-parameters
-    // (stage, tag, …) are always allowed and don't need to be declared.
-    static const char *const class_metaparams[] = {
-        "alias", "audit", "before", "consume", "export", "loglevel",
-        "noop", "notify", "require", "schedule", "stage", "subscribe", "tag",
-        NULL
-    };
-    for (size_t j = 0; j < class_instance_stmt->data.class_instance.arg_count; j++) {
-        puppet_attribute_t *arg = &class_instance_stmt->data.class_instance.arguments[j];
-        if (!arg->name.data) continue;
-        bool matched = false;
-        for (size_t i = 0; i < class_def->data.class_def.params.count; i++) {
-            if (strcmp(arg->name.data,
-                       class_def->data.class_def.params.params[i].name.data) == 0) {
-                matched = true;
-                break;
-            }
-        }
-        if (matched) continue;
-        for (size_t k = 0; class_metaparams[k]; k++) {
-            if (strcmp(arg->name.data, class_metaparams[k]) == 0) {
-                matched = true;
-                break;
-            }
-        }
-        if (!matched) {
-            puppet_error_at(class_instance_stmt->loc,
-                            "Class '%s' has no parameter named '%s'",
-                            class_name, arg->name.data);
-            puppet_env_increment_error(env);
-        }
-    }
+    puppet_validate_class_args(class_def,
+                               class_instance_stmt->data.class_instance.arguments,
+                               class_instance_stmt->data.class_instance.arg_count,
+                               class_name, class_instance_stmt->loc, env);
 
     // Execute the class body
     puppet_debug("Executing class body for: %s", class_name);
