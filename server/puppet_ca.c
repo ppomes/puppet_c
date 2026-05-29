@@ -594,6 +594,31 @@ int puppet_ca_sign_csr(puppet_ca_ctx_t *ctx,
         return -1;
     }
 
+    /* Bind the CSR's identity to the authorized certname. The issued cert's
+     * subject is copied from the CSR below, while autosign/authorization is
+     * decided on `certname`. Without this check a request authorized for one
+     * name could carry a CSR whose CN is an arbitrary (privileged) identity,
+     * yielding a valid cert for that identity. Require an exact CN match. */
+    X509_NAME *csr_subject = X509_REQ_get_subject_name(req);
+    char csr_cn[PUPPET_CA_MAX_CERTNAME] = {0};
+    if (!csr_subject ||
+        X509_NAME_get_text_by_NID(csr_subject, NID_commonName,
+                                  csr_cn, sizeof(csr_cn)) <= 0) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "CSR has no Common Name");
+        EVP_PKEY_free(req_pkey);
+        X509_REQ_free(req);
+        return -1;
+    }
+    if (strcmp(csr_cn, certname) != 0) {
+        snprintf(ctx->last_error, sizeof(ctx->last_error),
+                "CSR Common Name '%s' does not match requested certname '%s'",
+                csr_cn, certname);
+        EVP_PKEY_free(req_pkey);
+        X509_REQ_free(req);
+        return -1;
+    }
+
     /* Create new certificate */
     X509 *x509 = X509_new();
     if (!x509) {

@@ -2399,9 +2399,13 @@ puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppe
 
         case PUPPET_OP_MOD:
             if (left->type == PUPPET_VALUE_NUMBER && right->type == PUPPET_VALUE_NUMBER) {
-                if (right->data.number != 0) {
+                /* Puppet's % is an integer operation; guard the *integer*
+                 * divisor, not the double — a fractional divisor like 0.5
+                 * truncates to 0 and would otherwise SIGFPE. */
+                int divisor = (int)right->data.number;
+                if (divisor != 0) {
                     return puppet_value_create_number(
-                        (int)left->data.number % (int)right->data.number);
+                        (int)left->data.number % divisor);
                 }
                 fprintf(stderr, "Warning: modulo by zero\n");
             }

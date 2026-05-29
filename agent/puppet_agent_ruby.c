@@ -1055,28 +1055,25 @@ char *agent_ruby_call_function(agent_ruby_context_t *ctx,
     }
     *dst = '\0';
 
-    /* Simple function call - args handling is simplified */
-    if (args_json && strlen(args_json) > 0) {
-        snprintf(ruby_code, sizeof(ruby_code),
-            "begin\n"
-            "  require 'json'\n"
-            "  args = JSON.parse('%s')\n"
-            "  result = %s(*args)\n"
-            "  result.to_s\n"
-            "rescue => e\n"
-            "  \"<Deferred:%s:error:#{e.message}>\"\n"
-            "end\n",
-            args_json, ruby_func_name, func_name);
-    } else {
-        snprintf(ruby_code, sizeof(ruby_code),
-            "begin\n"
-            "  result = %s()\n"
-            "  result.to_s\n"
-            "rescue => e\n"
-            "  \"<Deferred:%s:error:#{e.message}>\"\n"
-            "end\n",
-            ruby_func_name, func_name);
-    }
+    /* Pass the function name and args JSON as Ruby *data* via global
+     * variables (GC roots), never interpolated into the eval'd source.
+     * Both come from server-controlled Deferred() values; string-splicing
+     * them into Ruby source was a code-injection sink (a quote or #{...}
+     * in args_json/func_name would execute arbitrary Ruby on the agent). */
+    rb_gv_set("$puppet_deferred_fn", rb_str_new_cstr(ruby_func_name));
+    rb_gv_set("$puppet_deferred_args",
+              rb_str_new_cstr((args_json && strlen(args_json) > 0) ? args_json : "[]"));
+
+    snprintf(ruby_code, sizeof(ruby_code),
+        "begin\n"
+        "  require 'json'\n"
+        "  __pc_args = JSON.parse($puppet_deferred_args)\n"
+        "  __pc_args = [__pc_args] unless __pc_args.is_a?(Array)\n"
+        "  result = send($puppet_deferred_fn.to_sym, *__pc_args)\n"
+        "  result.to_s\n"
+        "rescue => e\n"
+        "  \"<Deferred:#{$puppet_deferred_fn}:error:#{e.message}>\"\n"
+        "end\n");
 
     VALUE ruby_result = rb_eval_string_protect(ruby_code, &state);
 

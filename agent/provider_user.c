@@ -208,12 +208,12 @@ static apply_result_t user_apply(const resource_t *resource, apply_context_t *ct
     n = snprintf(p, remaining, "usermod");
     p += n; remaining -= n;
 
-    /* Check UID */
+    /* Check UID — shell-escape all values, same as the useradd path */
     if (uid_str && strlen(uid_str) > 0) {
         uid_t desired_uid = (uid_t)atoi(uid_str);
         if (pw->pw_uid != desired_uid) {
-            n = snprintf(p, remaining, " -u %s", uid_str);
-            p += n; remaining -= n;
+            char *esc = shell_escape(uid_str);
+            if (esc) { n = snprintf(p, remaining, " -u %s", esc); p += n; remaining -= n; puppet_free(esc); }
             needs_modify = true;
         }
     }
@@ -232,37 +232,37 @@ static apply_result_t user_apply(const resource_t *resource, apply_context_t *ct
         }
 
         if (pw->pw_gid != desired_gid) {
-            n = snprintf(p, remaining, " -g '%s'", gid_str);
-            p += n; remaining -= n;
+            char *esc = shell_escape(gid_str);
+            if (esc) { n = snprintf(p, remaining, " -g %s", esc); p += n; remaining -= n; puppet_free(esc); }
             needs_modify = true;
         }
     }
 
     /* Check home */
     if (str_differs(pw->pw_dir, home)) {
-        n = snprintf(p, remaining, " -d '%s'", home);
-        p += n; remaining -= n;
+        char *esc = shell_escape(home);
+        if (esc) { n = snprintf(p, remaining, " -d %s", esc); p += n; remaining -= n; puppet_free(esc); }
         needs_modify = true;
     }
 
     /* Check shell */
     if (str_differs(pw->pw_shell, shell)) {
-        n = snprintf(p, remaining, " -s '%s'", shell);
-        p += n; remaining -= n;
+        char *esc = shell_escape(shell);
+        if (esc) { n = snprintf(p, remaining, " -s %s", esc); p += n; remaining -= n; puppet_free(esc); }
         needs_modify = true;
     }
 
     /* Check comment/GECOS */
     if (str_differs(pw->pw_gecos, comment)) {
-        n = snprintf(p, remaining, " -c '%s'", comment);
-        p += n; remaining -= n;
+        char *esc = shell_escape(comment);
+        if (esc) { n = snprintf(p, remaining, " -c %s", esc); p += n; remaining -= n; puppet_free(esc); }
         needs_modify = true;
     }
 
     /* Check supplementary groups (always set if specified) */
     if (groups && strlen(groups) > 0) {
-        n = snprintf(p, remaining, " -G '%s'", groups);
-        p += n; remaining -= n;
+        char *esc = shell_escape(groups);
+        if (esc) { n = snprintf(p, remaining, " -G %s", esc); p += n; remaining -= n; puppet_free(esc); }
         needs_modify = true;
     }
 
@@ -275,7 +275,13 @@ static apply_result_t user_apply(const resource_t *resource, apply_context_t *ct
         return APPLY_SKIPPED;
     }
 
-    snprintf(p, remaining, " '%s' 2>&1", username);
+    char *esc_user = shell_escape(username);
+    if (!esc_user) {
+        apply_context_set_error(ctx, "Failed to escape username");
+        return APPLY_FAILED;
+    }
+    snprintf(p, remaining, " %s 2>&1", esc_user);
+    puppet_free(esc_user);
 
     if (run_user_command(cmd, ctx->verbose) != 0) {
         apply_context_set_error(ctx, "Failed to modify user %s", username);

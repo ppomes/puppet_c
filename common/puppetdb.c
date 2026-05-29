@@ -432,7 +432,12 @@ char *puppetdb_list_nodes(puppetdb_t *db) {
         int64_t last_seen = sqlite3_column_int64(stmt, 1);
         int deactivated = sqlite3_column_type(stmt, 2) != SQLITE_NULL;
 
-        while (buf_len + 256 >= buf_size) {
+        /* Size the slack to the actual certname length; a fixed 256-byte
+         * margin overflows for long certnames (snprintf would truncate and
+         * return the untruncated length, advancing buf_len past buf_size).
+         * Mirrors the guard in puppetdb_query_exported. */
+        size_t needed = (certname ? strlen(certname) : 0) + 128;
+        while (buf_len + needed >= buf_size) {
             buf_size *= 2;
             char *new_buf = puppet_realloc(buf, buf_size);
             if (!new_buf) {
@@ -443,19 +448,33 @@ char *puppetdb_list_nodes(puppetdb_t *db) {
             buf = new_buf;
         }
 
-        buf_len += snprintf(buf + buf_len, buf_size - buf_len,
+        int written = snprintf(buf + buf_len, buf_size - buf_len,
             "%s{\"certname\":\"%s\",\"last_seen\":%lld,\"deactivated\":%s}",
             first ? "" : ",",
             certname ? certname : "",
             (long long)last_seen,
             deactivated ? "true" : "false");
+        if (written < 0 || (size_t)written >= buf_size - buf_len) {
+            /* Should not happen — `needed` reserves more than any single
+             * entry can require. Bail rather than corrupt the buffer. */
+            puppet_free(buf);
+            sqlite3_finalize(stmt);
+            return NULL;
+        }
+        buf_len += (size_t)written;
         first = 0;
     }
     sqlite3_finalize(stmt);
 
     /* Close array */
     if (buf_len + 2 >= buf_size) {
-        buf = puppet_realloc(buf, buf_size + 2);
+        char *new_buf = puppet_realloc(buf, buf_size + 2);
+        if (!new_buf) {
+            puppet_free(buf);
+            return NULL;
+        }
+        buf = new_buf;
+        buf_size += 2;
     }
     strcat(buf, "]");
 

@@ -3319,9 +3319,11 @@ puppet_value_t *puppet_func_shuffle(puppet_expr_list_t *args, puppet_env_t *env)
         result->items[i] = puppet_value_copy(val->data.array->items[i]);
     }
 
-    /* Fisher-Yates shuffle using thread-safe random */
+    /* Fisher-Yates shuffle using thread-safe random.
+     * `i = count; i-- > 1` avoids the SIZE_MAX underflow that
+     * `count - 1` produces when the array is empty. */
     unsigned int seed = (unsigned int)time(NULL) ^ (unsigned int)(uintptr_t)&seed;
-    for (size_t i = result->count - 1; i > 0; i--) {
+    for (size_t i = result->count; i-- > 1; ) {
         size_t j = (size_t)rand_r(&seed) % (i + 1);
         puppet_value_t *tmp = result->items[i];
         result->items[i] = result->items[j];
