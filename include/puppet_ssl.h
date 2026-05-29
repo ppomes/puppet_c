@@ -222,12 +222,29 @@ void puppet_ssl_conn_free(puppet_ssl_conn_t *conn);
 /**
  * @brief Perform SSL handshake
  *
- * Performs the SSL/TLS handshake (either client or server side).
+ * Performs the SSL/TLS handshake (either client or server side). For client
+ * connections, the peer certificate chain result is enforced after the
+ * handshake (and the hostname, if set via
+ * puppet_ssl_conn_set_verify_hostname()).
  *
  * @param conn SSL connection
  * @return 0 on success, -1 on error
  */
 int puppet_ssl_conn_handshake(puppet_ssl_conn_t *conn);
+
+/**
+ * @brief Set the hostname the peer certificate must match (client side)
+ *
+ * Must be called before puppet_ssl_conn_handshake(). Enables CN/SAN
+ * matching so a certificate that chains to the CA but was issued for a
+ * different identity is rejected. Also sets the TLS SNI server name.
+ *
+ * @param conn SSL connection
+ * @param hostname Expected peer hostname (e.g. the Puppet server FQDN)
+ * @return 0 on success, -1 on error
+ */
+int puppet_ssl_conn_set_verify_hostname(puppet_ssl_conn_t *conn,
+                                        const char *hostname);
 
 /**
  * @brief Read data from SSL connection

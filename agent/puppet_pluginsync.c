@@ -23,6 +23,30 @@ struct response_buffer {
     size_t size;
 };
 
+/*
+ * Apply TLS server-identity verification and mTLS to a curl handle, mirroring
+ * the agent's main catalog path. Pluginsync downloads executable Ruby that the
+ * agent then runs, so the server must be authenticated: VERIFYHOST=2 enforces
+ * the server hostname against the cert, pinning the Puppet CA makes "trusted"
+ * mean "signed by our CA" (not the system bundle), and the client cert enables
+ * mutual TLS. Applied once to the shared handle, covering metadata + content.
+ */
+static void pluginsync_configure_tls(CURL *curl,
+                                     const pluginsync_config_t *config) {
+    if (!curl || !config) return;
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    if (config->ssl_ca_cert_path) {
+        curl_easy_setopt(curl, CURLOPT_CAINFO, config->ssl_ca_cert_path);
+    }
+    if (config->ssl_cert_path) {
+        curl_easy_setopt(curl, CURLOPT_SSLCERT, config->ssl_cert_path);
+    }
+    if (config->ssl_key_path) {
+        curl_easy_setopt(curl, CURLOPT_SSLKEY, config->ssl_key_path);
+    }
+}
+
 /**
  * CURL write callback
  */
@@ -226,6 +250,10 @@ int pluginsync_run(const pluginsync_config_t *config, pluginsync_result_t *resul
         fprintf(stderr, "Error: Failed to initialize CURL\n");
         return -1;
     }
+
+    /* Authenticate the server (host + Puppet CA) and present the client
+     * cert before any request — this handle is reused for downloads. */
+    pluginsync_configure_tls(curl, config);
 
     /* Fetch file metadata from server */
     char url[4096];

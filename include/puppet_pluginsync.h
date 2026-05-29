@@ -20,6 +20,12 @@ typedef struct {
     const char *libdir;       /* Local plugin directory */
     const char *environment;  /* Environment name */
     bool verbose;             /* Verbose output */
+    /* TLS: pin the Puppet CA and present the client cert so the server is
+     * authenticated (host + CA) and mTLS is performed, matching the main
+     * catalog path. NULL fields fall back to libcurl defaults. */
+    const char *ssl_ca_cert_path; /* CA certificate to verify the server */
+    const char *ssl_cert_path;    /* Client certificate (mTLS) */
+    const char *ssl_key_path;     /* Client private key (mTLS) */
 } pluginsync_config_t;
 
 /**

@@ -782,7 +782,10 @@ static int run_agent(agent_config_t *config) {
             .server_url = config->server_url,
             .libdir = config->libdir,
             .environment = config->environment,
-            .verbose = config->verbose
+            .verbose = config->verbose,
+            .ssl_ca_cert_path = config->ssl_ca_cert_path,
+            .ssl_cert_path = config->ssl_cert_path,
+            .ssl_key_path = config->ssl_key_path
         };
         pluginsync_result_t ps_result = {0};
         if (pluginsync_run(&ps_config, &ps_result) == 0) {

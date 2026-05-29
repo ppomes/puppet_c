@@ -316,6 +316,49 @@ int puppet_ssl_conn_handshake(puppet_ssl_conn_t *conn) {
         return -1;
     }
 
+    /* A successful handshake only means the crypto succeeded; with
+     * SSL_VERIFY_PEER the chain result is reported separately. Enforce it
+     * (and, when an expected hostname was set via
+     * puppet_ssl_conn_set_verify_hostname, this also covers the CN/SAN
+     * match — X509_V_ERR_HOSTNAME_MISMATCH). Without this a client would
+     * accept any cert that merely chains to a trusted CA. */
+    if (!conn->is_server) {
+        long vr = SSL_get_verify_result(conn->ssl);
+        if (vr != X509_V_OK) {
+            snprintf(conn->last_error, sizeof(conn->last_error),
+                    "Peer certificate verification failed: %s",
+                    X509_verify_cert_error_string(vr));
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+/**
+ * Set the hostname the peer certificate must match (client side).
+ *
+ * Must be called before puppet_ssl_conn_handshake(). Enables RFC 6125
+ * CN/SAN matching inside OpenSSL's verification so that a certificate which
+ * merely chains to the CA but was issued for a different identity is
+ * rejected. Also sets the SNI server name.
+ */
+int puppet_ssl_conn_set_verify_hostname(puppet_ssl_conn_t *conn,
+                                        const char *hostname) {
+    if (!conn || !conn->ssl || !hostname) {
+        return -1;
+    }
+
+    SSL_set_hostflags(conn->ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+    if (SSL_set1_host(conn->ssl, hostname) != 1) {
+        snprintf(conn->last_error, sizeof(conn->last_error),
+                "Failed to set expected hostname '%s' for verification",
+                hostname);
+        return -1;
+    }
+
+    /* Server Name Indication (best-effort) */
+    SSL_set_tlsext_host_name(conn->ssl, hostname);
     return 0;
 }
 
