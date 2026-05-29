@@ -62,7 +62,24 @@ typedef struct {
     bool show_catalog;   /* Show catalog JSON */
     bool use_ruby;       /* Enable Ruby support */
     bool pluginsync;     /* Enable pluginsync */
+    bool allow_http;     /* Permit plaintext HTTP to a remote server */
 } agent_config_t;
+
+/*
+ * Returns true for an http:// URL whose host is NOT loopback — the case where
+ * plaintext exposes catalogs and (executable) plugin downloads to MITM.
+ * Loopback (localhost / 127.0.0.0/8 / ::1) can't be intercepted, so it's safe
+ * over plaintext and never requires --allow-http.
+ */
+static bool is_plaintext_remote_url(const char *url) {
+    if (!url || strncmp(url, "http://", 7) != 0) return false;  /* https/other */
+    const char *host = url + 7;
+    if (strncmp(host, "localhost", 9) == 0 &&
+        (host[9] == '\0' || host[9] == ':' || host[9] == '/')) return false;
+    if (strncmp(host, "127.", 4) == 0) return false;
+    if (strncmp(host, "::1", 3) == 0 || strncmp(host, "[::1]", 5) == 0) return false;
+    return true;
+}
 
 /* Forward declarations */
 static size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp);
@@ -1046,6 +1063,7 @@ static void print_usage(const char *prog) {
     printf("      --no-ruby         Disable Ruby support (default)\n");
     printf("      --pluginsync      Enable pluginsync to fetch modules' lib/ files\n");
     printf("      --no-pluginsync   Disable pluginsync (default)\n");
+    printf("      --allow-http      Permit plaintext HTTP to a remote server (insecure)\n");
     printf("  -v, --verbose         Verbose output\n");
     printf("  -h, --help            Show this help\n");
     printf("\nConfig file sections:\n");
@@ -1098,7 +1116,8 @@ skip_root_check:
         .show_facts = false,
         .show_catalog = false,
         .use_ruby = false,
-        .pluginsync = false
+        .pluginsync = false,
+        .allow_http = false
     };
 
     /* Long option IDs for options without short form */
@@ -1107,7 +1126,8 @@ skip_root_check:
         OPT_RUBY,
         OPT_NO_RUBY,
         OPT_PLUGINSYNC,
-        OPT_NO_PLUGINSYNC
+        OPT_NO_PLUGINSYNC,
+        OPT_ALLOW_HTTP
     };
 
     static struct option long_options[] = {
@@ -1125,6 +1145,7 @@ skip_root_check:
         {"no-ruby", no_argument, 0, OPT_NO_RUBY},
         {"pluginsync", no_argument, 0, OPT_PLUGINSYNC},
         {"no-pluginsync", no_argument, 0, OPT_NO_PLUGINSYNC},
+        {"allow-http", no_argument, 0, OPT_ALLOW_HTTP},
         {"verbose", no_argument, 0, 'v'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
@@ -1196,6 +1217,7 @@ skip_root_check:
         config.verbose = config_get_bool(file_config, "agent", "verbose", false);
         config.use_ruby = config_get_bool(file_config, "agent", "ruby", false);
         config.pluginsync = config_get_bool(file_config, "agent", "pluginsync", false);
+        config.allow_http = config_get_bool(file_config, "agent", "allow_http", false);
     }
 
     /* Apply environment variables (medium priority) */
@@ -1203,10 +1225,16 @@ skip_root_check:
     const char *env_environment = getenv("PUPPET_ENVIRONMENT");
     const char *env_ssl_dir = getenv("PUPPET_SSL_DIR");
     const char *env_ca_cert = getenv("PUPPET_CA_PATH");
+    const char *env_allow_http = getenv("PUPPET_ALLOW_HTTP");
     if (env_server) config.server_url = env_server;
     if (env_environment) config.environment = env_environment;
     if (env_ssl_dir) config.ssl_dir = env_ssl_dir;
     if (env_ca_cert) config.ssl_ca_cert_path = env_ca_cert;
+    if (env_allow_http && (strcmp(env_allow_http, "1") == 0 ||
+                           strcmp(env_allow_http, "true") == 0 ||
+                           strcmp(env_allow_http, "yes") == 0)) {
+        config.allow_http = true;
+    }
 
     /* Apply final defaults if still unset */
     if (!config.server_url) config.server_url = DEFAULT_SERVER;
@@ -1259,6 +1287,9 @@ skip_root_check:
             case OPT_NO_PLUGINSYNC:
                 config.pluginsync = false;
                 break;
+            case OPT_ALLOW_HTTP:
+                config.allow_http = true;
+                break;
             case 'v':
                 config.verbose = true;
                 break;
@@ -1282,6 +1313,30 @@ skip_root_check:
         normalized_url = puppet_malloc(len);
         snprintf(normalized_url, len, "http://%s:8140", config.server_url);
         config.server_url = normalized_url;
+    }
+
+    /* Refuse plaintext HTTP to a remote server unless explicitly allowed:
+     * catalogs and (executable) plugins would be transferred unauthenticated
+     * and are trivially MITM'd. Loopback is exempt. */
+    if (is_plaintext_remote_url(config.server_url)) {
+        if (config.allow_http) {
+            fprintf(stderr,
+                "WARNING: using plaintext HTTP for '%s' — catalog and plugin "
+                "downloads are unauthenticated and exposed to MITM "
+                "(permitted via --allow-http).\n", config.server_url);
+        } else {
+            fprintf(stderr,
+                "Error: refusing plaintext HTTP to remote server '%s'.\n"
+                "  Catalogs and executable plugins would be transferred "
+                "unauthenticated (MITM / remote code execution risk).\n"
+                "  Use an https:// URL, or pass --allow-http "
+                "(or set PUPPET_ALLOW_HTTP=1) to override.\n",
+                config.server_url);
+            if (normalized_url) puppet_free(normalized_url);
+            config_free(file_config);
+            if (config.certname) puppet_free(config.certname);
+            return 1;
+        }
     }
 
     /* Initialize curl */

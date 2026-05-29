@@ -47,6 +47,7 @@ services:
         condition: service_healthy
     environment:
       - PUPPET_SERVER=http://server:8140
+      - PUPPET_ALLOW_HTTP=1  # demo uses plaintext on the internal network
     # Required for systemd in Docker
     privileged: true
     cgroup: host
@@ -68,6 +69,7 @@ services:
         condition: service_healthy
     environment:
       - PUPPET_SERVER=http://server:8140
+      - PUPPET_ALLOW_HTTP=1  # demo uses plaintext on the internal network
     # Required for systemd in Docker
     privileged: true
     cgroup: host

@@ -33,6 +33,7 @@ services:
         condition: service_healthy
     environment:
       - PUPPET_SERVER=http://test-server:8140
+      - PUPPET_ALLOW_HTTP=1  # test harness uses plaintext on the internal network
     networks:
       - puppet-test
 

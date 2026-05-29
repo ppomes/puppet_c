@@ -17,8 +17,8 @@ vagrant up agent
 
 # Test
 vagrant ssh agent
-puppetc-agent -s http://192.168.56.10:8140 -n   # noop
-puppetc-agent -s http://192.168.56.10:8140 -a   # apply
+puppetc-agent -s http://192.168.56.10:8140 --allow-http -n   # noop
+puppetc-agent -s http://192.168.56.10:8140 --allow-http -a   # apply
 ```
 
 ## Directory Structure
@@ -44,7 +44,7 @@ Edit `puppetcode/manifests/site.pp` on your host - changes are immediately avail
 vim puppetcode/manifests/site.pp
 
 # Test on agent (no need to restart server)
-vagrant ssh agent -c "puppetc-agent -s http://192.168.56.10:8140 -n"
+vagrant ssh agent -c "puppetc-agent -s http://192.168.56.10:8140 --allow-http -n"
 ```
 
 ## Commands
@@ -83,16 +83,16 @@ vagrant up
 vagrant ssh agent
 
 # Show facts
-puppetc-agent -s http://192.168.56.10:8140 -f
+puppetc-agent -s http://192.168.56.10:8140 --allow-http -f
 
 # Noop mode (dry run)
-puppetc-agent -s http://192.168.56.10:8140 -n
+puppetc-agent -s http://192.168.56.10:8140 --allow-http -n
 
 # Apply catalog
-puppetc-agent -s http://192.168.56.10:8140 -a
+puppetc-agent -s http://192.168.56.10:8140 --allow-http -a
 
 # Verbose mode
-puppetc-agent -s http://192.168.56.10:8140 -a -v
+puppetc-agent -s http://192.168.56.10:8140 --allow-http -a -v
 ```
 
 ## Server Management

@@ -56,7 +56,7 @@ After=network.target\n\
 Type=oneshot\n\
 EnvironmentFile=-/etc/default/puppetc-agent\n\
 ExecStartPre=/bin/sleep 3\n\
-ExecStart=/usr/bin/puppetc-agent -a -v --ruby --libdir /var/lib/puppetc/lib\n\
+ExecStart=/usr/bin/puppetc-agent -a -v --ruby --allow-http --libdir /var/lib/puppetc/lib\n\
 RemainAfterExit=yes\n\
 \n\
 [Install]\n\
