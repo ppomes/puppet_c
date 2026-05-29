@@ -47,6 +47,29 @@ static void pluginsync_configure_tls(CURL *curl,
     }
 }
 
+/*
+ * Reject server-supplied plugin paths that would escape libdir. The path is
+ * concatenated onto libdir and written to disk, so a value like
+ * "../../../etc/cron.d/x" or "/etc/passwd" from a malicious or compromised
+ * server would otherwise let it write arbitrary files as the agent (often
+ * root). Only accept a relative path with no absolute prefix and no ".."
+ * component (checked per path component, so legitimate names like "foo..bar"
+ * are still allowed).
+ */
+static bool pluginsync_path_is_safe(const char *rel) {
+    if (!rel || rel[0] == '\0') return false;
+    if (rel[0] == '/') return false;  /* absolute path */
+    const char *p = rel;
+    while (*p) {
+        const char *slash = strchr(p, '/');
+        size_t len = slash ? (size_t)(slash - p) : strlen(p);
+        if (len == 2 && p[0] == '.' && p[1] == '.') return false;  /* ".." */
+        if (!slash) break;
+        p = slash + 1;
+    }
+    return true;
+}
+
 /**
  * CURL write callback
  */
@@ -326,6 +349,16 @@ int pluginsync_run(const pluginsync_config_t *config, pluginsync_result_t *resul
         json_value_t *path_val = json_object_get(entry, "path");
         if (!path_val || path_val->type != JSON_VALUE_STRING) continue;
         const char *remote_path = path_val->data.string_value;
+
+        /* Refuse paths that would escape libdir (path traversal). Always
+         * report it — it means the server is malicious or misbehaving. */
+        if (!pluginsync_path_is_safe(remote_path)) {
+            fprintf(stderr,
+                    "Warning: pluginsync rejecting unsafe server path '%s'\n",
+                    remote_path);
+            res.errors++;
+            continue;
+        }
 
         /* Get checksum */
         json_value_t *checksum_obj = json_object_get(entry, "checksum");
