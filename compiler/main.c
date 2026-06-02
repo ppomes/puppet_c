@@ -251,10 +251,27 @@ int main(int argc, char *argv[]) {
             puppet_loader_set_modules_path(loader, modules_path);
         }
         
-        /* Try to load site.pp */
+        /* Try to load site.pp. load_site() returns NULL in two cases:
+         * (1) site.pp is absent — fine, just compile an empty catalog;
+         * (2) site.pp exists but the parser couldn't build a valid AST
+         *     (syntax errors). The second one was silently swallowed
+         *     here, letting broken site.pp through CI with Status: OK.
+         * Stat the path ourselves to tell the two apart. */
+        char site_pp_path[2048];
+        snprintf(site_pp_path, sizeof(site_pp_path), "%s/site.pp",
+                 loader->manifests_path);
+        struct stat site_pp_st;
+        bool site_pp_exists = (stat(site_pp_path, &site_pp_st) == 0);
+
         program = puppet_loader_load_site(loader);
         if (!program) {
-            /* If no site.pp, create empty program */
+            if (site_pp_exists) {
+                fprintf(stderr, "Error: Failed to parse %s — see parse errors above\n",
+                        site_pp_path);
+                puppet_loader_destroy(loader);
+                return 1;
+            }
+            /* No site.pp, create empty program */
             program = puppet_calloc(1, sizeof(puppet_program_t));
             program->statements.stmts = NULL;
             program->statements.count = 0;
