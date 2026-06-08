@@ -99,6 +99,7 @@ EXTRA_DIST = \
     test_source_url.sh \
     test_unknown_type.sh \
     test_template_fidelity.sh \
+    test_puppet8_lint.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -134,7 +135,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint
 	@echo "All tests completed."
 
 check-parser:
@@ -687,6 +688,17 @@ check-template-fidelity:
 	else \
 		echo "❌ Some template-fidelity tests failed:"; \
 		sed 's/^/  /' output/template_fidelity.out; \
+		exit 1; \
+	fi
+
+check-puppet8-lint:
+	@echo "Running Puppet 8 legacy-function lint tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_puppet8_lint.sh > output/puppet8_lint.out 2>&1; then \
+		echo "✅ All puppet8-lint tests passed!"; \
+	else \
+		echo "❌ Some puppet8-lint tests failed:"; \
+		sed 's/^/  /' output/puppet8_lint.out; \
 		exit 1; \
 	fi
 

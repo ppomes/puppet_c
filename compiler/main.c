@@ -305,6 +305,7 @@ int main(int argc, char *argv[]) {
         }
     }
     
+    puppet_lint_result_t p8_lint = {0, 0};
     if (result == 0 && program) {
         /* Puppet 8 compatibility checks always run — P8 semantics are the
          * only behaviour now (the -8/--puppet8 opt-in flag was removed).
@@ -314,8 +315,8 @@ int main(int argc, char *argv[]) {
          * each with its own warning/error policy, so it is intentionally
          * not a blanket erroring side effect of every compile. */
         {
-            puppet_lint_result_t lint = puppet_lint_puppet8(program);
-            if (lint.errors > 0) {
+            p8_lint = puppet_lint_puppet8(program);
+            if (p8_lint.errors > 0) {
                 result = 1;
             }
             if (!eval_mode && !json_output) {
@@ -565,6 +566,10 @@ int main(int argc, char *argv[]) {
             if (summary_mode) {
                 size_t nodes_processed, nodes_failed, nodes_skipped, errors, warnings;
                 puppet_env_get_stats(env, &nodes_processed, &nodes_failed, &nodes_skipped, &errors, &warnings);
+                /* Fold the Puppet 8 AST lint findings into the standard
+                 * summary so CI sees a single error/warning count. */
+                errors += p8_lint.errors;
+                warnings += p8_lint.warnings;
 
                 fprintf(stderr, "\n=== Validation Summary ===\n");
                 fprintf(stderr, "Nodes processed: %zu\n", nodes_processed);
