@@ -98,6 +98,7 @@ typedef struct {
     int column;                 /**< Current column number */
     json_token_t current_token; /**< Current token */
     char *error_message;        /**< Error message if parsing fails */
+    int depth;                  /**< Current container nesting depth (recursion guard) */
 } json_parser_t;
 
 /*

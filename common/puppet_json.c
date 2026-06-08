@@ -722,8 +722,41 @@ bool json_object_get_bool(json_value_t *obj, const char *key) {
  * ===========================================================================
  */
 
+/* Bound container nesting to prevent stack exhaustion from deeply nested input
+ * (e.g. a "[[[[..." payload from PuppetDB, a catalog, or a facts file). Both
+ * container parsers recurse — objects via json_parse_value(), arrays directly
+ * into the container parsers — so the depth guard lives at the entry of each
+ * (the wrappers below) rather than in json_parse_value. Real data nests far
+ * below this; the limit only rejects pathological/adversarial input. */
+#define JSON_MAX_DEPTH 200
+
 static json_value_t *json_parse_object_internal(json_parser_t *parser);
 static json_value_t *json_parse_array_internal(json_parser_t *parser);
+static json_value_t *json_parse_object_body(json_parser_t *parser);
+static json_value_t *json_parse_array_body(json_parser_t *parser);
+
+/* Depth-counting wrappers around the container parsers. */
+static json_value_t *json_parse_object_internal(json_parser_t *parser) {
+    if (parser->depth >= JSON_MAX_DEPTH) {
+        json_parser_set_error(parser, "Maximum JSON nesting depth exceeded");
+        return NULL;
+    }
+    parser->depth++;
+    json_value_t *result = json_parse_object_body(parser);
+    parser->depth--;
+    return result;
+}
+
+static json_value_t *json_parse_array_internal(json_parser_t *parser) {
+    if (parser->depth >= JSON_MAX_DEPTH) {
+        json_parser_set_error(parser, "Maximum JSON nesting depth exceeded");
+        return NULL;
+    }
+    parser->depth++;
+    json_value_t *result = json_parse_array_body(parser);
+    parser->depth--;
+    return result;
+}
 
 json_value_t *json_parse_value(json_parser_t *parser) {
     if (!json_parser_next_token(parser)) {
@@ -755,7 +788,7 @@ json_value_t *json_parse_value(json_parser_t *parser) {
     }
 }
 
-static json_value_t *json_parse_object_internal(json_parser_t *parser) {
+static json_value_t *json_parse_object_body(json_parser_t *parser) {
     json_value_t *obj = json_value_create_object();
     if (!obj) return NULL;
 
@@ -823,7 +856,7 @@ static json_value_t *json_parse_object_internal(json_parser_t *parser) {
     return obj;
 }
 
-static json_value_t *json_parse_array_internal(json_parser_t *parser) {
+static json_value_t *json_parse_array_body(json_parser_t *parser) {
     json_value_t *arr = json_value_create_array();
     if (!arr) return NULL;
 
