@@ -16,6 +16,7 @@
 #include <stdarg.h>
 #include <ctype.h>
 #include <regex.h>
+#include <limits.h>
 #include <unistd.h>
 #include <sys/wait.h>
 /* Note: Do NOT include ruby.h here - it redefines snprintf to ruby_snprintf
@@ -2125,6 +2126,119 @@ static bool value_matches_type(puppet_value_t *val, const char *type_name,
     return value_matches_type_impl(val, type_name, title_expr, env);
 }
 
+/**
+ * Check a runtime value against a Puppet type constraint, working
+ * straight off the raw source text the parser captured (e.g.
+ * "Hash", "String[1]", "Pattern[/^a$/]", "Enum['a','b']",
+ * "Variant[String, Integer]").
+ *
+ * Strategy:
+ *  - Split off the base name (before the first '['). Bare type → use
+ *    value_matches_type directly.
+ *  - For parametric types we recognise (String[min[,max]],
+ *    Integer[min[,max]], Array[type], Optional[type]) implement
+ *    just enough custom logic to get the common Puppet-8 cases
+ *    right.
+ *  - For anything else (Pattern[/.../], Enum['a','b'], Variant[…],
+ *    Stdlib::Absolutepath, …) we deliberately accept; the runtime's
+ *    title-aware path can't be fed easily from a raw string, and we
+ *    prefer false-negatives to false-positives.
+ *
+ * Returns true if val matches; false on a mismatch we can prove.
+ * NULL constraint or unknown shape → true (be conservative).
+ */
+static bool value_matches_type_str(puppet_value_t *val,
+                                    const char *type_str,
+                                    puppet_env_t *env) {
+    if (!type_str || !*type_str || !val) return true;
+
+    /* Split base name and bracket content. */
+    char base[64] = {0};
+    const char *bracket = strchr(type_str, '[');
+    size_t blen = bracket ? (size_t)(bracket - type_str) : strlen(type_str);
+    if (blen >= sizeof(base)) blen = sizeof(base) - 1;
+    memcpy(base, type_str, blen);
+    /* Trim trailing whitespace. */
+    while (blen > 0 && (base[blen-1] == ' ' || base[blen-1] == '\t')) base[--blen] = '\0';
+
+    if (!bracket) {
+        /* Plain bare type. Only return false when we know the
+         * mismatch for sure; accept user-defined types
+         * (Stdlib::Absolutepath, Stdlib::Filemode, …) silently. */
+        if (strcmp(base, "Hash") == 0)    return val->type == PUPPET_VALUE_HASH;
+        if (strcmp(base, "Array") == 0)   return val->type == PUPPET_VALUE_ARRAY;
+        if (strcmp(base, "Boolean") == 0) return val->type == PUPPET_VALUE_BOOL;
+        if (strcmp(base, "Numeric") == 0) return val->type == PUPPET_VALUE_NUMBER;
+        if (strcmp(base, "Integer") == 0) {
+            return val->type == PUPPET_VALUE_NUMBER &&
+                   val->data.number == (double)(long long)val->data.number;
+        }
+        if (strcmp(base, "String") == 0)  return val->type == PUPPET_VALUE_STRING;
+        if (strcmp(base, "Regexp") == 0)  return val->type == PUPPET_VALUE_REGEXP;
+        if (strcmp(base, "Undef") == 0)   return val->type == PUPPET_VALUE_UNDEF;
+        /* NotUndef, Any, Data, Scalar, custom Stdlib::* — accept. */
+        if (strcmp(base, "NotUndef") == 0) return val->type != PUPPET_VALUE_UNDEF;
+        return true;
+    }
+
+    /* String[N] / String[min, max]: length-constrained string. */
+    if (strcmp(base, "String") == 0) {
+        if (val->type != PUPPET_VALUE_STRING) return false;
+        long min = 0, max = -1;
+        /* Try "[min, max]" first, then "[min]". */
+        if (sscanf(bracket, " [ %ld , %ld ]", &min, &max) < 2) {
+            sscanf(bracket, " [ %ld ]", &min);
+        }
+        size_t len = val->data.string.len;
+        if ((long)len < min) return false;
+        if (max >= 0 && (long)len > max) return false;
+        return true;
+    }
+
+    /* Integer[min[,max]]: numeric range. */
+    if (strcmp(base, "Integer") == 0) {
+        if (val->type != PUPPET_VALUE_NUMBER) return false;
+        double n = val->data.number;
+        if (n != (double)(long long)n) return false;
+        long min = LONG_MIN, max = LONG_MAX;
+        sscanf(bracket, " [ %ld , %ld ]", &min, &max);
+        long ni = (long)n;
+        return ni >= min && ni <= max;
+    }
+
+    /* Optional[X]: undef OR matches X. */
+    if (strcmp(base, "Optional") == 0) {
+        if (val->type == PUPPET_VALUE_UNDEF) return true;
+        /* Extract inner without the surrounding brackets. */
+        const char *inner = bracket + 1;
+        const char *end = strrchr(inner, ']');
+        if (!end) return true;
+        size_t inner_len = (size_t)(end - inner);
+        char inner_buf[128] = {0};
+        if (inner_len >= sizeof(inner_buf)) inner_len = sizeof(inner_buf) - 1;
+        memcpy(inner_buf, inner, inner_len);
+        /* Trim. */
+        while (*inner_buf && (*inner_buf == ' ' || *inner_buf == '\t')) {
+            memmove(inner_buf, inner_buf + 1, strlen(inner_buf));
+        }
+        return value_matches_type_str(val, inner_buf, env);
+    }
+
+    /* Pattern[/re/], Enum['a','b'], Variant[…], custom types
+     * (Stdlib::Absolutepath, Stdlib::Fqdn, …) — too thorny to parse
+     * out of raw text. Accept and let runtime catch it. */
+    /* Pattern[/re/], Enum['a','b'], Variant[…], custom types
+     * (Stdlib::Absolutepath, Stdlib::Fqdn, …) — too thorny to parse
+     * out of raw text. Be conservative: only fail on bases we can
+     * confirm without needing the bracketed payload. */
+    if (strcmp(base, "Hash") == 0)    return val->type == PUPPET_VALUE_HASH;
+    if (strcmp(base, "Array") == 0)   return val->type == PUPPET_VALUE_ARRAY;
+    if (strcmp(base, "Boolean") == 0) return val->type == PUPPET_VALUE_BOOL;
+    if (strcmp(base, "Numeric") == 0) return val->type == PUPPET_VALUE_NUMBER;
+    /* Unknown / parametric base — accept silently to avoid false positives. */
+    return true;
+}
+
 puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppet_value_t *right) {
     switch (op) {
         case PUPPET_OP_ADD:
@@ -3391,6 +3505,19 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                                         strcmp(instance->attributes[ai].name.data, param_name) == 0) {
                                         pre_eval_values[pi] = puppet_eval_expr(instance->attributes[ai].value, env);
                                         attr_found[pi] = true;
+                                        // Type-check the provided value (see
+                                        // puppet_exec_class_instance for the
+                                        // detailed rationale).
+                                        if (param->type_expr && pre_eval_values[pi] &&
+                                            !value_matches_type_str(pre_eval_values[pi],
+                                                                     param->type_str.data, env)) {
+                                            char typestr[128];
+                                            snprintf(typestr, sizeof(typestr), "%s", param->type_str.data ? param->type_str.data : "?");
+                                            puppet_error_at(stmt->loc,
+                                                "Class '%s' parameter $%s: expected %s, got incompatible value",
+                                                class_name, param_name, typestr);
+                                            puppet_env_increment_error(env);
+                                        }
                                         break;
                                     }
                                 }
@@ -4479,6 +4606,22 @@ static void puppet_exec_deferred_define(puppet_deferred_define_t *deferred, pupp
                 define_stmt->data.define.params.params[p].default_value, env);
         }
 
+        /* Type-check the resolved value against the declared
+         * constraint. Same rationale as for class params — a
+         * `apt::source { 'k8s': repos => '' }` with
+         * `String[1] $repos` should fail at compile time, not at
+         * runtime on the puppetserver. */
+        puppet_param_t *dparam = &define_stmt->data.define.params.params[p];
+        if (dparam->type_expr && param_value &&
+            !value_matches_type_str(param_value, dparam->type_str.data, env)) {
+            char typestr[128];
+            snprintf(typestr, sizeof(typestr), "%s", dparam->type_str.data ? dparam->type_str.data : "?");
+            puppet_error_at(deferred->instance ? deferred->define_stmt->loc : define_stmt->loc,
+                "Defined type %s['%s']: parameter $%s expected %s, got incompatible value",
+                deferred->type_name, deferred->title, param_name, typestr);
+            puppet_env_increment_error(env);
+        }
+
         if (param_value) {
             puppet_scope_set_var(define_scope, param_name, param_value);
         }
@@ -5546,6 +5689,21 @@ void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t
             param_value = puppet_eval_expr(param->default_value, env);
         } else if (!found_arg) {
             param_value = puppet_value_create_undef();
+        }
+
+        // Type-check the parameter value against its declared constraint.
+        // Puppet refuses class { 'X': attr => v } when v doesn't satisfy
+        // the type — e.g. apt::source 'kubernetes': repos => '' fails because
+        // repos is String[1]. Be conservative: only error when we have a
+        // type_expr AND we recognise the type name; skip when in doubt.
+        if (param->type_expr && param_value &&
+            !value_matches_type_str(param_value, param->type_str.data, env)) {
+            char typestr[128];
+            snprintf(typestr, sizeof(typestr), "%s", param->type_str.data ? param->type_str.data : "?");
+            puppet_error_at(class_instance_stmt->loc,
+                "Class '%s' parameter $%s: expected %s, got incompatible value",
+                class_name, param_name, typestr);
+            puppet_env_increment_error(env);
         }
 
         // Set the parameter value in class scope

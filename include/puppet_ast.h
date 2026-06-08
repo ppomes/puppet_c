@@ -255,6 +255,15 @@ typedef struct {
     puppet_string_t name;
     puppet_expr_t *default_value;
     puppet_value_t *type_constraint;
+    /* Type constraint as an AST expression, e.g. `Hash`, `String[1]`,
+     * `Pattern[/^a$/]`, `Enum['a','b']`. NULL if the parameter is
+     * untyped. Filled in by convert_class_def / convert_define_def
+     * when the parser sees a typed_parameter wrapper. */
+    puppet_expr_t *type_expr;
+    /* Raw source text of the type constraint (e.g. "String[1]",
+     * "Hash", "Pattern[/^a$/]"). Lets the runtime see the parametric
+     * bracket content that the simplified type_expr above loses. */
+    puppet_string_t type_str;
 } puppet_param_t;
 
 typedef struct {

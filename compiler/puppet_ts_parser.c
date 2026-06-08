@@ -1758,6 +1758,48 @@ static puppet_stmt_t *convert_class_def(TSNode node, const char *source) {
                 p->name = puppet_string_create(name_str);
                 puppet_free(name_str);
 
+                /* Extract the type constraint expression, if any. The
+                 * typed_parameter node wraps:
+                 *   <type_expr>  e.g. Hash, String[1], Pattern[/.../]
+                 *   regular_parameter
+                 * We take the first named child that isn't the
+                 * regular_parameter wrapper. For the raw source text
+                 * we splice everything from the start of the
+                 * typed_param up to the start of the regular_parameter
+                 * — node_text on the type child only catches the base
+                 * name (`String`), losing the bracket content
+                 * (`String[1]`). */
+                if (!ts_node_is_null(typed_param)) {
+                    uint32_t tc = ts_node_named_child_count(typed_param);
+                    TSNode reg_in_typed = {0};
+                    bool has_reg = false;
+                    for (uint32_t k = 0; k < tc; k++) {
+                        TSNode tch = ts_node_named_child(typed_param, k);
+                        if (node_is(tch, "regular_parameter")) {
+                            reg_in_typed = tch;
+                            has_reg = true;
+                        } else if (!p->type_expr) {
+                            p->type_expr = convert_expression(tch, source);
+                        }
+                    }
+                    uint32_t start = ts_node_start_byte(typed_param);
+                    uint32_t end = has_reg ? ts_node_start_byte(reg_in_typed)
+                                           : ts_node_end_byte(typed_param);
+                    if (end > start) {
+                        size_t len = end - start;
+                        char *raw = puppet_malloc(len + 1);
+                        memcpy(raw, source + start, len);
+                        raw[len] = '\0';
+                        /* Trim trailing whitespace. */
+                        while (len > 0 && (raw[len-1] == ' ' || raw[len-1] == '\t' ||
+                                           raw[len-1] == '\n' || raw[len-1] == '\r')) {
+                            raw[--len] = '\0';
+                        }
+                        p->type_str = puppet_string_create(raw);
+                        puppet_free(raw);
+                    }
+                }
+
                 /* Check for default value - it's the second child (first is the param variable) */
                 uint32_t reg_param_children = ts_node_named_child_count(reg_param);
                 if (reg_param_children > 1) {
@@ -1833,6 +1875,38 @@ static puppet_stmt_t *convert_define_def(TSNode node, const char *source) {
                 puppet_param_t *p = &stmt->data.define.params.params[stmt->data.define.params.count];
                 p->name = puppet_string_create(name_str);
                 puppet_free(name_str);
+
+                /* Extract the type constraint expression and raw text
+                 * (see convert_class_def for the rationale). */
+                if (!ts_node_is_null(typed_param)) {
+                    uint32_t tc = ts_node_named_child_count(typed_param);
+                    TSNode reg_in_typed = {0};
+                    bool has_reg = false;
+                    for (uint32_t k = 0; k < tc; k++) {
+                        TSNode tch = ts_node_named_child(typed_param, k);
+                        if (node_is(tch, "regular_parameter")) {
+                            reg_in_typed = tch;
+                            has_reg = true;
+                        } else if (!p->type_expr) {
+                            p->type_expr = convert_expression(tch, source);
+                        }
+                    }
+                    uint32_t start = ts_node_start_byte(typed_param);
+                    uint32_t end = has_reg ? ts_node_start_byte(reg_in_typed)
+                                           : ts_node_end_byte(typed_param);
+                    if (end > start) {
+                        size_t len = end - start;
+                        char *raw = puppet_malloc(len + 1);
+                        memcpy(raw, source + start, len);
+                        raw[len] = '\0';
+                        while (len > 0 && (raw[len-1] == ' ' || raw[len-1] == '\t' ||
+                                           raw[len-1] == '\n' || raw[len-1] == '\r')) {
+                            raw[--len] = '\0';
+                        }
+                        p->type_str = puppet_string_create(raw);
+                        puppet_free(raw);
+                    }
+                }
 
                 /* Check for default value - it's the second child (first is the param variable) */
                 uint32_t reg_param_children = ts_node_named_child_count(reg_param);
