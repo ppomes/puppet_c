@@ -53,7 +53,6 @@ static void print_usage(const char *program_name) {
     printf("  -D, --hiera-data  Path to Hiera data directory (default: ./data)\n");
     printf("  -s, --summary     Print validation summary (for CI, implies -e)\n");
     printf("  -P, --parallel    Process nodes in parallel (faster, requires --all-nodes)\n");
-    printf("  -8, --puppet8     Check Puppet 8 compatibility (lint mode)\n");
     printf("  -X, --dead-code   Report classes/defines/functions/templates never used (implies -a)\n");
     printf("  -v, --verbose     Enable verbose/debug output\n");
     printf("  -h, --help        Show this help message\n");
@@ -86,7 +85,6 @@ int main(int argc, char *argv[]) {
     char *template_output = NULL;
     char *hiera_datadir = NULL;
     int verbose = 0;
-    int puppet8_check = 0;
     int dead_code_mode = 0;
     int opt;
 
@@ -104,14 +102,13 @@ int main(int argc, char *argv[]) {
         {"facts", required_argument, 0, 'f'},
         {"template", required_argument, 0, 't'},
         {"hiera-data", required_argument, 0, 'D'},
-        {"puppet8", no_argument, 0, '8'},
         {"dead-code", no_argument, 0, 'X'},
         {"verbose", no_argument, 0, 'v'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
 
-    while ((opt = getopt_long(argc, argv, "jecpsPo:m:n:af:t:D:8Xvh", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "jecpsPo:m:n:af:t:D:Xvh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'j':
                 json_output = 1;
@@ -156,9 +153,6 @@ int main(int argc, char *argv[]) {
                 break;
             case 'D':
                 hiera_datadir = optarg;
-                break;
-            case '8':
-                puppet8_check = 1;
                 break;
             case 'X':
                 dead_code_mode = 1;
@@ -312,42 +306,20 @@ int main(int argc, char *argv[]) {
     }
     
     if (result == 0 && program) {
-        /* Run Puppet 8 compatibility check if requested */
-        if (puppet8_check) {
-            /* Phase 1: AST-based checks on parsed manifests */
+        /* Puppet 8 compatibility checks always run — P8 semantics are the
+         * only behaviour now (the -8/--puppet8 opt-in flag was removed).
+         * Only the AST checks on the compiled manifest run here. The
+         * whole-tree ERB/Ruby/metadata file scan is being folded into the
+         * standard diagnostic stream per-check (features-todo items 2-4),
+         * each with its own warning/error policy, so it is intentionally
+         * not a blanket erroring side effect of every compile. */
+        {
             puppet_lint_result_t lint = puppet_lint_puppet8(program);
-
-            /* Phase 2: File-based checks (ERB, Ruby, metadata.json) */
-            puppet_lint_result_t file_lint = puppet_lint_puppet8_directory(input_path);
-            /* Also scan modules directory if available */
-            if (loader) {
-                puppet_lint_result_t mod_lint = puppet_lint_puppet8_directory(
-                    loader->modules_path);
-                file_lint.errors += mod_lint.errors;
-                file_lint.warnings += mod_lint.warnings;
-            }
-
-            if (file_lint.errors > 0 || file_lint.warnings > 0) {
-                fprintf(stderr, "\n\033[1mFile scan results:\033[0m ");
-                if (file_lint.errors > 0)
-                    fprintf(stderr, "\033[1;31m%d error%s\033[0m",
-                            file_lint.errors, file_lint.errors == 1 ? "" : "s");
-                if (file_lint.errors > 0 && file_lint.warnings > 0)
-                    fprintf(stderr, ", ");
-                if (file_lint.warnings > 0)
-                    fprintf(stderr, "\033[1;33m%d warning%s\033[0m",
-                            file_lint.warnings, file_lint.warnings == 1 ? "" : "s");
-                fputc('\n', stderr);
-            }
-
-            lint.errors += file_lint.errors;
-            lint.warnings += file_lint.warnings;
-
             if (lint.errors > 0) {
                 result = 1;
             }
             if (!eval_mode && !json_output) {
-                /* In lint-only mode, we're done */
+                /* No eval/JSON requested — validation-only, we're done */
                 puppet_program_destroy(program);
                 if (loader) puppet_loader_destroy(loader);
                 puppet_memory_shutdown();
