@@ -299,6 +299,7 @@ extern bool puppet_verbose;
 puppet_env_t *puppet_env_create(void);
 void puppet_env_destroy(puppet_env_t *env);
 void puppet_env_set_verbose(puppet_env_t *env, bool verbose);
+void puppet_env_set_strict_erb(puppet_env_t *env, bool strict_erb);
 
 /* Debug output macros - only output when verbose mode is enabled */
 #define puppet_debug(fmt, ...) do { \

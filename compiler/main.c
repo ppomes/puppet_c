@@ -54,6 +54,7 @@ static void print_usage(const char *program_name) {
     printf("  -s, --summary     Print validation summary (for CI, implies -e)\n");
     printf("  -P, --parallel    Process nodes in parallel (faster, requires --all-nodes)\n");
     printf("  -X, --dead-code   Report classes/defines/functions/templates never used (implies -a)\n");
+    printf("      --strict-erb  Treat ERB @class::var sugar as an error (default: warn)\n");
     printf("  -v, --verbose     Enable verbose/debug output\n");
     printf("  -h, --help        Show this help message\n");
     printf("\nWhen a directory is provided, site.pp will be loaded from manifests/\n");
@@ -86,7 +87,10 @@ int main(int argc, char *argv[]) {
     char *hiera_datadir = NULL;
     int verbose = 0;
     int dead_code_mode = 0;
+    int strict_erb = 0;
     int opt;
+
+    enum { OPT_STRICT_ERB = 256 };  /* long-only option id */
 
     static struct option long_options[] = {
         {"json", no_argument, 0, 'j'},
@@ -103,6 +107,7 @@ int main(int argc, char *argv[]) {
         {"template", required_argument, 0, 't'},
         {"hiera-data", required_argument, 0, 'D'},
         {"dead-code", no_argument, 0, 'X'},
+        {"strict-erb", no_argument, 0, OPT_STRICT_ERB},
         {"verbose", no_argument, 0, 'v'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
@@ -158,6 +163,9 @@ int main(int argc, char *argv[]) {
                 dead_code_mode = 1;
                 eval_mode = 1;   /* Dead-code requires evaluation */
                 all_nodes = 1;   /* Dead-code needs full node coverage */
+                break;
+            case OPT_STRICT_ERB:
+                strict_erb = 1;
                 break;
             case 'v':
                 verbose = 1;
@@ -351,6 +359,7 @@ int main(int argc, char *argv[]) {
 
             /* Set verbose mode */
             puppet_env_set_verbose(env, verbose);
+            puppet_env_set_strict_erb(env, strict_erb);
 
             /* Set loader if in directory mode */
             if (loader) {

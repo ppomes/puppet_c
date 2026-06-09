@@ -716,6 +716,12 @@ void puppet_env_set_verbose(puppet_env_t *env, bool verbose) {
     puppet_verbose = verbose;  /* Also set global flag */
 }
 
+void puppet_env_set_strict_erb(puppet_env_t *env, bool strict_erb) {
+    if (env) {
+        env->prog->strict_erb = strict_erb;
+    }
+}
+
 void puppet_env_set_puppetdb(puppet_env_t *env, puppetdb_t *pdb) {
     if (env) {
         env->puppetdb = pdb;

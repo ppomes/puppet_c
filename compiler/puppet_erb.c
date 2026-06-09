@@ -689,6 +689,59 @@ static char *ruby_daemon_render(const char *template_content,
     return req.result;
 }
 
+/* Warn (or error under --strict-erb) on each `<%= @class::var %>` occurrence —
+ * the Puppet-4 namespaced-instance-variable sugar that Puppet 8 removed (it used
+ * to rewrite to scope.lookupvar('class::var')). Only scans inside ERB tags
+ * (<% ... %>) so literal "@a::b" in template output text is never flagged; plain
+ * `@var` (no '::') is left alone. The replacement form is scope['class::var']. */
+static void erb_warn_namespaced_ivars(const char *content, const char *template_name,
+                                      puppet_env_t *env) {
+    if (!content) return;
+    bool strict = env && env->prog && env->prog->strict_erb;
+    int line = 1;
+    bool in_tag = false;
+    const char *p = content;
+    while (*p) {
+        if (*p == '\n') { line++; p++; continue; }
+        if (!in_tag) {
+            if (p[0] == '<' && p[1] == '%') { in_tag = true; p += 2; }
+            else p++;
+            continue;
+        }
+        if (p[0] == '%' && p[1] == '>') { in_tag = false; p += 2; continue; }
+        if (p[0] == '@' && (isalpha((unsigned char)p[1]) || p[1] == '_')) {
+            const char *q = p + 1;
+            while (isalnum((unsigned char)*q) || *q == '_') q++;
+            bool namespaced = false;
+            while (q[0] == ':' && q[1] == ':' &&
+                   (isalpha((unsigned char)q[2]) || q[2] == '_')) {
+                namespaced = true;
+                q += 2;
+                while (isalnum((unsigned char)*q) || *q == '_') q++;
+            }
+            if (namespaced) {
+                size_t nlen = (size_t)(q - (p + 1));
+                if (nlen > 255) nlen = 255;
+                char name[256];
+                snprintf(name, sizeof(name), "%.*s", (int)nlen, p + 1);
+                puppet_location_t loc = { template_name, line, 0 };
+                if (strict) {
+                    puppet_error_at(loc,
+                        "ERB '@%s': @class::var instance-variable sugar was removed in Puppet 8; use scope['%s']",
+                        name, name);
+                } else {
+                    puppet_warning_at(loc,
+                        "ERB '@%s': @class::var instance-variable sugar was removed in Puppet 8; use scope['%s']",
+                        name, name);
+                }
+                p = q;
+                continue;
+            }
+        }
+        p++;
+    }
+}
+
 char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx, const char *template_name) {
     (void)ruby_ctx;  /* legacy parameter — Ruby context is owned by the daemon */
 
@@ -696,6 +749,10 @@ char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_
     if (env && env->prog->skip_erb) {
         return puppet_strdup("[ERB rendering disabled]");
     }
+
+    // Flag the removed Puppet-4 `@class::var` ERB sugar (warn, or error under
+    // --strict-erb) before rendering rewrites it away.
+    erb_warn_namespaced_ivars(template_content, template_name, env);
 
     // Fast path: native (Ruby-free) renderer for the supported subset.
     // The native engine caches its parsed AST per template_name and is

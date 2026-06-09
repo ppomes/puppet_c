@@ -105,6 +105,7 @@ EXTRA_DIST = \
     test_multi_title_refs.sh \
     test_strict_undef_index.sh \
     test_function_argtypes.sh \
+    test_strict_erb.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -140,7 +141,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb
 	@echo "All tests completed."
 
 check-parser:
@@ -759,6 +760,17 @@ check-function-argtypes:
 	else \
 		echo "❌ Some function-argtypes tests failed:"; \
 		sed 's/^/  /' output/function_argtypes.out; \
+		exit 1; \
+	fi
+
+check-strict-erb:
+	@echo "Running ERB @class::var strict-mode tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_strict_erb.sh > output/strict_erb.out 2>&1; then \
+		echo "✅ All strict-erb tests passed!"; \
+	else \
+		echo "❌ Some strict-erb tests failed:"; \
+		sed 's/^/  /' output/strict_erb.out; \
 		exit 1; \
 	fi
 

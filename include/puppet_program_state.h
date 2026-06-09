@@ -78,6 +78,7 @@ typedef struct puppet_program_state {
      *  - verbose:  -v / --verbose CLI flag */
     bool skip_erb;
     bool verbose;
+    bool strict_erb;   /* --strict-erb: promote ERB @class::var sugar warnings to errors */
 
     /* Mutex protecting concurrent writes against parallel reads.
      * Currently only used by puppet_init_ruby_types' lazy population.
