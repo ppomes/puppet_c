@@ -4497,6 +4497,8 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
 
             if (is_false) {
                 puppet_exec_stmt_list(&stmt->data.unless_stmt.body, env);
+            } else if (stmt->data.unless_stmt.else_body) {
+                puppet_exec_stmt_list(stmt->data.unless_stmt.else_body, env);
             }
             break;
         }

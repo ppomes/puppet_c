@@ -486,6 +486,9 @@ static void lint_stmt(puppet_lint_result_t *r, puppet_stmt_t *stmt) {
                 lint_expr(r, stmt->data.unless_stmt.condition);
             }
             lint_stmt_list(r, &stmt->data.unless_stmt.body);
+            if (stmt->data.unless_stmt.else_body) {
+                lint_stmt_list(r, stmt->data.unless_stmt.else_body);
+            }
             break;
 
         case PUPPET_STMT_CASE:

@@ -489,13 +489,25 @@ puppet_value_t *puppet_func_defined(puppet_expr_list_t *args, puppet_env_t *env)
                         if (scope_val) is_defined = true;
                     }
                 } else {
-                    // Build catalog key (lowercase type::title)
-                    char catalog_key[512];
-                    snprintf(catalog_key, sizeof(catalog_key), "%s::%s", type, title);
-                    // Convert type to lowercase for lookup
-                    for (char *p = catalog_key; *p && *p != ':'; p++) {
-                        *p = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
+                    /* resource_catalog stores keys as "type[title]" with the
+                     * type spelled as in the declaration (conventionally
+                     * lowercase, e.g. `file { }`). Puppet resource types are
+                     * case-insensitive, so normalise the reference's type to
+                     * lowercase before building the lookup key — otherwise
+                     * defined(File['x']) never matches a `file { 'x': }`
+                     * declaration and the `unless defined(...)` idempotence
+                     * guard fails to suppress an already-declared resource. */
+                    char lower_type[128];
+                    size_t tl = strlen(type);
+                    if (tl >= sizeof(lower_type)) tl = sizeof(lower_type) - 1;
+                    for (size_t k = 0; k < tl; k++) {
+                        char c = type[k];
+                        lower_type[k] = (c >= 'A' && c <= 'Z') ? c + 32 : c;
                     }
+                    lower_type[tl] = '\0';
+
+                    char catalog_key[640];
+                    snprintf(catalog_key, sizeof(catalog_key), "%s[%s]", lower_type, title);
 
                     if (env->resource_catalog) {
                         puppet_value_t *val = puppet_hash_get(env->resource_catalog, catalog_key, strlen(catalog_key));

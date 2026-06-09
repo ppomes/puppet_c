@@ -2173,6 +2173,54 @@ static puppet_stmt_t *convert_if(TSNode node, const char *source) {
     return stmt;
 }
 
+/* Convert `unless <cond> { body } [else { else_body }]`.
+ * The grammar node is `unless` with children: condition, block, optional else.
+ * Without this the node fell through to the expression fallback and the body
+ * block was silently dropped, so resources declared under an `unless` guard
+ * (the common `unless defined(...) { ... }` idempotence idiom) never reached
+ * the catalog. The interpreter's PUPPET_STMT_UNLESS handler already does the
+ * negated-if execution. */
+static puppet_stmt_t *convert_unless(TSNode node, const char *source) {
+    puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
+    stmt->type = PUPPET_STMT_UNLESS;
+    stmt->loc = node_location(node);
+
+    uint32_t count = ts_node_named_child_count(node);
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(node, i);
+        const char *type = ts_node_type(child);
+
+        if (strcmp(type, "condition") == 0) {
+            /* Mirror convert_if: support `$hash['a']['b']` chained access. */
+            TSNode var_child = find_child(child, "variable");
+            uint32_t cond_count = ts_node_named_child_count(child);
+            if (!ts_node_is_null(var_child)) {
+                puppet_expr_t *cond_expr = convert_variable(var_child, source);
+                for (uint32_t j = 0; j < cond_count; j++) {
+                    TSNode cond_child = ts_node_named_child(child, j);
+                    if (strcmp(ts_node_type(cond_child), "access") == 0) {
+                        cond_expr = build_index_expr(cond_expr, cond_child, source);
+                    }
+                }
+                stmt->data.unless_stmt.condition = cond_expr;
+            } else if (cond_count > 0) {
+                stmt->data.unless_stmt.condition =
+                    convert_expression(ts_node_named_child(child, 0), source);
+            }
+        } else if (strcmp(type, "block") == 0 && stmt->data.unless_stmt.body.stmts == NULL) {
+            stmt->data.unless_stmt.body = convert_block(child, source);
+        } else if (strcmp(type, "else") == 0) {
+            TSNode else_block = find_child(child, "block");
+            if (!ts_node_is_null(else_block)) {
+                stmt->data.unless_stmt.else_body = puppet_calloc(1, sizeof(puppet_stmt_list_t));
+                *stmt->data.unless_stmt.else_body = convert_block(else_block, source);
+            }
+        }
+    }
+
+    return stmt;
+}
+
 /* Convert case statement */
 static puppet_stmt_t *convert_case(TSNode node, const char *source) {
     puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
@@ -2403,6 +2451,8 @@ static puppet_stmt_t *convert_statement(TSNode node, const char *source) {
         return convert_resource(node, source);
     if (strcmp(type, "if") == 0)
         return convert_if(node, source);
+    if (strcmp(type, "unless") == 0)
+        return convert_unless(node, source);
     if (strcmp(type, "case") == 0)
         return convert_case(node, source);
     if (strcmp(type, "statement_function") == 0) {

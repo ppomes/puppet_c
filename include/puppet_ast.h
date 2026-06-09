@@ -499,6 +499,7 @@ struct puppet_stmt {
         struct {
             puppet_expr_t *condition;
             puppet_stmt_list_t body;
+            puppet_stmt_list_t *else_body;  /* optional `unless ... { } else { }` */
         } unless_stmt;
         struct {
             puppet_expr_t *expr;

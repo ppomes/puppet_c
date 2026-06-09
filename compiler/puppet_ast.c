@@ -621,6 +621,10 @@ void puppet_stmt_destroy(puppet_stmt_t *stmt) {
         case PUPPET_STMT_UNLESS:
             puppet_expr_destroy(stmt->data.unless_stmt.condition);
             puppet_stmt_list_destroy(&stmt->data.unless_stmt.body);
+            if (stmt->data.unless_stmt.else_body) {
+                puppet_stmt_list_destroy(stmt->data.unless_stmt.else_body);
+                puppet_free(stmt->data.unless_stmt.else_body);
+            }
             break;
             
         case PUPPET_STMT_CASE:

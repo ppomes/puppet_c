@@ -111,6 +111,7 @@ EXTRA_DIST = \
     test_parametric_types.sh \
     test_parallel_user_functions.sh \
     test_enum_undef_default.sh \
+    test_unless_defined.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -146,7 +147,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions check-enum-undef-default
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions check-enum-undef-default check-unless-defined
 	@echo "All tests completed."
 
 check-parser:
@@ -831,6 +832,17 @@ check-enum-undef-default:
 	else \
 		echo "❌ Some enum-undef-default tests failed:"; \
 		sed 's/^/  /' output/enum_undef_default.out; \
+		exit 1; \
+	fi
+
+check-unless-defined:
+	@echo "Running unless defined(Resource[...]) idempotence tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_unless_defined.sh > output/unless_defined.out 2>&1; then \
+		echo "✅ All unless-defined tests passed!"; \
+	else \
+		echo "❌ Some unless-defined tests failed:"; \
+		sed 's/^/  /' output/unless_defined.out; \
 		exit 1; \
 	fi
 
