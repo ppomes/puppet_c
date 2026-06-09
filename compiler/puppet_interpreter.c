@@ -202,6 +202,46 @@ static void puppet_scan_ruby_types_dir(puppet_env_t *env, const char *dir) {
             fclose(f);
             continue;
         }
+
+        /* Item 3: warn on the Ruby keyword-argument shorthand `def foo(arg:, …)`
+         * (bare `key:` followed by ',' or ')', no default) — valid on Ruby 3.1+
+         * but unparseable on the legacy puppetserver Ruby. Separate full-file
+         * pass (the type-name loop below breaks early), then rewind. Plain
+         * `key: value` keeps a value so it doesn't match; `:symbol` is colon-first. */
+        {
+            char sline[2048];
+            int ln = 0;
+            while (fgets(sline, sizeof(sline), f)) {
+                ln++;
+                if (!strstr(sline, "def ")) continue;
+                const char *q = sline;
+                while (*q) {
+                    if (isalpha((unsigned char)*q) || *q == '_') {
+                        const char *s = q;
+                        while (isalnum((unsigned char)*q) || *q == '_') q++;
+                        if (*q == ':' && q[1] != ':') {
+                            const char *r = q + 1;
+                            while (*r == ' ' || *r == '\t') r++;
+                            if (*r == ',' || *r == ')') {
+                                int idlen = (int)(q - s);
+                                char idn[128];
+                                snprintf(idn, sizeof(idn), "%.*s",
+                                         idlen < 127 ? idlen : 127, s);
+                                puppet_location_t loc = { path, ln, 0 };
+                                puppet_warning_at(loc,
+                                    "Ruby keyword-argument shorthand '%s:' in def is not supported on the legacy puppetserver Ruby; give it a default value",
+                                    idn);
+                                break;  /* one warning per line */
+                            }
+                        }
+                    } else {
+                        q++;
+                    }
+                }
+            }
+            rewind(f);
+        }
+
         char line[2048];
         bool in_resource_api = false;
         const char *type_start = NULL;

@@ -106,6 +106,7 @@ EXTRA_DIST = \
     test_strict_undef_index.sh \
     test_function_argtypes.sh \
     test_strict_erb.sh \
+    test_ruby_kwarg_shorthand.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -141,7 +142,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand
 	@echo "All tests completed."
 
 check-parser:
@@ -771,6 +772,17 @@ check-strict-erb:
 	else \
 		echo "❌ Some strict-erb tests failed:"; \
 		sed 's/^/  /' output/strict_erb.out; \
+		exit 1; \
+	fi
+
+check-ruby-kwarg-shorthand:
+	@echo "Running Ruby keyword-arg shorthand scan tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_ruby_kwarg_shorthand.sh > output/ruby_kwarg_shorthand.out 2>&1; then \
+		echo "✅ All ruby-kwarg-shorthand tests passed!"; \
+	else \
+		echo "❌ Some ruby-kwarg-shorthand tests failed:"; \
+		sed 's/^/  /' output/ruby_kwarg_shorthand.out; \
 		exit 1; \
 	fi
 
