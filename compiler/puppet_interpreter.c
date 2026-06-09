@@ -1942,18 +1942,43 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
         case PUPPET_EXPR_RESOURCE_REF: {
             /* Resource reference: Type['title'] -> "Type[title]" string */
             puppet_value_t *title_val = puppet_eval_expr(expr->data.resource_ref.title, env);
+            int type_len = (int)expr->data.resource_ref.type.len;
+            const char *type_data = expr->data.resource_ref.type.data;
+
+            /* Multi-title reference: Type[$array] -> [Type[a], Type[b], ...] so
+             * each element resolves as its own reference (real Puppet semantics).
+             * This is the same array-of-refs shape as `[Type['a'], Type['b']]`,
+             * which require/before/notify validation already handles per-element. */
+            if (title_val && title_val->type == PUPPET_VALUE_ARRAY && title_val->data.array) {
+                puppet_array_t *src = title_val->data.array;
+                puppet_array_t *arr = puppet_calloc(1, sizeof(puppet_array_t));
+                arr->capacity = src->count > 0 ? src->count : 1;
+                arr->items = puppet_calloc(arr->capacity, sizeof(puppet_value_t *));
+                arr->count = 0;
+                for (size_t i = 0; i < src->count; i++) {
+                    const char *elem = puppet_value_to_string(src->items[i]);
+                    size_t len = (size_t)type_len + 2 + (elem ? strlen(elem) : 0);
+                    char *ref = puppet_malloc(len + 1);
+                    snprintf(ref, len + 1, "%.*s[%s]", type_len, type_data, elem ? elem : "");
+                    arr->items[arr->count++] = puppet_value_create_string(ref, strlen(ref));
+                    puppet_free(ref);
+                }
+                puppet_value_t *result = puppet_calloc(1, sizeof(puppet_value_t));
+                result->type = PUPPET_VALUE_ARRAY;
+                result->data.array = arr;
+                puppet_value_destroy(title_val);
+                return result;
+            }
+
+            /* Scalar title: single "Type[title]" string. */
             /* Note: puppet_value_to_string returns internal pointer, don't free it */
             const char *title_str = puppet_value_to_string(title_val);
-
-            /* Build reference string: Type[title] */
-            size_t type_len = expr->data.resource_ref.type.len;
             size_t title_len = title_str ? strlen(title_str) : 0;
-            size_t ref_len = type_len + 1 + title_len + 1; /* Type[title] */
+            size_t ref_len = (size_t)type_len + 1 + title_len + 1; /* Type[title] */
 
             char *ref_str = puppet_malloc(ref_len + 1);
             snprintf(ref_str, ref_len + 1, "%.*s[%s]",
-                     (int)type_len, expr->data.resource_ref.type.data,
-                     title_str ? title_str : "");
+                     type_len, type_data, title_str ? title_str : "");
 
             puppet_value_t *result = puppet_value_create_string(ref_str, strlen(ref_str));
 
