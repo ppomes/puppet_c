@@ -1906,6 +1906,21 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             puppet_value_t *key = puppet_eval_expr(expr->data.index.index, env);
             puppet_value_t *result = NULL;
 
+            /* Strict-undef chained access: indexing the undef result of a PRIOR
+             * index (e.g. $h['a']['b']['c'] where $h['a']['b'] is missing) is an
+             * error in Puppet 8 — this is the silent-undef bug class. A single
+             * index that yields undef (or indexing an undef variable directly) is
+             * left alone; only a chain whose intermediate vanished is flagged. */
+            if (obj && obj->type == PUPPET_VALUE_UNDEF &&
+                expr->data.index.object->type == PUPPET_EXPR_INDEX) {
+                puppet_error_at(expr->loc,
+                                "Operator '[]' is not applicable to an Undef Value");
+                puppet_env_increment_error(env);
+                puppet_value_destroy(obj);
+                puppet_value_destroy(key);
+                return puppet_value_create_undef();
+            }
+
             if (obj && key) {
                 if (obj->type == PUPPET_VALUE_HASH && key->type == PUPPET_VALUE_STRING) {
                     /* Hash access */

@@ -103,6 +103,7 @@ EXTRA_DIST = \
     test_user_functions.sh \
     test_method_dispatch.sh \
     test_multi_title_refs.sh \
+    test_strict_undef_index.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -138,7 +139,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index
 	@echo "All tests completed."
 
 check-parser:
@@ -735,6 +736,17 @@ check-multi-title-refs:
 	else \
 		echo "❌ Some multi-title-refs tests failed:"; \
 		sed 's/^/  /' output/multi_title_refs.out; \
+		exit 1; \
+	fi
+
+check-strict-undef-index:
+	@echo "Running strict-undef chained-index tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_strict_undef_index.sh > output/strict_undef_index.out 2>&1; then \
+		echo "✅ All strict-undef-index tests passed!"; \
+	else \
+		echo "❌ Some strict-undef-index tests failed:"; \
+		sed 's/^/  /' output/strict_undef_index.out; \
 		exit 1; \
 	fi
 
