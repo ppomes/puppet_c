@@ -693,7 +693,34 @@ static puppet_expr_t *convert_hash(TSNode node, const char *source) {
         }
     }
 
-    if (all_literals && entry_count > 0) {
+    /* Detect duplicate literal string keys. The all-literals fast path below
+     * collapses entries into a hash value via puppet_hash_set, which silently
+     * drops the earlier of any duplicate key (the Puppet 7 "last wins"
+     * behaviour). Puppet 8 makes that a fatal error, so when a duplicate
+     * literal key is present keep the un-collapsed PUPPET_EXPR_HASH form so the
+     * lint pass can see every entry and report it. Variable/dynamic keys are
+     * left to runtime. */
+    bool has_dup_literal_key = false;
+    for (size_t a = 0; a + 1 < idx && !has_dup_literal_key; a++) {
+        if (!temp_keys[a] || temp_keys[a]->type != PUPPET_EXPR_VALUE ||
+            !temp_keys[a]->data.value ||
+            temp_keys[a]->data.value->type != PUPPET_VALUE_STRING) continue;
+        for (size_t b = a + 1; b < idx; b++) {
+            if (temp_keys[b] && temp_keys[b]->type == PUPPET_EXPR_VALUE &&
+                temp_keys[b]->data.value &&
+                temp_keys[b]->data.value->type == PUPPET_VALUE_STRING &&
+                temp_keys[a]->data.value->data.string.len ==
+                    temp_keys[b]->data.value->data.string.len &&
+                memcmp(temp_keys[a]->data.value->data.string.data,
+                       temp_keys[b]->data.value->data.string.data,
+                       temp_keys[a]->data.value->data.string.len) == 0) {
+                has_dup_literal_key = true;
+                break;
+            }
+        }
+    }
+
+    if (all_literals && !has_dup_literal_key && entry_count > 0) {
         /* All literals - build hash value directly */
         expr->type = PUPPET_EXPR_VALUE;
         expr->data.value = puppet_value_create_hash();

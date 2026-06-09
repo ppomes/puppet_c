@@ -114,6 +114,7 @@ EXTRA_DIST = \
     test_unless_defined.sh \
     test_erb_structured_facts.sh \
     test_type_aliases.sh \
+    test_duplicate_hash_keys.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -149,7 +150,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions check-enum-undef-default check-unless-defined check-erb-structured-facts check-type-aliases
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions check-enum-undef-default check-unless-defined check-erb-structured-facts check-type-aliases check-duplicate-hash-keys
 	@echo "All tests completed."
 
 check-parser:
@@ -867,6 +868,17 @@ check-type-aliases:
 	else \
 		echo "❌ Some type-aliases tests failed:"; \
 		sed 's/^/  /' output/type_aliases.out; \
+		exit 1; \
+	fi
+
+check-duplicate-hash-keys:
+	@echo "Running duplicate hash-key detection tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_duplicate_hash_keys.sh > output/duplicate_hash_keys.out 2>&1; then \
+		echo "✅ All duplicate-hash-keys tests passed!"; \
+	else \
+		echo "❌ Some duplicate-hash-keys tests failed:"; \
+		sed 's/^/  /' output/duplicate_hash_keys.out; \
 		exit 1; \
 	fi
 

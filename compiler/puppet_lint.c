@@ -368,6 +368,31 @@ static void lint_expr(puppet_lint_result_t *r, puppet_expr_t *expr) {
 
         case PUPPET_EXPR_HASH:
             for (size_t i = 0; i < expr->data.hash_entries.count; i++) {
+                puppet_expr_t *ki = expr->data.hash_entries.keys[i];
+                /* Puppet 8: a literal key declared more than once in the same
+                 * hash is a fatal error (it silently overwrote in Puppet 7).
+                 * Only literal string keys can be proven at compile time;
+                 * variable/dynamic keys are left to runtime. */
+                if (ki && ki->type == PUPPET_EXPR_VALUE && ki->data.value &&
+                    ki->data.value->type == PUPPET_VALUE_STRING) {
+                    for (size_t j = 0; j < i; j++) {
+                        puppet_expr_t *kj = expr->data.hash_entries.keys[j];
+                        if (kj && kj->type == PUPPET_EXPR_VALUE && kj->data.value &&
+                            kj->data.value->type == PUPPET_VALUE_STRING &&
+                            kj->data.value->data.string.len ==
+                                ki->data.value->data.string.len &&
+                            memcmp(kj->data.value->data.string.data,
+                                   ki->data.value->data.string.data,
+                                   ki->data.value->data.string.len) == 0) {
+                            lint_error(r, ki->loc,
+                                "The key '%s' is declared more than once in this hash "
+                                "(first at line %d); a duplicate hash key is a fatal "
+                                "error in Puppet 8",
+                                ki->data.value->data.string.data, kj->loc.line);
+                            break;  /* one error per duplicate occurrence */
+                        }
+                    }
+                }
                 lint_expr(r, expr->data.hash_entries.keys[i]);
                 lint_expr(r, expr->data.hash_entries.values[i]);
             }
