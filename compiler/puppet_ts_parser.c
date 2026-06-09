@@ -1450,14 +1450,20 @@ static puppet_expr_t *convert_access_element_expr(TSNode access_elem, const char
 static puppet_expr_t *build_index_expr(puppet_expr_t *object, TSNode access_node, const char *source) {
     /* Access node contains access_element children with the index expressions */
     TSNode element = find_child(access_node, "access_element");
-    if (ts_node_is_null(element)) {
-        /* Try direct child */
-        element = ts_node_named_child(access_node, 0);
-    }
 
     puppet_expr_t *index_expr = NULL;
     if (!ts_node_is_null(element)) {
-        index_expr = convert_expression(element, source);
+        /* Convert via convert_access_element_expr so a KEY that is itself a
+         * chained access — e.g. $a[$b['x']['y']] — keeps all its access nodes
+         * inside the key instead of leaking the trailing ['y'] onto the outer
+         * chain (which would mis-parse it as $a[$b['x']]['y']). */
+        index_expr = convert_access_element_expr(element, source);
+    } else {
+        /* No access_element wrapper — convert the first direct child. */
+        TSNode direct = ts_node_named_child(access_node, 0);
+        if (!ts_node_is_null(direct)) {
+            index_expr = convert_expression(direct, source);
+        }
     }
 
     if (!index_expr) {
