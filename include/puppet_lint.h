@@ -34,6 +34,13 @@ typedef struct puppet_lint_result {
 puppet_lint_result_t puppet_lint_puppet8(puppet_program_t *program);
 
 /**
+ * @brief Treat legacy top-scope fact reads ($hostname / $::osfamily) as errors
+ *        instead of warnings (item 13). Off by default; set from
+ *        --puppet8-strict-facts. Call before puppet_lint_puppet8().
+ */
+void puppet_lint_set_strict_facts(bool strict);
+
+/**
  * @brief Scan a directory tree for Puppet 8 issues in non-Puppet files
  *
  * Scans for:

@@ -220,6 +220,50 @@ static const legacy_fact_t legacy_facts[] = {
     {NULL, NULL}  /* sentinel */
 };
 
+/* ----------------------------------------------------------------------------
+ * Item 13 — bare-word top-scope fact detection.
+ *
+ * A legacy fact may be read either explicitly ($::hostname) or bare
+ * ($hostname). Both are removed in Puppet 8 in favour of the structured
+ * $facts[...] hash. We warn by default and error under --puppet8-strict-facts.
+ *
+ * Shadowing: many manifests legitimately do `$hostname = $facts[...]` (or take
+ * a class/define parameter of the same name) and then use the local. We track
+ * the names assigned/declared so far in the current scope (order-sensitive: a
+ * read BEFORE the assignment is still flagged) and skip flagging shadowed reads.
+ * The shadow set is a simple stack — scopes save a mark on entry and truncate
+ * back on exit. Lint runs single-threaded, so file-static state is fine.
+ * -------------------------------------------------------------------------- */
+static bool   g_strict_facts = false;
+static char **g_shadow = NULL;
+static size_t g_shadow_count = 0, g_shadow_cap = 0;
+
+void puppet_lint_set_strict_facts(bool strict) { g_strict_facts = strict; }
+
+static bool shadow_contains(const char *name) {
+    for (size_t i = 0; i < g_shadow_count; i++)
+        if (strcmp(g_shadow[i], name) == 0) return true;
+    return false;
+}
+static void shadow_add(const char *name) {
+    if (!name || !*name || shadow_contains(name)) return;
+    if (g_shadow_count == g_shadow_cap) {
+        g_shadow_cap = g_shadow_cap ? g_shadow_cap * 2 : 16;
+        g_shadow = puppet_realloc(g_shadow, g_shadow_cap * sizeof(char *));
+    }
+    g_shadow[g_shadow_count++] = puppet_strdup(name);
+}
+static size_t shadow_mark(void) { return g_shadow_count; }
+static void shadow_truncate(size_t mark) {
+    while (g_shadow_count > mark) puppet_free(g_shadow[--g_shadow_count]);
+}
+static void shadow_clear(void) {
+    shadow_truncate(0);
+    puppet_free(g_shadow);
+    g_shadow = NULL;
+    g_shadow_cap = 0;
+}
+
 /* ============================================================================
  * AST walker
  * ============================================================================ */
@@ -248,40 +292,62 @@ static void lint_check_variable(puppet_lint_result_t *r, const char *name,
                                 puppet_location_t loc) {
     if (!name) return;
 
-    /* Check for top-scope fact variables: $::factname or just ::factname */
-    const char *fact_name = NULL;
-    if (strncmp(name, "::", 2) == 0) {
-        fact_name = name + 2;
-    }
-    if (!fact_name) return;
+    /* A legacy fact may be read explicitly ($::hostname) or bare ($hostname).
+     * Strip a leading "::" to get the fact name; a "::" in the middle
+     * (apache::port) is a class-scoped variable, not a top-scope fact. */
+    const char *fact_name = name;
+    bool explicit_topscope = false;
+    if (strncmp(fact_name, "::", 2) == 0) { fact_name += 2; explicit_topscope = true; }
+    if (!*fact_name) return;
+    if (strchr(fact_name, ':')) return;  /* qualified class var, not a fact */
 
-    /* Skip $::facts, $::trusted, $::server_facts — those are fine */
+    /* Still-valid Puppet 8 built-ins / namespaces — never flag. */
     if (strcmp(fact_name, "facts") == 0 ||
         strcmp(fact_name, "trusted") == 0 ||
-        strcmp(fact_name, "server_facts") == 0) {
+        strcmp(fact_name, "server_facts") == 0 ||
+        strcmp(fact_name, "environment") == 0) {
         return;
     }
 
-    /* Check against known legacy facts */
+    /* A preceding local assignment or a class/define parameter of the same
+     * name shadows the fact — the read refers to the local, so don't flag. */
+    if (shadow_contains(fact_name)) return;
+
+    const char *pfx = explicit_topscope ? "$::" : "$";
+
+    /* Known legacy fact → suggest the structured replacement. */
     for (const legacy_fact_t *f = legacy_facts; f->old_name; f++) {
         if (strcmp(fact_name, f->old_name) == 0) {
-            lint_error(r, loc, "$::%s is removed in Puppet 8, use %s",
-                      fact_name, f->replacement);
+            if (g_strict_facts)
+                lint_error(r, loc,
+                    "%s%s is a legacy top-scope fact removed in Puppet 8, use %s",
+                    pfx, fact_name, f->replacement);
+            else
+                lint_warning(r, loc,
+                    "%s%s is a legacy top-scope fact removed in Puppet 8, use %s",
+                    pfx, fact_name, f->replacement);
             return;
         }
     }
 
-    /* Any other $::var is suspicious — it's a top-scope variable access */
-    /* Only warn if it looks like a well-known fact pattern */
-    if (strncmp(fact_name, "ipaddress_", 10) == 0 ||
-        strncmp(fact_name, "macaddress_", 11) == 0 ||
-        strncmp(fact_name, "netmask_", 8) == 0 ||
-        strncmp(fact_name, "network_", 8) == 0 ||
-        strncmp(fact_name, "blockdevice_", 12) == 0 ||
-        strncmp(fact_name, "processor", 9) == 0) {
-        lint_error(r, loc,
-                  "$::%s uses a legacy fact format removed in Puppet 8, "
-                  "use $facts['...'] structured format instead", fact_name);
+    /* Indexed legacy facts (ipaddress_eth0, network_eth0, …). Only the explicit
+     * $:: form is unambiguous enough to flag by prefix — a bare $network_x is
+     * too likely to be a local variable. */
+    if (explicit_topscope &&
+        (strncmp(fact_name, "ipaddress_", 10) == 0 ||
+         strncmp(fact_name, "macaddress_", 11) == 0 ||
+         strncmp(fact_name, "netmask_", 8) == 0 ||
+         strncmp(fact_name, "network_", 8) == 0 ||
+         strncmp(fact_name, "blockdevice_", 12) == 0 ||
+         strncmp(fact_name, "processor", 9) == 0)) {
+        if (g_strict_facts)
+            lint_error(r, loc,
+                "$::%s uses a legacy fact format removed in Puppet 8, "
+                "use the $facts['...'] structured format instead", fact_name);
+        else
+            lint_warning(r, loc,
+                "$::%s uses a legacy fact format removed in Puppet 8, "
+                "use the $facts['...'] structured format instead", fact_name);
     }
 }
 
@@ -428,11 +494,15 @@ static void lint_stmt(puppet_lint_result_t *r, puppet_stmt_t *stmt) {
                       "'import' was removed in Puppet 4 and is not supported in Puppet 8");
             break;
 
-        case PUPPET_STMT_NODE:
+        case PUPPET_STMT_NODE: {
+            /* New variable scope: assignments inside a node don't leak out. */
+            size_t mark = shadow_mark();
             lint_stmt_list(r, &stmt->data.node.body);
+            shadow_truncate(mark);
             break;
+        }
 
-        case PUPPET_STMT_CLASS_DEF:
+        case PUPPET_STMT_CLASS_DEF: {
             /* Class inheritance */
             if (stmt->data.class_def.inherits &&
                 stmt->data.class_def.inherits->data) {
@@ -446,26 +516,48 @@ static void lint_stmt(puppet_lint_result_t *r, puppet_stmt_t *stmt) {
                     lint_expr(r, stmt->data.class_def.params.params[i].default_value);
                 }
             }
+            /* New scope: parameters shadow facts of the same name within. */
+            size_t mark = shadow_mark();
+            for (size_t i = 0; i < stmt->data.class_def.params.count; i++) {
+                if (stmt->data.class_def.params.params[i].name.data)
+                    shadow_add(stmt->data.class_def.params.params[i].name.data);
+            }
             lint_stmt_list(r, &stmt->data.class_def.body);
+            shadow_truncate(mark);
             break;
+        }
 
-        case PUPPET_STMT_DEFINE:
+        case PUPPET_STMT_DEFINE: {
             for (size_t i = 0; i < stmt->data.define.params.count; i++) {
                 if (stmt->data.define.params.params[i].default_value) {
                     lint_expr(r, stmt->data.define.params.params[i].default_value);
                 }
             }
+            size_t mark = shadow_mark();
+            for (size_t i = 0; i < stmt->data.define.params.count; i++) {
+                if (stmt->data.define.params.params[i].name.data)
+                    shadow_add(stmt->data.define.params.params[i].name.data);
+            }
             lint_stmt_list(r, &stmt->data.define.body);
+            shadow_truncate(mark);
             break;
+        }
 
-        case PUPPET_STMT_FUNCTION_DEF:
+        case PUPPET_STMT_FUNCTION_DEF: {
             for (size_t i = 0; i < stmt->data.function_def.params.count; i++) {
                 if (stmt->data.function_def.params.params[i].default_value) {
                     lint_expr(r, stmt->data.function_def.params.params[i].default_value);
                 }
             }
+            size_t mark = shadow_mark();
+            for (size_t i = 0; i < stmt->data.function_def.params.count; i++) {
+                if (stmt->data.function_def.params.params[i].name.data)
+                    shadow_add(stmt->data.function_def.params.params[i].name.data);
+            }
             lint_stmt_list(r, &stmt->data.function_def.body);
+            shadow_truncate(mark);
             break;
+        }
 
         case PUPPET_STMT_RESOURCE:
             for (size_t i = 0; i < stmt->data.resource.instance_count; i++) {
@@ -555,7 +647,15 @@ static void lint_stmt(puppet_lint_result_t *r, puppet_stmt_t *stmt) {
 static void lint_stmt_list(puppet_lint_result_t *r, puppet_stmt_list_t *list) {
     if (!list) return;
     for (size_t i = 0; i < list->count; i++) {
-        lint_stmt(r, list->stmts[i]);
+        puppet_stmt_t *s = list->stmts[i];
+        lint_stmt(r, s);
+        /* After linting, a bare assignment/append shadows the fact for the
+         * rest of this scope (item 13). Order matters: a read before this
+         * point was already checked against the un-shadowed set. */
+        if (s && (s->type == PUPPET_STMT_ASSIGNMENT || s->type == PUPPET_STMT_APPEND) &&
+            s->data.assignment.variable.data) {
+            shadow_add(s->data.assignment.variable.data);
+        }
     }
 }
 
@@ -779,8 +879,10 @@ puppet_lint_result_t puppet_lint_puppet8(puppet_program_t *program) {
 
     if (!program) return result;
 
-    /* Phase 1: AST walk */
+    /* Phase 1: AST walk (reset the per-walk shadow set first). */
+    shadow_clear();
     lint_stmt_list(&result, &program->statements);
+    shadow_clear();
 
     /* Print summary */
     if (result.errors == 0 && result.warnings == 0) {

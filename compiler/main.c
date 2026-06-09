@@ -55,6 +55,7 @@ static void print_usage(const char *program_name) {
     printf("  -P, --parallel    Process nodes in parallel (faster, requires --all-nodes)\n");
     printf("  -X, --dead-code   Report classes/defines/functions/templates never used (implies -a)\n");
     printf("      --strict-erb  Treat ERB @class::var sugar as an error (default: warn)\n");
+    printf("      --puppet8-strict-facts  Treat legacy top-scope fact reads as errors (default: warn)\n");
     printf("  -v, --verbose     Enable verbose/debug output\n");
     printf("  -h, --help        Show this help message\n");
     printf("\nWhen a directory is provided, site.pp will be loaded from manifests/\n");
@@ -88,9 +89,10 @@ int main(int argc, char *argv[]) {
     int verbose = 0;
     int dead_code_mode = 0;
     int strict_erb = 0;
+    int strict_facts = 0;
     int opt;
 
-    enum { OPT_STRICT_ERB = 256 };  /* long-only option id */
+    enum { OPT_STRICT_ERB = 256, OPT_STRICT_FACTS };  /* long-only option ids */
 
     static struct option long_options[] = {
         {"json", no_argument, 0, 'j'},
@@ -108,6 +110,7 @@ int main(int argc, char *argv[]) {
         {"hiera-data", required_argument, 0, 'D'},
         {"dead-code", no_argument, 0, 'X'},
         {"strict-erb", no_argument, 0, OPT_STRICT_ERB},
+        {"puppet8-strict-facts", no_argument, 0, OPT_STRICT_FACTS},
         {"verbose", no_argument, 0, 'v'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
@@ -166,6 +169,9 @@ int main(int argc, char *argv[]) {
                 break;
             case OPT_STRICT_ERB:
                 strict_erb = 1;
+                break;
+            case OPT_STRICT_FACTS:
+                strict_facts = 1;
                 break;
             case 'v':
                 verbose = 1;
@@ -323,6 +329,7 @@ int main(int argc, char *argv[]) {
          * each with its own warning/error policy, so it is intentionally
          * not a blanket erroring side effect of every compile. */
         {
+            puppet_lint_set_strict_facts(strict_facts);
             p8_lint = puppet_lint_puppet8(program);
             if (p8_lint.errors > 0) {
                 result = 1;
