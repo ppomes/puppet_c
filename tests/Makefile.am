@@ -117,6 +117,7 @@ EXTRA_DIST = \
     test_duplicate_hash_keys.sh \
     test_legacy_facts.sh \
     test_regex_anchors.sh \
+    test_define_no_instance.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -152,7 +153,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions check-enum-undef-default check-unless-defined check-erb-structured-facts check-type-aliases check-duplicate-hash-keys check-legacy-facts check-regex-anchors
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions check-enum-undef-default check-unless-defined check-erb-structured-facts check-type-aliases check-duplicate-hash-keys check-legacy-facts check-regex-anchors check-define-no-instance
 	@echo "All tests completed."
 
 check-parser:
@@ -903,6 +904,17 @@ check-regex-anchors:
 	else \
 		echo "❌ Some regex-anchors tests failed:"; \
 		sed 's/^/  /' output/regex_anchors.out; \
+		exit 1; \
+	fi
+
+check-define-no-instance:
+	@echo "Running defined-type body (no instance) tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_define_no_instance.sh > output/define_no_instance.out 2>&1; then \
+		echo "✅ All define-no-instance tests passed!"; \
+	else \
+		echo "❌ Some define-no-instance tests failed:"; \
+		sed 's/^/  /' output/define_no_instance.out; \
 		exit 1; \
 	fi
 

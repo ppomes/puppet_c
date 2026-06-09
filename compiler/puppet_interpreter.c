@@ -5168,6 +5168,21 @@ static void puppet_exec_deferred_define(puppet_deferred_define_t *deferred, pupp
         }
     }
 
+    /* Item 20 diagnostic: under --verbose, trace every descent into a define
+     * body with the node, the define[title], and the declaration site. A
+     * define body must only ever be entered through a real instance; if a node
+     * that should have zero Apt::Ppa[…] still prints a line here, the trace
+     * names the declaration that wrongly triggered it. */
+    if (puppet_verbose) {
+        puppet_location_t dloc = deferred->resource_stmt ? deferred->resource_stmt->loc
+                                                          : define_stmt->loc;
+        fprintf(stderr, "[define-trace] node %s: entering %s['%s'] (declared at %s:%d)\n",
+                env->current_node_certname ? env->current_node_certname : "(default)",
+                deferred->type_name ? deferred->type_name : "?",
+                deferred->title ? deferred->title : "?",
+                dloc.filename ? dloc.filename : "?", dloc.line);
+    }
+
     /* Execute the define body */
     puppet_exec_stmt_list(&define_stmt->data.define.body, env);
 
