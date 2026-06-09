@@ -194,6 +194,8 @@ typedef struct puppet_env {
 
     /* Defined type registry */
     puppet_hash_t *define_types;              /**< define_name → stmt mapping */
+    puppet_hash_t *user_functions;            /**< function_name → function-def stmt */
+    size_t func_call_depth;                   /**< Current user-function call depth (recursion guard) */
 
     /* Node definition registry (for facts_db iteration mode) */
     puppet_stmt_t **node_definitions;         /**< Array of node definition statements */

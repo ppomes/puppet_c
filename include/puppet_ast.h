@@ -379,7 +379,8 @@ typedef enum {
     PUPPET_STMT_TAG,                /**< Tag declaration (tag 'name') */
     PUPPET_STMT_IMPORT,             /**< File import (import 'file') */
     PUPPET_STMT_EXPRESSION,         /**< Expression statement (bare expression) */
-    PUPPET_STMT_TYPE_ALIAS          /**< Type alias (type Name = Type) */
+    PUPPET_STMT_TYPE_ALIAS,         /**< Type alias (type Name = Type) */
+    PUPPET_STMT_FUNCTION_DEF        /**< User-defined function (function f(...) >> T { }) */
 } puppet_stmt_type_t;
 
 typedef struct puppet_stmt puppet_stmt_t;
@@ -480,6 +481,13 @@ struct puppet_stmt {
             puppet_param_list_t params;
             puppet_stmt_list_t body;
         } define;
+        struct {
+            puppet_string_t name;
+            puppet_param_list_t params;
+            puppet_expr_t *return_type_expr;  /**< Return type AST (>> Type), unenforced until item 8 */
+            puppet_string_t return_type_str;  /**< Raw return-type source text */
+            puppet_stmt_list_t body;
+        } function_def;
         struct {
             puppet_string_t name;
             puppet_stmt_list_t body;

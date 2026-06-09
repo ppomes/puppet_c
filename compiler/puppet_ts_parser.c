@@ -1932,6 +1932,129 @@ static puppet_stmt_t *convert_define_def(TSNode node, const char *source) {
     return stmt;
 }
 
+/* Convert a tree-sitter "parameter_list" node into a puppet_param_list_t.
+ * Mirrors the parameter extraction in convert_define_def / convert_class_def
+ * (name, optional typed_parameter -> type_expr + raw type_str, optional
+ * default value with chained access). */
+static void convert_param_list(TSNode list_node, const char *source,
+                               puppet_param_list_t *out) {
+    uint32_t param_count = ts_node_named_child_count(list_node);
+    out->params = puppet_calloc(param_count, sizeof(puppet_param_t));
+    out->count = 0;
+
+    for (uint32_t j = 0; j < param_count; j++) {
+        TSNode param = ts_node_named_child(list_node, j);
+        if (!node_is(param, "parameter")) continue;
+
+        TSNode typed_param = find_child(param, "typed_parameter");
+        TSNode reg_param = ts_node_is_null(typed_param) ?
+            find_child(param, "regular_parameter") :
+            find_child(typed_param, "regular_parameter");
+        if (ts_node_is_null(reg_param)) reg_param = param;
+
+        TSNode var_node = find_child(reg_param, "variable");
+        if (ts_node_is_null(var_node)) continue;
+        TSNode name_node = find_child(var_node, "name");
+        if (ts_node_is_null(name_node)) continue;
+
+        char *name_str = node_text(name_node, source);
+        puppet_param_t *p = &out->params[out->count];
+        p->name = puppet_string_create(name_str);
+        puppet_free(name_str);
+
+        /* Type constraint expression + raw text (e.g. "String[1]") */
+        if (!ts_node_is_null(typed_param)) {
+            uint32_t tc = ts_node_named_child_count(typed_param);
+            TSNode reg_in_typed = {0};
+            bool has_reg = false;
+            for (uint32_t k = 0; k < tc; k++) {
+                TSNode tch = ts_node_named_child(typed_param, k);
+                if (node_is(tch, "regular_parameter")) {
+                    reg_in_typed = tch;
+                    has_reg = true;
+                } else if (!p->type_expr) {
+                    p->type_expr = convert_expression(tch, source);
+                }
+            }
+            uint32_t start = ts_node_start_byte(typed_param);
+            uint32_t end = has_reg ? ts_node_start_byte(reg_in_typed)
+                                   : ts_node_end_byte(typed_param);
+            if (end > start) {
+                size_t len = end - start;
+                char *raw = puppet_malloc(len + 1);
+                memcpy(raw, source + start, len);
+                raw[len] = '\0';
+                while (len > 0 && (raw[len-1] == ' ' || raw[len-1] == '\t' ||
+                                   raw[len-1] == '\n' || raw[len-1] == '\r')) {
+                    raw[--len] = '\0';
+                }
+                p->type_str = puppet_string_create(raw);
+                puppet_free(raw);
+            }
+        }
+
+        /* Default value: second named child of regular_parameter, with any
+         * trailing access nodes chained on (e.g. $x = $facts['os']). */
+        uint32_t reg_param_children = ts_node_named_child_count(reg_param);
+        if (reg_param_children > 1) {
+            TSNode default_node = ts_node_named_child(reg_param, 1);
+            p->default_value = convert_expression(default_node, source);
+            for (uint32_t k = 2; k < reg_param_children; k++) {
+                TSNode sibling = ts_node_named_child(reg_param, k);
+                if (node_is(sibling, "access")) {
+                    p->default_value = build_index_expr(p->default_value, sibling, source);
+                }
+            }
+        }
+
+        out->count++;
+    }
+}
+
+/* Convert a user-defined function: function NAME(params) >> RetType { body } */
+static puppet_stmt_t *convert_function_def(TSNode node, const char *source) {
+    puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
+    stmt->type = PUPPET_STMT_FUNCTION_DEF;
+    stmt->loc = node_location(node);
+
+    uint32_t count = ts_node_named_child_count(node);
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(node, i);
+        const char *type = ts_node_type(child);
+
+        if (strcmp(type, "classname") == 0) {
+            TSNode name = find_child(child, "name");
+            if (!ts_node_is_null(name)) {
+                char *name_str = node_text(name, source);
+                stmt->data.function_def.name = puppet_string_create(name_str);
+                puppet_free(name_str);
+            }
+        } else if (strcmp(type, "parameter_list") == 0) {
+            convert_param_list(child, source, &stmt->data.function_def.params);
+        } else if (strcmp(type, "return_type") == 0) {
+            /* return_type = '>>' type [access]. Store the type expr + raw text;
+             * enforcement is item 8, not here. */
+            TSNode rt = find_child(child, "type");
+            if (!ts_node_is_null(rt)) {
+                stmt->data.function_def.return_type_expr = convert_expression(rt, source);
+            }
+            char *raw = node_text(child, source);
+            if (raw) {
+                /* drop the leading ">>" and surrounding whitespace */
+                char *p = raw;
+                if (p[0] == '>' && p[1] == '>') p += 2;
+                while (*p == ' ' || *p == '\t') p++;
+                stmt->data.function_def.return_type_str = puppet_string_create(p);
+                puppet_free(raw);
+            }
+        } else if (strcmp(type, "block") == 0) {
+            stmt->data.function_def.body = convert_block(child, source);
+        }
+    }
+
+    return stmt;
+}
+
 /* Convert include/require/contain statement */
 static puppet_stmt_t *convert_include(TSNode node, const char *source, puppet_stmt_type_t stmt_type) {
     puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
@@ -2260,6 +2383,8 @@ static puppet_stmt_t *convert_statement(TSNode node, const char *source) {
         return convert_class_def(node, source);
     if (strcmp(type, "define_definition") == 0)
         return convert_define_def(node, source);
+    if (strcmp(type, "function_definition") == 0)
+        return convert_function_def(node, source);
     if (strcmp(type, "resource_type") == 0)
         return convert_resource(node, source);
     if (strcmp(type, "if") == 0)
@@ -2469,6 +2594,20 @@ static puppet_stmt_t *convert_statement(TSNode node, const char *source) {
     /* Skip comments and unknown nodes */
     if (strcmp(type, "comment") == 0)
         return NULL;
+
+    /* Fallback: a bare expression used as a statement — e.g. the last line of a
+     * function or lambda body (`$n * 2`, `"hello ${who}"`). Wrap it as an
+     * expression statement so blocks can yield its value. */
+    {
+        puppet_expr_t *e = convert_expression(node, source);
+        if (e) {
+            puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
+            stmt->type = PUPPET_STMT_EXPRESSION;
+            stmt->loc = node_location(node);
+            stmt->data.expr = e;
+            return stmt;
+        }
+    }
 
     return NULL;
 }

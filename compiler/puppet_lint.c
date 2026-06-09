@@ -433,6 +433,15 @@ static void lint_stmt(puppet_lint_result_t *r, puppet_stmt_t *stmt) {
             lint_stmt_list(r, &stmt->data.define.body);
             break;
 
+        case PUPPET_STMT_FUNCTION_DEF:
+            for (size_t i = 0; i < stmt->data.function_def.params.count; i++) {
+                if (stmt->data.function_def.params.params[i].default_value) {
+                    lint_expr(r, stmt->data.function_def.params.params[i].default_value);
+                }
+            }
+            lint_stmt_list(r, &stmt->data.function_def.body);
+            break;
+
         case PUPPET_STMT_RESOURCE:
             for (size_t i = 0; i < stmt->data.resource.instance_count; i++) {
                 puppet_resource_instance_t *inst = &stmt->data.resource.instances[i];

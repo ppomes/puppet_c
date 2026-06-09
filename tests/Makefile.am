@@ -100,6 +100,7 @@ EXTRA_DIST = \
     test_unknown_type.sh \
     test_template_fidelity.sh \
     test_puppet8_lint.sh \
+    test_user_functions.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -135,7 +136,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions
 	@echo "All tests completed."
 
 check-parser:
@@ -699,6 +700,17 @@ check-puppet8-lint:
 	else \
 		echo "❌ Some puppet8-lint tests failed:"; \
 		sed 's/^/  /' output/puppet8_lint.out; \
+		exit 1; \
+	fi
+
+check-user-functions:
+	@echo "Running user-defined function tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_user_functions.sh > output/user_functions.out 2>&1; then \
+		echo "✅ All user-function tests passed!"; \
+	else \
+		echo "❌ Some user-function tests failed:"; \
+		sed 's/^/  /' output/user_functions.out; \
 		exit 1; \
 	fi
 

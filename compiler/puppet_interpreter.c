@@ -648,6 +648,11 @@ puppet_env_t *puppet_env_create(void) {
     env->define_types->bucket_count = 64;
     env->define_types->buckets = puppet_calloc(env->define_types->bucket_count, sizeof(puppet_hash_entry_t*));
 
+    /* Initialize user-defined function registry */
+    env->user_functions = puppet_calloc(1, sizeof(puppet_hash_t));
+    env->user_functions->bucket_count = 64;
+    env->user_functions->buckets = puppet_calloc(env->user_functions->bucket_count, sizeof(puppet_hash_entry_t*));
+
     /* Initialize template output */
     env->template_output_target = NULL;
     env->template_output_found = false;
@@ -919,6 +924,23 @@ void puppet_env_destroy(puppet_env_t *env) {
         puppet_free(env->define_types);
     }
 
+    /* Clean up user-defined function registry */
+    if (env->user_functions) {
+        for (size_t i = 0; i < env->user_functions->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->user_functions->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                /* value is a wrapper holding a borrowed AST stmt pointer */
+                puppet_free(entry->value);
+                puppet_free(entry);
+                entry = next;
+            }
+        }
+        puppet_free(env->user_functions->buckets);
+        puppet_free(env->user_functions);
+    }
+
     puppet_free(env->scope_stack);
     puppet_free(env->node_name);
     puppet_free(env->template_output_target);
@@ -1060,6 +1082,94 @@ puppet_value_t *puppet_scope_get_var(puppet_scope_t *scope, const char *name, bo
 /* Forward declaration for type-match helper defined below */
 static bool value_matches_type(puppet_value_t *val, const char *type_name,
                                 puppet_expr_t *title_expr, puppet_env_t *env);
+
+/* Guards runaway recursion in user-defined functions (e.g. f() calls f()). */
+#define PUPPET_MAX_CALL_DEPTH 256
+
+/*
+ * Call a user-defined Puppet function. Arguments are positional: each is
+ * evaluated in the caller's scope and bound to the corresponding parameter in
+ * a fresh scope (missing trailing params fall back to their default). The
+ * return value is the value of the body's last expression. NOTE: argument and
+ * return TYPE checking is deliberately not done here — that is item 8.
+ */
+static puppet_value_t *puppet_call_user_function(puppet_stmt_t *fn_stmt,
+                                                 puppet_expr_t *call_expr,
+                                                 puppet_env_t *env) {
+    const char *fname = fn_stmt->data.function_def.name.data;
+
+    if (env->func_call_depth >= PUPPET_MAX_CALL_DEPTH) {
+        puppet_error_at(call_expr->loc,
+                        "Maximum function call depth exceeded calling '%s'", fname);
+        puppet_env_increment_error(env);
+        return puppet_value_create_undef();
+    }
+
+    puppet_param_list_t *params = &fn_stmt->data.function_def.params;
+    size_t argc = call_expr->data.funcall.args.count;
+
+    if (argc > params->count) {
+        puppet_error_at(call_expr->loc,
+                        "Function '%s' takes at most %zu argument(s), got %zu",
+                        fname, params->count, argc);
+        puppet_env_increment_error(env);
+        return puppet_value_create_undef();
+    }
+
+    /* Evaluate positional arguments in the CALLER's scope. */
+    puppet_value_t **argv = NULL;
+    if (argc > 0) {
+        argv = puppet_calloc(argc, sizeof(puppet_value_t *));
+        for (size_t i = 0; i < argc; i++) {
+            argv[i] = puppet_eval_expr(call_expr->data.funcall.args.exprs[i], env);
+        }
+    }
+
+    /* Fresh scope for the body; bind parameters positionally. */
+    puppet_scope_t *fn_scope = puppet_scope_create(env->current_scope, fname);
+    puppet_scope_push(env, fn_scope);
+    env->func_call_depth++;
+
+    for (size_t i = 0; i < params->count; i++) {
+        const char *pname = params->params[i].name.data;
+        if (!pname) continue;
+        puppet_value_t *val;
+        if (i < argc) {
+            val = argv[i] ? argv[i] : puppet_value_create_undef();
+        } else if (params->params[i].default_value) {
+            val = puppet_eval_expr(params->params[i].default_value, env);
+        } else {
+            puppet_error_at(call_expr->loc,
+                            "Function '%s' missing required argument '%s'", fname, pname);
+            puppet_env_increment_error(env);
+            val = puppet_value_create_undef();
+        }
+        /* scope takes ownership of val (same as class/define parameter binding) */
+        puppet_scope_set_var(fn_scope, pname, val);
+    }
+    puppet_free(argv);  /* the values are now owned by the scope */
+
+    /* The function's value is its body's last expression. */
+    puppet_value_t *result = NULL;
+    puppet_stmt_list_t *body = &fn_stmt->data.function_def.body;
+    for (size_t i = 0; i < body->count; i++) {
+        puppet_stmt_t *s = body->stmts[i];
+        bool last = (i + 1 == body->count);
+        if (last && s && (s->type == PUPPET_STMT_EXPRESSION ||
+                          s->type == PUPPET_STMT_FUNCTION_CALL)) {
+            result = puppet_eval_expr(s->data.expr, env);
+        } else {
+            puppet_exec_stmt(s, env);
+        }
+    }
+    if (!result) result = puppet_value_create_undef();
+
+    env->func_call_depth--;
+    puppet_scope_t *popped = puppet_scope_pop(env);
+    puppet_scope_destroy(popped);
+
+    return result;
+}
 
 puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
     if (!expr) {
@@ -1627,6 +1737,14 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             }
 
             else {
+                /* User-defined Puppet function? (function name(...) >> T { }) */
+                puppet_value_t *fn_wrap = func_name ?
+                    puppet_hash_get(env->user_functions, func_name, strlen(func_name)) : NULL;
+                if (fn_wrap) {
+                    puppet_stmt_t *fn_stmt = (puppet_stmt_t *)fn_wrap->data.string.data;
+                    return puppet_call_user_function(fn_stmt, expr, env);
+                }
+
                 /* Check if it's a custom Ruby function in a module */
                 if (env->prog->loader && puppet_loader_has_custom_function(env->prog->loader, func_name)) {
                     /* Custom function found - return placeholder for catalog */
@@ -3271,6 +3389,20 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                 stmt_ptr->data.string.data = (char*)stmt;
                 puppet_hash_set(env->define_types, fq_name, strlen(fq_name), stmt_ptr);
                 puppet_free(fq_name);
+            }
+            break;
+
+        case PUPPET_STMT_FUNCTION_DEF:
+            /* Register the user-defined function for later calls. The name is
+             * already fully namespaced (e.g. "math::double"). Store a wrapper
+             * holding a borrowed pointer to the AST stmt, like define_types. */
+            if (stmt->data.function_def.name.data) {
+                const char *fn = stmt->data.function_def.name.data;
+                puppet_debug("Registering function: %s", fn);
+                puppet_value_t *fn_ptr = puppet_calloc(1, sizeof(puppet_value_t));
+                fn_ptr->type = PUPPET_VALUE_UNDEF;
+                fn_ptr->data.string.data = (char*)stmt;
+                puppet_hash_set(env->user_functions, fn, strlen(fn), fn_ptr);
             }
             break;
 

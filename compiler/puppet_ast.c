@@ -579,7 +579,23 @@ void puppet_stmt_destroy(puppet_stmt_t *stmt) {
             puppet_free(stmt->data.define.params.params);
             puppet_stmt_list_destroy(&stmt->data.define.body);
             break;
-            
+
+        case PUPPET_STMT_FUNCTION_DEF:
+            puppet_string_free(stmt->data.function_def.name);
+            for (size_t i = 0; i < stmt->data.function_def.params.count; i++) {
+                puppet_param_t *p = &stmt->data.function_def.params.params[i];
+                puppet_string_free(p->name);
+                puppet_value_destroy(p->type_constraint);
+                puppet_expr_destroy(p->default_value);
+                puppet_expr_destroy(p->type_expr);
+                puppet_string_free(p->type_str);
+            }
+            puppet_free(stmt->data.function_def.params.params);
+            puppet_expr_destroy(stmt->data.function_def.return_type_expr);
+            puppet_string_free(stmt->data.function_def.return_type_str);
+            puppet_stmt_list_destroy(&stmt->data.function_def.body);
+            break;
+
         case PUPPET_STMT_NODE:
             puppet_string_free(stmt->data.node.name);
             puppet_stmt_list_destroy(&stmt->data.node.body);
