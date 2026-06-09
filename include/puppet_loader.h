@@ -53,6 +53,15 @@ typedef struct puppet_loader {
         size_t capacity;
     } parsed_manifests;
 
+    /* Cache of per-module metadata.json puppet version_requirement verdicts */
+    struct {
+        char **module_names;   /**< Module name */
+        bool *incompatible;    /**< Puppet 8 excluded by the declared range */
+        char **requirement;    /**< The version_requirement string (for the message) */
+        size_t count;
+        size_t capacity;
+    } module_meta;
+
     /* Thread synchronization for parallel node processing */
     pthread_mutex_t cache_mutex;   /**< Protects all caches */
 
@@ -148,6 +157,19 @@ puppet_program_t *puppet_loader_load_site(puppet_loader_t *loader);
 bool puppet_loader_include_class(puppet_loader_t *loader,
                                  const char *class_name,
                                  puppet_env_t *env);
+
+/**
+ * @brief Whether a module's metadata.json declares it incompatible with Puppet 8.
+ *
+ * Reads <modules_path>/<module>/metadata.json once (cached), inspecting the
+ * `requirements` entry for "puppet". Returns 1 if the declared
+ * version_requirement excludes Puppet 8 (8.0.0), else 0 (including when there
+ * is no metadata.json / no requirement). On a positive result, *req_out (if
+ * non-NULL) is set to the borrowed requirement string.
+ */
+int puppet_loader_module_puppet8_incompatible(puppet_loader_t *loader,
+                                              const char *module_name,
+                                              const char **req_out);
 
 /**
  * @brief Check if a class has been loaded

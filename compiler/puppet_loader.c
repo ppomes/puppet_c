@@ -9,6 +9,8 @@
 #include "puppet_interpreter.h"
 #include "puppet_deadcode.h"
 #include "puppet_program_state.h"
+#include "puppet_json_common.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,6 +58,119 @@ puppet_loader_t *puppet_loader_create(const char *base_path) {
     return loader;
 }
 
+/* Compare versions (a0.a1.a2) vs (b0.b1.b2): <0, 0, or >0. */
+static int loader_ver_cmp(int a0, int a1, int a2, int b0, int b1, int b2) {
+    if (a0 != b0) return a0 < b0 ? -1 : 1;
+    if (a1 != b1) return a1 < b1 ? -1 : 1;
+    if (a2 != b2) return a2 < b2 ? -1 : 1;
+    return 0;
+}
+
+/* Does a puppet `version_requirement` string exclude Puppet 8.0.0? Tokenize into
+ * (op, version) pairs (ops: >= <= > < =); if any constraint is violated by
+ * 8.0.0, it's excluded. Bare versions / unparseable tokens are skipped. */
+static bool puppet8_excluded_by(const char *req) {
+    if (!req) return false;
+    const int t0 = 8, t1 = 0, t2 = 0;  /* target: Puppet 8.0.0 */
+    const char *p = req;
+    bool excluded = false;
+    while (*p) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (!*p) break;
+        char op0 = 0, op1 = 0;
+        if (*p == '>' || *p == '<' || *p == '=') {
+            op0 = *p++;
+            if (*p == '=') op1 = *p++;
+        }
+        while (*p == ' ' || *p == '\t') p++;
+        if (!isdigit((unsigned char)*p)) {            /* not a version token */
+            while (*p && *p != ' ' && *p != '\t') p++;
+            continue;
+        }
+        int v0 = 0, v1 = 0, v2 = 0;
+        sscanf(p, "%d.%d.%d", &v0, &v1, &v2);
+        while (*p && (isdigit((unsigned char)*p) || *p == '.')) p++;
+        if (op0 == 0) continue;                        /* bare version: ignore */
+        int c = loader_ver_cmp(t0, t1, t2, v0, v1, v2);  /* target vs bound */
+        bool ok;
+        if (op0 == '<' && op1 == '=') ok = (c <= 0);
+        else if (op0 == '<')          ok = (c < 0);
+        else if (op0 == '>' && op1 == '=') ok = (c >= 0);
+        else if (op0 == '>')          ok = (c > 0);
+        else                          ok = (c == 0);   /* '=' */
+        if (!ok) excluded = true;
+    }
+    return excluded;
+}
+
+int puppet_loader_module_puppet8_incompatible(puppet_loader_t *loader,
+                                              const char *module_name,
+                                              const char **req_out) {
+    if (req_out) *req_out = NULL;
+    if (!loader || !module_name || !*module_name) return 0;
+
+    pthread_mutex_lock(&loader->cache_mutex);
+
+    for (size_t i = 0; i < loader->module_meta.count; i++) {
+        if (strcmp(loader->module_meta.module_names[i], module_name) == 0) {
+            int inc = loader->module_meta.incompatible[i];
+            if (req_out) *req_out = loader->module_meta.requirement[i];
+            pthread_mutex_unlock(&loader->cache_mutex);
+            return inc;
+        }
+    }
+
+    /* Not cached — parse <modules_path>/<module>/metadata.json once. */
+    bool incompatible = false;
+    char *req_copy = NULL;
+    if (loader->modules_path) {
+        char path[4096];
+        snprintf(path, sizeof(path), "%s/%s/metadata.json",
+                 loader->modules_path, module_name);
+        json_value_t *root = json_parse_file(path);
+        if (root && json_is_object(root)) {
+            json_value_t *reqs = json_object_get(root, "requirements");
+            if (reqs && json_is_array(reqs)) {
+                size_t n = json_array_size(reqs);
+                for (size_t i = 0; i < n; i++) {
+                    json_value_t *r = json_array_get(reqs, i);
+                    if (!r || !json_is_object(r)) continue;
+                    const char *nm = json_get_string(json_object_get(r, "name"));
+                    if (nm && strcmp(nm, "puppet") == 0) {
+                        const char *vr =
+                            json_get_string(json_object_get(r, "version_requirement"));
+                        if (vr && puppet8_excluded_by(vr)) {
+                            incompatible = true;
+                            req_copy = puppet_strdup(vr);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        if (root) json_value_destroy(root);
+    }
+
+    if (loader->module_meta.count >= loader->module_meta.capacity) {
+        size_t nc = loader->module_meta.capacity ? loader->module_meta.capacity * 2 : 8;
+        loader->module_meta.module_names =
+            puppet_realloc(loader->module_meta.module_names, nc * sizeof(char *));
+        loader->module_meta.incompatible =
+            puppet_realloc(loader->module_meta.incompatible, nc * sizeof(bool));
+        loader->module_meta.requirement =
+            puppet_realloc(loader->module_meta.requirement, nc * sizeof(char *));
+        loader->module_meta.capacity = nc;
+    }
+    size_t idx = loader->module_meta.count++;
+    loader->module_meta.module_names[idx] = puppet_strdup(module_name);
+    loader->module_meta.incompatible[idx] = incompatible;
+    loader->module_meta.requirement[idx] = req_copy;  /* may be NULL */
+    if (req_out) *req_out = req_copy;
+
+    pthread_mutex_unlock(&loader->cache_mutex);
+    return incompatible ? 1 : 0;
+}
+
 void puppet_loader_destroy(puppet_loader_t *loader) {
     if (!loader) return;
 
@@ -83,6 +198,15 @@ void puppet_loader_destroy(puppet_loader_t *loader) {
     }
     puppet_free(loader->parsed_manifests.file_paths);
     puppet_free(loader->parsed_manifests.programs);
+
+    /* Clean up module metadata cache */
+    for (size_t i = 0; i < loader->module_meta.count; i++) {
+        puppet_free(loader->module_meta.module_names[i]);
+        puppet_free(loader->module_meta.requirement[i]);
+    }
+    puppet_free(loader->module_meta.module_names);
+    puppet_free(loader->module_meta.incompatible);
+    puppet_free(loader->module_meta.requirement);
 
     /* Destroy thread synchronization */
     pthread_mutex_destroy(&loader->cache_mutex);

@@ -654,6 +654,12 @@ puppet_env_t *puppet_env_create(void) {
     env->class_scopes->bucket_count = 32;
     env->class_scopes->buckets = puppet_calloc(env->class_scopes->bucket_count, sizeof(puppet_hash_entry_t*));
 
+    /* Per-node set of modules whose metadata.json puppet requirement has been
+     * checked (dedups the Puppet 8 incompatibility error to once per node). */
+    env->modules_p8_checked = puppet_calloc(1, sizeof(puppet_hash_t));
+    env->modules_p8_checked->bucket_count = 16;
+    env->modules_p8_checked->buckets = puppet_calloc(env->modules_p8_checked->bucket_count, sizeof(puppet_hash_entry_t*));
+
     /* Initialize resource-style class declarations tracking */
     env->class_resource_decls = puppet_calloc(1, sizeof(puppet_hash_t));
     env->class_resource_decls->bucket_count = 32;
@@ -818,6 +824,22 @@ void puppet_env_destroy(puppet_env_t *env) {
         }
         puppet_free(env->class_scopes->buckets);
         puppet_free(env->class_scopes);
+    }
+
+    // Clean up per-node module-metadata-checked set
+    if (env->modules_p8_checked) {
+        for (size_t i = 0; i < env->modules_p8_checked->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->modules_p8_checked->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                puppet_value_destroy(entry->value);
+                puppet_free(entry);
+                entry = next;
+            }
+        }
+        puppet_free(env->modules_p8_checked->buckets);
+        puppet_free(env->modules_p8_checked);
     }
 
     // Clean up resource-style class declarations
@@ -5264,6 +5286,31 @@ void puppet_exec_include(puppet_stmt_t *include_stmt, puppet_env_t *env) {
             class_name = class_name_raw + 2;
         }
 
+        /* Item 4: error when this node includes a class from a module whose
+         * metadata.json declares puppet incompatible with the Puppet 8 target.
+         * Deduped to once per module per node via modules_p8_checked. */
+        if (env->prog->loader && env->modules_p8_checked) {
+            size_t mlen = strcspn(class_name, ":");  /* module = up to first ':' */
+            if (mlen > 0 && mlen < 256) {
+                char modname[256];
+                memcpy(modname, class_name, mlen);
+                modname[mlen] = '\0';
+                if (!puppet_hash_get(env->modules_p8_checked, modname, mlen)) {
+                    puppet_hash_set(env->modules_p8_checked, modname, mlen,
+                                    puppet_value_create_bool(true));
+                    const char *req = NULL;
+                    if (puppet_loader_module_puppet8_incompatible(env->prog->loader,
+                                                                  modname, &req)) {
+                        /* puppet_error_at already increments the error count via
+                         * the active log env; don't double-count. */
+                        puppet_error_at(name_expr->loc,
+                            "Module '%s' requires puppet %s, incompatible with the Puppet 8 target",
+                            modname, req ? req : "(unknown)");
+                    }
+                }
+            }
+        }
+
         /* First, try to find the class in registered definitions */
         puppet_stmt_t *class_def = puppet_find_class_def(env, class_name);
         if (class_def) {
@@ -5436,6 +5483,22 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
                 entry = next;
             }
             env->class_scopes->buckets[i] = NULL;
+        }
+    }
+
+    /* Clear the per-node module-metadata-checked set so each node re-reports
+     * its own incompatible-module errors. */
+    if (env->modules_p8_checked) {
+        for (size_t i = 0; i < env->modules_p8_checked->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->modules_p8_checked->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                puppet_value_destroy(entry->value);
+                puppet_free(entry);
+                entry = next;
+            }
+            env->modules_p8_checked->buckets[i] = NULL;
         }
     }
 
