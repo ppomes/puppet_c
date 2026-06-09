@@ -116,6 +116,7 @@ EXTRA_DIST = \
     test_type_aliases.sh \
     test_duplicate_hash_keys.sh \
     test_legacy_facts.sh \
+    test_regex_anchors.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -151,7 +152,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions check-enum-undef-default check-unless-defined check-erb-structured-facts check-type-aliases check-duplicate-hash-keys check-legacy-facts
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions check-enum-undef-default check-unless-defined check-erb-structured-facts check-type-aliases check-duplicate-hash-keys check-legacy-facts check-regex-anchors
 	@echo "All tests completed."
 
 check-parser:
@@ -891,6 +892,17 @@ check-legacy-facts:
 	else \
 		echo "❌ Some legacy-facts tests failed:"; \
 		sed 's/^/  /' output/legacy_facts.out; \
+		exit 1; \
+	fi
+
+check-regex-anchors:
+	@echo "Running Ruby regex anchor/control-escape tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_regex_anchors.sh > output/regex_anchors.out 2>&1; then \
+		echo "✅ All regex-anchors tests passed!"; \
+	else \
+		echo "❌ Some regex-anchors tests failed:"; \
+		sed 's/^/  /' output/regex_anchors.out; \
 		exit 1; \
 	fi
 

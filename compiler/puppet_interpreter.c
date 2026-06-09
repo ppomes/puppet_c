@@ -107,6 +107,40 @@ static int puppet_regcomp(regex_t *rx, const char *pattern, int cflags) {
                 src += 2;
                 continue;
             }
+            /* Ruby/PCRE string anchors that POSIX regex doesn't know.
+             * Outside a character class, \A is start-of-string and \z / \Z are
+             * end-of-string; map them to POSIX ^ and $. (\Z also matches before
+             * a trailing newline in Ruby — $ is close enough here.) Without
+             * this, glibc treats \A as a literal 'A', so e.g. Stdlib::Filemode
+             * (Pattern[/\A([0-7]{1,4})\z/]) never matches '0644' — 248 false
+             * positives on the real tree once item 18 made the aliases resolve. */
+            if (!in_class && esc == 'A') {
+                *dst++ = '^';
+                src += 2;
+                continue;
+            }
+            if (!in_class && (esc == 'z' || esc == 'Z')) {
+                *dst++ = '$';
+                src += 2;
+                continue;
+            }
+            /* Ruby control-character escapes that POSIX doesn't interpret (it
+             * would treat \n as a literal 'n'). Emit the actual byte, in or out
+             * of a character class. This is what makes the stdlib path types,
+             * e.g. Stdlib::Unixpath = Pattern[/\A\/([^\n\/\0]+\/*)*\z/], match a
+             * real path containing the letter 'n' (…/keyrings). */
+            if (esc == 'n') { *dst++ = '\n'; src += 2; continue; }
+            if (esc == 't') { *dst++ = '\t'; src += 2; continue; }
+            if (esc == 'r') { *dst++ = '\r'; src += 2; continue; }
+            if (esc == 'f') { *dst++ = '\f'; src += 2; continue; }
+            if (esc == 'v') { *dst++ = '\v'; src += 2; continue; }
+            if (esc == '0' && !(src[2] >= '0' && src[2] <= '7')) {
+                /* \0 = NUL. A NUL can't appear in the C strings we match and
+                 * would truncate the pattern buffer, so just drop it from the
+                 * (character-class) pattern. */
+                src += 2;
+                continue;
+            }
             if (in_class) {
                 if (esc == '-') {
                     /* Defer literal dash to end of class */
