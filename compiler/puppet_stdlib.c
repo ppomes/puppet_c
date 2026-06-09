@@ -6518,6 +6518,62 @@ puppet_value_t *puppet_func_dig(puppet_expr_list_t *args, puppet_env_t *env) {
 }
 
 /**
+ * @brief Puppet fact() function - look up a fact by dotted path.
+ *
+ * Usage: fact('os.distro.codename')  ≡  $facts['os']['distro']['codename']
+ * The Puppet 6+ built-in takes a single dotted (and optionally array-indexed)
+ * path string and walks the structured $facts hash. A missing segment returns
+ * undef (like dig()), never an error.
+ */
+puppet_value_t *puppet_func_fact(puppet_expr_list_t *args, puppet_env_t *env) {
+    if (!args || args->count != 1) {
+        puppet_log(PUPPET_LOG_ERROR, "fact() requires exactly one argument (a dotted fact path)");
+        return puppet_value_create_undef();
+    }
+
+    puppet_value_t *path_v = puppet_eval_expr(args->exprs[0], env);
+    if (!path_v || path_v->type != PUPPET_VALUE_STRING || !path_v->data.string.data) {
+        if (path_v) puppet_value_destroy(path_v);
+        return puppet_value_create_undef();
+    }
+    char *path = puppet_strdup(path_v->data.string.data);
+    puppet_value_destroy(path_v);
+
+    /* Start from the structured $facts hash for the current node (owned copy). */
+    puppet_value_t *current = puppet_facts_get_all_as_hash(env);
+    if (!current) {
+        puppet_free(path);
+        return puppet_value_create_undef();
+    }
+
+    char *saveptr = NULL;
+    for (char *seg = strtok_r(path, ".", &saveptr); seg; seg = strtok_r(NULL, ".", &saveptr)) {
+        puppet_value_t *next = NULL;
+        if (current->type == PUPPET_VALUE_HASH) {
+            puppet_value_t *v = puppet_hash_get(current->data.hash, seg, strlen(seg));
+            if (v) next = puppet_value_copy(v);
+        } else if (current->type == PUPPET_VALUE_ARRAY && current->data.array) {
+            /* A numeric segment indexes into an array fact (e.g. 'foo.0'). */
+            char *endp = NULL;
+            long idx = strtol(seg, &endp, 10);
+            if (endp && *endp == '\0' && idx >= 0 &&
+                (size_t)idx < current->data.array->count) {
+                next = puppet_value_copy(current->data.array->items[idx]);
+            }
+        }
+        puppet_value_destroy(current);
+        if (!next) {
+            puppet_free(path);
+            return puppet_value_create_undef();
+        }
+        current = next;
+    }
+
+    puppet_free(path);
+    return current;
+}
+
+/**
  * @brief Puppet pick() function - return first non-undef value
  *
  * Usage: pick(value1, value2, ...)

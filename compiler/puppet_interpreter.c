@@ -1855,6 +1855,9 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             else if (strcmp(func_name, "dig") == 0) {
                 return puppet_func_dig(&expr->data.funcall.args, env);
             }
+            else if (strcmp(func_name, "fact") == 0) {
+                return puppet_func_fact(&expr->data.funcall.args, env);
+            }
             else if (strcmp(func_name, "pick") == 0) {
                 return puppet_func_pick(&expr->data.funcall.args, env);
             }

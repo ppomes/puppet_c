@@ -218,6 +218,7 @@ puppet_value_t *puppet_func_assert_type(puppet_expr_list_t *args, puppet_env_t *
 
 // Data access
 puppet_value_t *puppet_func_dig(puppet_expr_list_t *args, puppet_env_t *env);
+puppet_value_t *puppet_func_fact(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_pick(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_pick_default(puppet_expr_list_t *args, puppet_env_t *env);
 puppet_value_t *puppet_func_getvar(puppet_expr_list_t *args, puppet_env_t *env);
