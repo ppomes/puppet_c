@@ -109,6 +109,7 @@ EXTRA_DIST = \
     test_ruby_kwarg_shorthand.sh \
     test_module_metadata.sh \
     test_parametric_types.sh \
+    test_parallel_user_functions.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -144,7 +145,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions
 	@echo "All tests completed."
 
 check-parser:
@@ -807,6 +808,17 @@ check-parametric-types:
 	else \
 		echo "❌ Some parametric-types tests failed:"; \
 		sed 's/^/  /' output/parametric_types.out; \
+		exit 1; \
+	fi
+
+check-parallel-user-functions:
+	@echo "Running parallel-mode user-function/module SEGV regression tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_parallel_user_functions.sh > output/parallel_user_functions.out 2>&1; then \
+		echo "✅ All parallel-user-functions tests passed!"; \
+	else \
+		echo "❌ Some parallel-user-functions tests failed:"; \
+		sed 's/^/  /' output/parallel_user_functions.out; \
 		exit 1; \
 	fi
 

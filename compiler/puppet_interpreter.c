@@ -7393,6 +7393,34 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
         }
     }
 
+    /* Copy user_functions hash (shallow, like define_types): the worker does
+     * NOT re-run top-level statements, so a fresh empty hash would leave
+     * user-defined functions unresolved under -P. Each entry stores its own
+     * wrapper holding a borrowed AST stmt pointer (shared, never freed here).
+     * A per-thread hash is essential — the source hash is read-mostly but
+     * registration writes (PUPPET_STMT_FUNCTION_DEF) must not race. */
+    env->user_functions = puppet_calloc(1, sizeof(puppet_hash_t));
+    if (source->user_functions) {
+        env->user_functions->bucket_count = source->user_functions->bucket_count;
+        env->user_functions->buckets = puppet_calloc(env->user_functions->bucket_count, sizeof(puppet_hash_entry_t*));
+        for (size_t i = 0; i < source->user_functions->bucket_count; i++) {
+            for (puppet_hash_entry_t *se = source->user_functions->buckets[i]; se; se = se->next) {
+                puppet_value_t *fn_ptr = puppet_calloc(1, sizeof(puppet_value_t));
+                fn_ptr->type = PUPPET_VALUE_UNDEF;
+                fn_ptr->data.string.data = se->value ? se->value->data.string.data : NULL; /* borrowed AST stmt */
+                puppet_hash_set(env->user_functions, se->key.data, se->key.len, fn_ptr);
+            }
+        }
+    } else {
+        env->user_functions->bucket_count = 64;
+        env->user_functions->buckets = puppet_calloc(env->user_functions->bucket_count, sizeof(puppet_hash_entry_t*));
+    }
+
+    /* Fresh per-node module-metadata-checked "seen" set. It is populated and
+     * cleared per node, so each worker must own a private one — a shared hash
+     * would corrupt under concurrent puppet_hash_set + per-node clear. */
+    env->modules_p8_checked = create_hash(16);
+
     /* Node-specific settings */
     env->node_name = certname ? puppet_strdup(certname) : NULL;
     env->execute_all_nodes = false;  /* Single node mode */
@@ -7626,6 +7654,38 @@ static void puppet_env_destroy_clone(puppet_env_t *env) {
             }
         }
         puppet_free(env->deferred_defines);
+    }
+
+    /* Free copied user_functions hash (own the wrappers + keys, borrow the AST) */
+    if (env->user_functions) {
+        for (size_t i = 0; i < env->user_functions->bucket_count; i++) {
+            puppet_hash_entry_t *e = env->user_functions->buckets[i];
+            while (e) {
+                puppet_hash_entry_t *next = e->next;
+                puppet_free(e->key.data);
+                puppet_free(e->value);  /* wrapper owned; AST stmt borrowed */
+                puppet_free(e);
+                e = next;
+            }
+        }
+        puppet_free(env->user_functions->buckets);
+        puppet_free(env->user_functions);
+    }
+
+    /* Free per-node module-metadata-checked set */
+    if (env->modules_p8_checked) {
+        for (size_t i = 0; i < env->modules_p8_checked->bucket_count; i++) {
+            puppet_hash_entry_t *e = env->modules_p8_checked->buckets[i];
+            while (e) {
+                puppet_hash_entry_t *next = e->next;
+                puppet_free(e->key.data);
+                puppet_value_destroy(e->value);
+                puppet_free(e);
+                e = next;
+            }
+        }
+        puppet_free(env->modules_p8_checked->buckets);
+        puppet_free(env->modules_p8_checked);
     }
 
     /* Free pending realizes hash */
