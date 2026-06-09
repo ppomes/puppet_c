@@ -110,6 +110,7 @@ EXTRA_DIST = \
     test_module_metadata.sh \
     test_parametric_types.sh \
     test_parallel_user_functions.sh \
+    test_enum_undef_default.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -145,7 +146,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions check-enum-undef-default
 	@echo "All tests completed."
 
 check-parser:
@@ -819,6 +820,17 @@ check-parallel-user-functions:
 	else \
 		echo "❌ Some parallel-user-functions tests failed:"; \
 		sed 's/^/  /' output/parallel_user_functions.out; \
+		exit 1; \
+	fi
+
+check-enum-undef-default:
+	@echo "Running undef-attribute -> default param-binding tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_enum_undef_default.sh > output/enum_undef_default.out 2>&1; then \
+		echo "✅ All enum-undef-default tests passed!"; \
+	else \
+		echo "❌ Some enum-undef-default tests failed:"; \
+		sed 's/^/  /' output/enum_undef_default.out; \
 		exit 1; \
 	fi
 

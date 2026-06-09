@@ -3844,6 +3844,20 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                                     if (instance->attributes[ai].name.data &&
                                         strcmp(instance->attributes[ai].name.data, param_name) == 0) {
                                         pre_eval_values[pi] = puppet_eval_expr(instance->attributes[ai].value, env);
+                                        // Puppet semantics: an explicitly-supplied
+                                        // undef value is stripped, so the default
+                                        // (or APL) applies. Leave attr_found false
+                                        // and let the binding loop below resolve it;
+                                        // otherwise a typed param passed `undef`
+                                        // would fail the type-check even though real
+                                        // Puppet uses the default.
+                                        if (pre_eval_values[pi] &&
+                                            pre_eval_values[pi]->type == PUPPET_VALUE_UNDEF &&
+                                            param->default_value) {
+                                            puppet_value_destroy(pre_eval_values[pi]);
+                                            pre_eval_values[pi] = NULL;
+                                            break;
+                                        }
                                         attr_found[pi] = true;
                                         // Type-check the provided value (see
                                         // puppet_exec_class_instance for the
@@ -4938,6 +4952,19 @@ static void puppet_exec_deferred_define(puppet_deferred_define_t *deferred, pupp
                     break;
                 }
             }
+        }
+
+        /* Puppet semantics: an explicitly-supplied undef attribute value is
+         * stripped and the parameter default applies (e.g. a `ensure => $x`
+         * where the selector/hiera lookup $x missed). Without this, a typed
+         * parameter such as Enum['present','absent'] passed undef fails the
+         * type check below even though real Puppet falls back to the default
+         * and compiles cleanly. */
+        if (param_value && param_value->type == PUPPET_VALUE_UNDEF &&
+            define_stmt->data.define.params.params[p].default_value) {
+            puppet_value_destroy(param_value);
+            param_value = puppet_eval_expr(
+                define_stmt->data.define.params.params[p].default_value, env);
         }
 
         /* 3. Use default value if not provided */
@@ -6063,6 +6090,16 @@ void puppet_exec_class_instance(puppet_stmt_t *class_instance_stmt, puppet_env_t
                 found_arg = true;
                 break;
             }
+        }
+
+        // Puppet semantics: an explicitly-supplied undef value is stripped and
+        // the parameter default applies. Without this, a typed param passed
+        // `undef` (a selector/hiera miss) fails the type-check below even
+        // though real Puppet falls back to the default and compiles cleanly.
+        if (found_arg && param_value && param_value->type == PUPPET_VALUE_UNDEF &&
+            param->default_value) {
+            puppet_value_destroy(param_value);
+            param_value = puppet_eval_expr(param->default_value, env);
         }
 
         // If not provided, use default value
