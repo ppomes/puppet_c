@@ -742,6 +742,105 @@ static void erb_warn_namespaced_ivars(const char *content, const char *template_
     }
 }
 
+/* Item 14 — structured-fact type drift. Facter 4 reshaped several facts from
+ * flat strings/ints into Hashes/Arrays. Templates that still call String
+ * methods (split/gsub/tr/to_a) on `scope['<fact>']` crash at render time with
+ * e.g. "undefined method 'split' for #<Hash>". Statically flag the misuse and
+ * suggest the structured replacement. Scans only inside ERB tags. */
+static const struct {
+    const char *fact;
+    const char *now;          /* what the fact is in Facter 4 */
+    const char *suggestion;   /* how to access it now */
+} erb_changed_facts[] = {
+    { "mountpoints",  "a Hash",   "use .keys" },
+    { "interfaces",   "a Hash",   "use .keys" },
+    { "partitions",   "a Hash",   "use .keys" },
+    { "blockdevices", "a Hash",   "use .keys" },
+    { "processors",   "a Hash",   "use ['count']" },
+    { "memorysize",   "a number", "use $facts['memory']['system']['total']" },
+};
+
+static void erb_warn_structured_facts(const char *content, const char *template_name,
+                                      puppet_env_t *env) {
+    if (!content) return;
+    bool strict = env && env->prog && env->prog->strict_erb;
+    /* String methods whose use on a Hash/number/Array is the symptom. */
+    static const char *str_methods[] = { "split", "gsub", "tr", "to_a", NULL };
+    int line = 1;
+    bool in_tag = false;
+    const char *p = content;
+    while (*p) {
+        if (*p == '\n') { line++; p++; continue; }
+        if (!in_tag) {
+            if (p[0] == '<' && p[1] == '%') { in_tag = true; p += 2; }
+            else p++;
+            continue;
+        }
+        if (p[0] == '%' && p[1] == '>') { in_tag = false; p += 2; continue; }
+
+        /* Match `scope[` then a chain of ['key'] segments; remember the last
+         * key (the one the method is invoked on, so scope['facts']['x'] and
+         * scope['x'] both resolve to x). */
+        if (strncmp(p, "scope", 5) == 0 && p[5] == '[') {
+            const char *q = p + 5;
+            char last_key[128];
+            last_key[0] = '\0';
+            bool ok = false;
+            while (q[0] == '[' && (q[1] == '\'' || q[1] == '"')) {
+                char quote = q[1];
+                const char *k = q + 2;
+                const char *e = k;
+                while (*e && *e != quote) e++;
+                if (*e != quote || e[1] != ']') { ok = false; break; }
+                size_t klen = (size_t)(e - k);
+                if (klen < sizeof(last_key)) {
+                    memcpy(last_key, k, klen);
+                    last_key[klen] = '\0';
+                }
+                ok = true;
+                q = e + 2;  /* past the closing quote and ] */
+            }
+            if (ok && q[0] == '.') {
+                const char *m = q + 1;
+                const char *me = m;
+                while (isalnum((unsigned char)*me) || *me == '_') me++;
+                size_t mlen = (size_t)(me - m);
+                /* Is the method a String method? */
+                bool is_str_method = false;
+                for (int i = 0; str_methods[i]; i++) {
+                    if (strlen(str_methods[i]) == mlen &&
+                        strncmp(m, str_methods[i], mlen) == 0) { is_str_method = true; break; }
+                }
+                if (is_str_method) {
+                    for (size_t i = 0; i < sizeof(erb_changed_facts) / sizeof(erb_changed_facts[0]); i++) {
+                        if (strcmp(last_key, erb_changed_facts[i].fact) == 0) {
+                            puppet_location_t loc = { template_name, line, 0 };
+                            const char *fn = erb_changed_facts[i].fact;
+                            const char *nw = erb_changed_facts[i].now;
+                            const char *sg = erb_changed_facts[i].suggestion;
+                            if (strict) {
+                                puppet_error_at(loc,
+                                    "ERB scope['%s'].%.*s: '%s' is %s in Facter 4 (was a String in Puppet 7); %s",
+                                    fn, (int)mlen, m, fn, nw, sg);
+                            } else {
+                                puppet_warning_at(loc,
+                                    "ERB scope['%s'].%.*s: '%s' is %s in Facter 4 (was a String in Puppet 7); %s",
+                                    fn, (int)mlen, m, fn, nw, sg);
+                            }
+                            break;
+                        }
+                    }
+                }
+                p = q;
+                continue;
+            }
+            p = q;
+            continue;
+        }
+        p++;
+    }
+}
+
 char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx, const char *template_name) {
     (void)ruby_ctx;  /* legacy parameter — Ruby context is owned by the daemon */
 
@@ -753,6 +852,7 @@ char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_
     // Flag the removed Puppet-4 `@class::var` ERB sugar (warn, or error under
     // --strict-erb) before rendering rewrites it away.
     erb_warn_namespaced_ivars(template_content, template_name, env);
+    erb_warn_structured_facts(template_content, template_name, env);
 
     // Fast path: native (Ruby-free) renderer for the supported subset.
     // The native engine caches its parsed AST per template_name and is
