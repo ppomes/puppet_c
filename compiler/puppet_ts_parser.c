@@ -2173,6 +2173,46 @@ static puppet_stmt_t *convert_if(TSNode node, const char *source) {
     return stmt;
 }
 
+/* Convert `type Name = <type-expr>` (e.g. `type Stdlib::Fqdn = Pattern[/.../]`).
+ * The grammar node is `type_alias` with the `operator` field = "=", the LHS
+ * alias name (a `type` node) and the RHS type expression. We capture the RHS as
+ * raw source text and hand it to value_matches_type_str at match time, which
+ * already understands Pattern/Variant/Enum/Optional/builtins. */
+static puppet_stmt_t *convert_type_alias(TSNode node, const char *source) {
+    puppet_stmt_t *stmt = puppet_calloc(1, sizeof(puppet_stmt_t));
+    stmt->type = PUPPET_STMT_TYPE_ALIAS;
+    stmt->loc = node_location(node);
+
+    /* The alias name is the first `type` child (before the `=`). */
+    TSNode name_node = find_child(node, "type");
+    if (!ts_node_is_null(name_node)) {
+        char *nm = node_text(name_node, source);
+        stmt->data.type_alias.name = puppet_string_create(nm);
+        puppet_free(nm);
+    }
+
+    /* The RHS is everything after the `=` operator to the end of the node,
+     * trimmed — robust regardless of whether it parses as type/access/array/
+     * hash children. */
+    TSNode op = ts_node_child_by_field_name(node, "operator", 8);
+    if (!ts_node_is_null(op)) {
+        uint32_t s = ts_node_end_byte(op);
+        uint32_t e = ts_node_end_byte(node);
+        while (s < e && (source[s] == ' ' || source[s] == '\t' ||
+                         source[s] == '\n' || source[s] == '\r')) s++;
+        while (e > s && (source[e-1] == ' ' || source[e-1] == '\t' ||
+                         source[e-1] == '\n' || source[e-1] == '\r')) e--;
+        size_t len = (size_t)(e - s);
+        char *rhs = puppet_malloc(len + 1);
+        memcpy(rhs, source + s, len);
+        rhs[len] = '\0';
+        stmt->data.type_alias.type_str = puppet_string_create(rhs);
+        puppet_free(rhs);
+    }
+
+    return stmt;
+}
+
 /* Convert `unless <cond> { body } [else { else_body }]`.
  * The grammar node is `unless` with children: condition, block, optional else.
  * Without this the node fell through to the expression fallback and the body
@@ -2453,6 +2493,8 @@ static puppet_stmt_t *convert_statement(TSNode node, const char *source) {
         return convert_if(node, source);
     if (strcmp(type, "unless") == 0)
         return convert_unless(node, source);
+    if (strcmp(type, "type_alias") == 0)
+        return convert_type_alias(node, source);
     if (strcmp(type, "case") == 0)
         return convert_case(node, source);
     if (strcmp(type, "statement_function") == 0) {

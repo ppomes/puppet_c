@@ -688,7 +688,8 @@ void puppet_stmt_destroy(puppet_stmt_t *stmt) {
             break;
 
         case PUPPET_STMT_TYPE_ALIAS:
-            /* Type alias not yet implemented - no data to destroy */
+            puppet_string_free(stmt->data.type_alias.name);
+            puppet_string_free(stmt->data.type_alias.type_str);
             break;
     }
 

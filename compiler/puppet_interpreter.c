@@ -699,6 +699,11 @@ puppet_env_t *puppet_env_create(void) {
     env->user_functions->bucket_count = 64;
     env->user_functions->buckets = puppet_calloc(env->user_functions->bucket_count, sizeof(puppet_hash_entry_t*));
 
+    /* Initialize user-defined type-alias registry (type Foo::Bar = <type>) */
+    env->type_aliases = puppet_calloc(1, sizeof(puppet_hash_t));
+    env->type_aliases->bucket_count = 64;
+    env->type_aliases->buckets = puppet_calloc(env->type_aliases->bucket_count, sizeof(puppet_hash_entry_t*));
+
     /* Initialize template output */
     env->template_output_target = NULL;
     env->template_output_found = false;
@@ -1009,6 +1014,22 @@ void puppet_env_destroy(puppet_env_t *env) {
         puppet_free(env->user_functions);
     }
 
+    /* Clean up type-alias registry (values are owned string wrappers) */
+    if (env->type_aliases) {
+        for (size_t i = 0; i < env->type_aliases->bucket_count; i++) {
+            puppet_hash_entry_t *entry = env->type_aliases->buckets[i];
+            while (entry) {
+                puppet_hash_entry_t *next = entry->next;
+                puppet_free(entry->key.data);
+                puppet_value_destroy(entry->value);
+                puppet_free(entry);
+                entry = next;
+            }
+        }
+        puppet_free(env->type_aliases->buckets);
+        puppet_free(env->type_aliases);
+    }
+
     puppet_free(env->scope_stack);
     puppet_free(env->node_name);
     puppet_free(env->template_output_target);
@@ -1152,6 +1173,10 @@ static bool value_matches_type(puppet_value_t *val, const char *type_name,
                                 puppet_expr_t *title_expr, puppet_env_t *env);
 static bool value_matches_type_str(puppet_value_t *val, const char *type_str,
                                    puppet_env_t *env);
+/* Resolve a named type alias (type X = …). Returns 1 if base is an alias and
+ * val matches, 0 if it's an alias and val does not match, -1 if not an alias. */
+static int match_type_alias(puppet_value_t *val, const char *base, puppet_env_t *env);
+extern puppet_stmt_list_t *puppet_ts_parse_file(const char *filename);
 
 /* Guards runaway recursion in user-defined functions (e.g. f() calls f()). */
 #define PUPPET_MAX_CALL_DEPTH 256
@@ -2361,6 +2386,12 @@ static bool value_matches_type_impl(puppet_value_t *val, const char *type_name,
         return false;
     }
 
+    /* Named user-defined type alias (e.g. Stdlib::Fqdn)? Resolve and match. */
+    {
+        int r = match_type_alias(val, type_name, env);
+        if (r >= 0) return r == 1;
+    }
+
     /* Unknown type name - be conservative and return false */
     return false;
 }
@@ -2420,8 +2451,13 @@ static bool value_matches_type_str(puppet_value_t *val,
         if (strcmp(base, "String") == 0)  return val->type == PUPPET_VALUE_STRING;
         if (strcmp(base, "Regexp") == 0)  return val->type == PUPPET_VALUE_REGEXP;
         if (strcmp(base, "Undef") == 0)   return val->type == PUPPET_VALUE_UNDEF;
-        /* NotUndef, Any, Data, Scalar, custom Stdlib::* — accept. */
         if (strcmp(base, "NotUndef") == 0) return val->type != PUPPET_VALUE_UNDEF;
+        /* A registered/loadable named alias (e.g. Stdlib::Fqdn)? Resolve it. */
+        {
+            int r = match_type_alias(val, base, env);
+            if (r >= 0) return r == 1;
+        }
+        /* Any, Data, Scalar, unresolved custom types — accept silently. */
         return true;
     }
 
@@ -2561,8 +2597,97 @@ static bool value_matches_type_str(puppet_value_t *val,
     if (strcmp(base, "Array") == 0)   return val->type == PUPPET_VALUE_ARRAY;
     if (strcmp(base, "Boolean") == 0) return val->type == PUPPET_VALUE_BOOL;
     if (strcmp(base, "Numeric") == 0) return val->type == PUPPET_VALUE_NUMBER;
+
+    /* Named user-defined type alias (e.g. Stdlib::Fqdn)? Resolve to its
+     * underlying type and match against that. */
+    {
+        int r = match_type_alias(val, base, env);
+        if (r >= 0) return r == 1;
+    }
+
     /* Unknown / parametric base — accept silently to avoid false positives. */
     return true;
+}
+
+/* Lazily load a module type alias `Module::Alias` from
+ * <modules_path>/<module>/types/<alias-path>.pp and register every `type … = …`
+ * it defines into env->type_aliases. No-op if there's no loader/modulepath or
+ * the file is absent. Safe to call repeatedly (re-registers are idempotent). */
+static void puppet_try_load_type_alias(const char *name, puppet_env_t *env) {
+    if (!name || !env || !env->prog || !env->prog->loader ||
+        !env->prog->loader->modules_path) return;
+
+    const char *n = name;
+    if (strncmp(n, "::", 2) == 0) n += 2;
+    const char *sep = strstr(n, "::");
+    if (!sep) return;  /* unqualified — not a module alias */
+
+    /* module = lowercased first segment */
+    char module[128];
+    size_t mlen = (size_t)(sep - n);
+    if (mlen == 0 || mlen >= sizeof(module)) return;
+    for (size_t i = 0; i < mlen; i++) {
+        char c = n[i];
+        module[i] = (c >= 'A' && c <= 'Z') ? c + 32 : c;
+    }
+    module[mlen] = '\0';
+
+    /* rest = lowercased remainder with :: → / (e.g. IP::Address → ip/address) */
+    char rest[256];
+    size_t ri = 0;
+    for (const char *p = sep + 2; *p && ri < sizeof(rest) - 1; ) {
+        if (p[0] == ':' && p[1] == ':') { rest[ri++] = '/'; p += 2; }
+        else { char c = *p++; rest[ri++] = (c >= 'A' && c <= 'Z') ? c + 32 : c; }
+    }
+    rest[ri] = '\0';
+    if (ri == 0) return;
+
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/%s/types/%s.pp",
+             env->prog->loader->modules_path, module, rest);
+
+    struct stat st;
+    if (stat(path, &st) != 0) return;  /* no such alias file */
+
+    puppet_stmt_list_t *stmts = puppet_ts_parse_file(path);
+    if (!stmts) return;
+    for (size_t i = 0; i < stmts->count; i++) {
+        puppet_stmt_t *s = stmts->stmts[i];
+        if (s && s->type == PUPPET_STMT_TYPE_ALIAS &&
+            s->data.type_alias.name.data && s->data.type_alias.type_str.data) {
+            const char *an = s->data.type_alias.name.data;
+            if (!puppet_hash_get(env->type_aliases, an, strlen(an))) {
+                puppet_hash_set(env->type_aliases, an, strlen(an),
+                    puppet_value_create_string(s->data.type_alias.type_str.data,
+                                               s->data.type_alias.type_str.len));
+            }
+        }
+    }
+    /* We copied each alias's text into the hash, so the parsed AST can go.
+     * Wrap-and-destroy mirrors the loader's ownership handling. */
+    puppet_program_t *prog = puppet_calloc(1, sizeof(puppet_program_t));
+    prog->statements = *stmts;
+    puppet_free(stmts);
+    puppet_program_destroy(prog);
+}
+
+static int match_type_alias(puppet_value_t *val, const char *base, puppet_env_t *env) {
+    static __thread int alias_depth = 0;
+    if (!env || !env->type_aliases || !base || !*base) return -1;
+
+    puppet_value_t *body = puppet_hash_get(env->type_aliases, base, strlen(base));
+    if (!body && strstr(base, "::")) {
+        /* Unknown qualified name — try the module's types/ directory once. */
+        puppet_try_load_type_alias(base, env);
+        body = puppet_hash_get(env->type_aliases, base, strlen(base));
+    }
+    if (!body || body->type != PUPPET_VALUE_STRING) return -1;
+    if (alias_depth >= 16) return -1;  /* cycle / runaway guard */
+
+    alias_depth++;
+    bool m = value_matches_type_str(val, body->data.string.data, env);
+    alias_depth--;
+    return m ? 1 : 0;
 }
 
 puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppet_value_t *right) {
@@ -3611,6 +3736,19 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                 fn_ptr->type = PUPPET_VALUE_UNDEF;
                 fn_ptr->data.string.data = (char*)stmt;
                 puppet_hash_set(env->user_functions, fn, strlen(fn), fn_ptr);
+            }
+            break;
+
+        case PUPPET_STMT_TYPE_ALIAS:
+            /* Register `type Name = <type>` so value_matches_type can resolve
+             * the named alias (e.g. Stdlib::Fqdn) to its underlying type. Store
+             * the raw aliased type text as the hash value. */
+            if (stmt->data.type_alias.name.data && stmt->data.type_alias.type_str.data &&
+                env->type_aliases) {
+                const char *an = stmt->data.type_alias.name.data;
+                puppet_hash_set(env->type_aliases, an, strlen(an),
+                    puppet_value_create_string(stmt->data.type_alias.type_str.data,
+                                               stmt->data.type_alias.type_str.len));
             }
             break;
 
@@ -7455,6 +7593,24 @@ puppet_env_t *puppet_env_clone_for_node(puppet_env_t *source, const char *certna
         env->user_functions->buckets = puppet_calloc(env->user_functions->bucket_count, sizeof(puppet_hash_entry_t*));
     }
 
+    /* Copy type_aliases (string values): top-level `type X = …` aliases are
+     * registered on the source env before fan-out, and workers may also load
+     * module aliases lazily into their own copy. Each entry owns its string. */
+    env->type_aliases = puppet_calloc(1, sizeof(puppet_hash_t));
+    if (source->type_aliases) {
+        env->type_aliases->bucket_count = source->type_aliases->bucket_count;
+        env->type_aliases->buckets = puppet_calloc(env->type_aliases->bucket_count, sizeof(puppet_hash_entry_t*));
+        for (size_t i = 0; i < source->type_aliases->bucket_count; i++) {
+            for (puppet_hash_entry_t *se = source->type_aliases->buckets[i]; se; se = se->next) {
+                puppet_hash_set(env->type_aliases, se->key.data, se->key.len,
+                                puppet_value_copy(se->value));
+            }
+        }
+    } else {
+        env->type_aliases->bucket_count = 64;
+        env->type_aliases->buckets = puppet_calloc(env->type_aliases->bucket_count, sizeof(puppet_hash_entry_t*));
+    }
+
     /* Fresh per-node module-metadata-checked "seen" set. It is populated and
      * cleared per node, so each worker must own a private one — a shared hash
      * would corrupt under concurrent puppet_hash_set + per-node clear. */
@@ -7709,6 +7865,22 @@ static void puppet_env_destroy_clone(puppet_env_t *env) {
         }
         puppet_free(env->user_functions->buckets);
         puppet_free(env->user_functions);
+    }
+
+    /* Free copied type_aliases hash (own the string values + keys) */
+    if (env->type_aliases) {
+        for (size_t i = 0; i < env->type_aliases->bucket_count; i++) {
+            puppet_hash_entry_t *e = env->type_aliases->buckets[i];
+            while (e) {
+                puppet_hash_entry_t *next = e->next;
+                puppet_free(e->key.data);
+                puppet_value_destroy(e->value);
+                puppet_free(e);
+                e = next;
+            }
+        }
+        puppet_free(env->type_aliases->buckets);
+        puppet_free(env->type_aliases);
     }
 
     /* Free per-node module-metadata-checked set */

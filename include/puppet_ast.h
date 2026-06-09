@@ -502,6 +502,10 @@ struct puppet_stmt {
             puppet_stmt_list_t *else_body;  /* optional `unless ... { } else { }` */
         } unless_stmt;
         struct {
+            puppet_string_t name;      /* alias name, e.g. "Stdlib::Fqdn" */
+            puppet_string_t type_str;  /* raw aliased type text, e.g. "Pattern[/.../]" */
+        } type_alias;
+        struct {
             puppet_expr_t *expr;
             puppet_case_when_t *whens;
             size_t when_count;
