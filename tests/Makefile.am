@@ -104,6 +104,7 @@ EXTRA_DIST = \
     test_method_dispatch.sh \
     test_multi_title_refs.sh \
     test_strict_undef_index.sh \
+    test_function_argtypes.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -139,7 +140,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes
 	@echo "All tests completed."
 
 check-parser:
@@ -747,6 +748,17 @@ check-strict-undef-index:
 	else \
 		echo "❌ Some strict-undef-index tests failed:"; \
 		sed 's/^/  /' output/strict_undef_index.out; \
+		exit 1; \
+	fi
+
+check-function-argtypes:
+	@echo "Running user-function argument type-check tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_function_argtypes.sh > output/function_argtypes.out 2>&1; then \
+		echo "✅ All function-argtypes tests passed!"; \
+	else \
+		echo "❌ Some function-argtypes tests failed:"; \
+		sed 's/^/  /' output/function_argtypes.out; \
 		exit 1; \
 	fi
 

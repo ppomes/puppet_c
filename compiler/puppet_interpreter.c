@@ -1079,9 +1079,11 @@ puppet_value_t *puppet_scope_get_var(puppet_scope_t *scope, const char *name, bo
     return value;
 }
 
-/* Forward declaration for type-match helper defined below */
+/* Forward declaration for type-match helpers defined below */
 static bool value_matches_type(puppet_value_t *val, const char *type_name,
                                 puppet_expr_t *title_expr, puppet_env_t *env);
+static bool value_matches_type_str(puppet_value_t *val, const char *type_str,
+                                   puppet_env_t *env);
 
 /* Guards runaway recursion in user-defined functions (e.g. f() calls f()). */
 #define PUPPET_MAX_CALL_DEPTH 256
@@ -1134,6 +1136,7 @@ static puppet_value_t *puppet_call_user_function(puppet_stmt_t *fn_stmt,
         const char *pname = params->params[i].name.data;
         if (!pname) continue;
         puppet_value_t *val;
+        bool have_value = true;
         if (i < argc) {
             val = argv[i] ? argv[i] : puppet_value_create_undef();
         } else if (params->params[i].default_value) {
@@ -1143,6 +1146,21 @@ static puppet_value_t *puppet_call_user_function(puppet_stmt_t *fn_stmt,
                             "Function '%s' missing required argument '%s'", fname, pname);
             puppet_env_increment_error(env);
             val = puppet_value_create_undef();
+            have_value = false;  /* already reported; don't double-flag as a type error */
+        }
+        /* Type-check the bound value against the declared type (item 8).
+         * Mirrors the class/define parameter check; only typed params are
+         * checked, and value_matches_type_str accepts unknown/parametric
+         * types silently to avoid false positives. */
+        if (have_value && params->params[i].type_expr &&
+            !value_matches_type_str(val, params->params[i].type_str.data, env)) {
+            char typestr[128];
+            snprintf(typestr, sizeof(typestr), "%s",
+                     params->params[i].type_str.data ? params->params[i].type_str.data : "?");
+            puppet_error_at(call_expr->loc,
+                "Function '%s' parameter $%s: expected %s, got incompatible value",
+                fname, pname, typestr);
+            puppet_env_increment_error(env);
         }
         /* scope takes ownership of val (same as class/define parameter binding) */
         puppet_scope_set_var(fn_scope, pname, val);
