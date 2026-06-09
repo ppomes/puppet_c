@@ -104,3 +104,15 @@ debian/autoreconf.before
 .vscode/
 .idea/
 *.sublime-*demo/modules/
+
+# Libtool / automake per-directory build output (autotools artifacts)
+*.o
+*.lo
+*.la
+*.Po
+*.Plo
+.libs/
+.deps/
+compiler/Makefile
+compiler/Makefile.in
+compiler/puppetc-compile

@@ -31,7 +31,7 @@ F1="$TMP/acc.pp"
 cat > "$F1" <<'PP'
 type Stdlib::Fqdn = Pattern[/^[a-z0-9.-]+$/]
 node default {
-  $f = 'mq1.adm.it.int'
+  $f = 'host1.example.com'
   unless $f =~ Stdlib::Fqdn { fail("${f} is not a valid Fqdn") }
   notify { 'OK': }
 }
@@ -90,7 +90,7 @@ printf 'type Stdlib::IP::Address = Pattern[/^[0-9.]+$/]\n' > "$TMP/mods/stdlib/t
 F5="$TMP/mod.pp"
 cat > "$F5" <<'PP'
 node default {
-  $f = 'mq1.adm.it.int'
+  $f = 'host1.example.com'
   unless $f =~ Stdlib::Fqdn { fail("bad fqdn") }
   $ip = '10.0.0.1'
   unless $ip =~ Stdlib::IP::Address { fail("bad ip") }
