@@ -101,6 +101,7 @@ EXTRA_DIST = \
     test_template_fidelity.sh \
     test_puppet8_lint.sh \
     test_user_functions.sh \
+    test_method_dispatch.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -136,7 +137,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch
 	@echo "All tests completed."
 
 check-parser:
@@ -711,6 +712,17 @@ check-user-functions:
 	else \
 		echo "❌ Some user-function tests failed:"; \
 		sed 's/^/  /' output/user_functions.out; \
+		exit 1; \
+	fi
+
+check-method-dispatch:
+	@echo "Running method-call dispatch tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_method_dispatch.sh > output/method_dispatch.out 2>&1; then \
+		echo "✅ All method-dispatch tests passed!"; \
+	else \
+		echo "❌ Some method-dispatch tests failed:"; \
+		sed 's/^/  /' output/method_dispatch.out; \
 		exit 1; \
 	fi
 

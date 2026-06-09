@@ -24,6 +24,7 @@ static puppet_stmt_list_t convert_block(TSNode node, const char *source);
 static puppet_lambda_t *convert_lambda(TSNode node, const char *source);
 static puppet_expr_t *build_index_expr(puppet_expr_t *object, TSNode access_node, const char *source);
 static puppet_expr_t *convert_selector(TSNode node, const char *source);
+static puppet_expr_t *build_method_funcall(TSNode named_access, TSNode arglist, const char *source);
 
 /* Current filename being parsed (for source location tracking) - thread-local for parallel safety */
 static __thread const char *current_parse_filename = NULL;
@@ -946,90 +947,101 @@ static puppet_lambda_t *convert_lambda(TSNode node, const char *source) {
 
 /* Convert method call with lambda: obj.method |$x| { body } */
 static puppet_expr_t *convert_method_with_lambda(TSNode node, const char *source) {
+    /* node = call_method_with_lambda: a `call_method` plus an optional `lambda`.
+     * Lower the method call (receiver + argument_list) via build_method_funcall,
+     * then attach the lambda. Sharing build_method_funcall means call arguments
+     * (e.g. reduce(0) |..| {}) are carried, not dropped. */
+    puppet_expr_t *expr = NULL;
+    TSNode cm = find_child(node, "call_method");
+    if (!ts_node_is_null(cm)) {
+        TSNode access = find_child(cm, "named_access");
+        if (!ts_node_is_null(access)) {
+            expr = build_method_funcall(access, find_child(cm, "argument_list"), source);
+        }
+    }
+    if (!expr) {
+        expr = puppet_calloc(1, sizeof(puppet_expr_t));
+        expr->type = PUPPET_EXPR_FUNCALL;
+        expr->loc = node_location(node);
+    }
+
+    TSNode lambda = find_child(node, "lambda");
+    if (!ts_node_is_null(lambda)) {
+        expr->data.funcall.lambda = convert_lambda(lambda, source);
+    }
+
+    return expr;
+}
+
+/* Lower a method call to a function call: the named_access node supplies the
+ * receiver object + method name; arglist (a null node if absent) supplies any
+ * extra call arguments. Produces method(receiver, arg1, ...). Every relevant
+ * builtin (dig, sort, keys, values, size, count, ...) already takes the
+ * receiver as its first positional argument, so the existing puppet_func_*
+ * dispatch handles the result unchanged. */
+static puppet_expr_t *build_method_funcall(TSNode named_access, TSNode arglist,
+                                           const char *source) {
     puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
     expr->type = PUPPET_EXPR_FUNCALL;
-    expr->loc = node_location(node);
+    expr->loc = node_location(named_access);
 
-    uint32_t count = ts_node_named_child_count(node);
-    for (uint32_t i = 0; i < count; i++) {
-        TSNode child = ts_node_named_child(node, i);
-        const char *type = ts_node_type(child);
+    uint32_t count = ts_node_named_child_count(named_access);
 
-        if (strcmp(type, "call_method") == 0) {
-            /* Parse the method call (named_access) */
-            TSNode access = find_child(child, "named_access");
-            if (!ts_node_is_null(access)) {
-                uint32_t access_count = ts_node_named_child_count(access);
-                if (access_count >= 2) {
-                    /* Build object from first child, then apply any intermediate access nodes
-                     * For $v[1].map: children are variable($v), access([1]), name(map)
-                     * We need to apply [1] to $v before using it as method target */
-                    TSNode obj = ts_node_named_child(access, 0);
-                    puppet_expr_t *obj_expr = convert_expression(obj, source);
-
-                    /* Apply intermediate access nodes */
-                    for (uint32_t j = 1; j < access_count - 1; j++) {
-                        TSNode acc = ts_node_named_child(access, j);
-                        if (node_is(acc, "access")) {
-                            obj_expr = build_index_expr(obj_expr, acc, source);
-                        }
-                    }
-
-                    if (obj_expr) {
-                        expr->data.funcall.args.exprs = puppet_calloc(1, sizeof(puppet_expr_t*));
-                        expr->data.funcall.args.exprs[0] = obj_expr;
-                        expr->data.funcall.args.count = 1;
-                    }
-
-                    /* Get method name (last child) */
-                    TSNode method = ts_node_named_child(access, access_count - 1);
-                    if (node_is(method, "name")) {
-                        char *method_name = node_text(method, source);
-                        expr->data.funcall.name = puppet_string_create(method_name);
-                        puppet_free(method_name);
-                    }
-                }
+    /* Receiver = first child, with any chained access ([i]) applied. */
+    puppet_expr_t *recv = NULL;
+    if (count >= 1) {
+        recv = convert_expression(ts_node_named_child(named_access, 0), source);
+        for (uint32_t i = 1; i + 1 < count; i++) {
+            TSNode child = ts_node_named_child(named_access, i);
+            if (node_is(child, "access")) {
+                recv = build_index_expr(recv, child, source);
             }
-        } else if (strcmp(type, "lambda") == 0) {
-            expr->data.funcall.lambda = convert_lambda(child, source);
+        }
+    }
+
+    /* Method name = last child (a name/type node). */
+    if (count >= 2) {
+        TSNode field = ts_node_named_child(named_access, count - 1);
+        char *method = node_text(field, source);
+        expr->data.funcall.name = puppet_string_create(method);
+        puppet_free(method);
+    }
+
+    /* Arguments = [receiver] followed by the call's argument_list (if any). */
+    uint32_t extra = ts_node_is_null(arglist) ? 0 : ts_node_named_child_count(arglist);
+    expr->data.funcall.args.exprs = puppet_calloc(1 + extra, sizeof(puppet_expr_t *));
+    expr->data.funcall.args.count = 0;
+    if (recv) {
+        expr->data.funcall.args.exprs[expr->data.funcall.args.count++] = recv;
+    }
+    for (uint32_t j = 0; j < extra; j++) {
+        TSNode arg = ts_node_named_child(arglist, j);
+        if (node_is(arg, "comment")) continue;
+        puppet_expr_t *arg_expr = convert_expression(arg, source);
+        if (arg_expr) {
+            expr->data.funcall.args.exprs[expr->data.funcall.args.count++] = arg_expr;
         }
     }
 
     return expr;
 }
 
-/* Convert named_access: obj.method or obj[idx].method */
-static puppet_expr_t *convert_named_access(TSNode node, const char *source) {
-    puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
-    expr->type = PUPPET_EXPR_DOT;
-    expr->loc = node_location(node);
-
-    uint32_t count = ts_node_named_child_count(node);
-    if (count >= 2) {
-        /* Build object expression from first child, then apply any access nodes */
-        TSNode obj = ts_node_named_child(node, 0);
-        puppet_expr_t *obj_expr = convert_expression(obj, source);
-
-        /* Apply any intermediate access nodes (for $v[1].method pattern) */
-        for (uint32_t i = 1; i < count - 1; i++) {
-            TSNode child = ts_node_named_child(node, i);
-            if (node_is(child, "access")) {
-                obj_expr = build_index_expr(obj_expr, child, source);
-            }
-        }
-
-        expr->data.dot.object = obj_expr;
-
-        /* Last child is the method name */
-        TSNode field = ts_node_named_child(node, count - 1);
-        if (node_is(field, "name")) {
-            char *field_name = node_text(field, source);
-            expr->data.dot.field = puppet_string_create(field_name);
-            puppet_free(field_name);
-        }
+/* Convert a method call: obj.method, obj.method(), or obj.method(args). The
+ * `call_method` node holds a `named_access` child plus an optional sibling
+ * `argument_list`. */
+static puppet_expr_t *convert_call_method(TSNode node, const char *source) {
+    TSNode na = find_child(node, "named_access");
+    if (ts_node_is_null(na)) {
+        uint32_t count = ts_node_named_child_count(node);
+        return count > 0 ? convert_expression(ts_node_named_child(node, 0), source) : NULL;
     }
+    return build_method_funcall(na, find_child(node, "argument_list"), source);
+}
 
-    return expr;
+/* Convert bare named_access (obj.method, no parens) by lowering to a funcall. */
+static puppet_expr_t *convert_named_access(TSNode node, const char *source) {
+    TSNode no_args = {0};  /* null node */
+    return build_method_funcall(node, no_args, source);
 }
 
 /* Main expression conversion dispatcher */
@@ -1210,6 +1222,8 @@ static puppet_expr_t *convert_expression(TSNode node, const char *source) {
         return convert_funcall(node, source);
     if (strcmp(type, "call_method_with_lambda") == 0)
         return convert_method_with_lambda(node, source);
+    if (strcmp(type, "call_method") == 0)
+        return convert_call_method(node, source);
     if (strcmp(type, "named_access") == 0)
         return convert_named_access(node, source);
     if (strcmp(type, "name") == 0)
