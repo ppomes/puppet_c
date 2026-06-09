@@ -108,6 +108,7 @@ EXTRA_DIST = \
     test_strict_erb.sh \
     test_ruby_kwarg_shorthand.sh \
     test_module_metadata.sh \
+    test_parametric_types.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -143,7 +144,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types
 	@echo "All tests completed."
 
 check-parser:
@@ -795,6 +796,17 @@ check-module-metadata:
 	else \
 		echo "❌ Some module-metadata tests failed:"; \
 		sed 's/^/  /' output/module_metadata.out; \
+		exit 1; \
+	fi
+
+check-parametric-types:
+	@echo "Running Enum/Pattern/Variant type-check tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_parametric_types.sh > output/parametric_types.out 2>&1; then \
+		echo "✅ All parametric-types tests passed!"; \
+	else \
+		echo "❌ Some parametric-types tests failed:"; \
+		sed 's/^/  /' output/parametric_types.out; \
 		exit 1; \
 	fi
 

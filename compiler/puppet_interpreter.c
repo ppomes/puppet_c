@@ -2468,13 +2468,95 @@ static bool value_matches_type_str(puppet_value_t *val,
         return value_matches_type_str(val, inner_buf, env);
     }
 
-    /* Pattern[/re/], Enum['a','b'], Variant[…], custom types
-     * (Stdlib::Absolutepath, Stdlib::Fqdn, …) — too thorny to parse
-     * out of raw text. Accept and let runtime catch it. */
-    /* Pattern[/re/], Enum['a','b'], Variant[…], custom types
-     * (Stdlib::Absolutepath, Stdlib::Fqdn, …) — too thorny to parse
-     * out of raw text. Be conservative: only fail on bases we can
-     * confirm without needing the bracketed payload. */
+    /* Enum['a','b',…]: a String equal to one of the listed literals. */
+    if (strcmp(base, "Enum") == 0) {
+        if (val->type != PUPPET_VALUE_STRING) return false;
+        bool any = false, matched = false;
+        for (const char *p = bracket; *p; p++) {
+            if (*p == '\'' || *p == '"') {
+                char q = *p++;
+                const char *s = p;
+                while (*p && *p != q) p++;
+                size_t llen = (size_t)(p - s);
+                any = true;
+                if (llen == val->data.string.len &&
+                    memcmp(s, val->data.string.data, llen) == 0) matched = true;
+                if (*p != q) break;  /* unterminated literal */
+            }
+        }
+        return any ? matched : true;  /* couldn't parse any literal → accept */
+    }
+
+    /* Pattern[/re/, …]: a String matching any listed regex literal. */
+    if (strcmp(base, "Pattern") == 0) {
+        if (val->type != PUPPET_VALUE_STRING) return false;
+        bool any = false, matched = false;
+        const char *p = bracket;
+        while (*p && !matched) {
+            const char *s = NULL, *e = NULL;
+            if (*p == '/') {                       /* /regex/ */
+                s = ++p;
+                while (*p && *p != '/') { if (*p == '\\' && p[1]) p++; p++; }
+                e = p;
+                if (*p == '/') p++;
+            } else if (*p == '\'' || *p == '"') {  /* 'regex' */
+                char q = *p++;
+                s = p;
+                while (*p && *p != q) p++;
+                e = p;
+                if (*p == q) p++;
+            } else { p++; continue; }
+            size_t rlen = e > s ? (size_t)(e - s) : 0;
+            char rbuf[512];
+            if (rlen > 0 && rlen < sizeof(rbuf)) {
+                memcpy(rbuf, s, rlen);
+                rbuf[rlen] = '\0';
+                any = true;
+                regex_t rx;
+                if (puppet_regcomp(&rx, rbuf, REG_EXTENDED | REG_NOSUB) == 0) {
+                    if (regexec(&rx, val->data.string.data, 0, NULL, 0) == 0) matched = true;
+                    regfree(&rx);
+                }
+            }
+        }
+        return any ? matched : true;
+    }
+
+    /* Variant[T1, T2, …]: matches if val matches any inner type. Split on
+     * top-level commas (bracket-depth aware), then recurse. */
+    if (strcmp(base, "Variant") == 0) {
+        const char *inner = bracket + 1;
+        const char *end = strrchr(inner, ']');
+        if (!end || end <= inner) return true;
+        const char *seg = inner;
+        int depth = 0;
+        bool any = false, matched = false;
+        for (const char *p = inner; p <= end && !matched; p++) {
+            if (p < end && *p == '[') depth++;
+            else if (p < end && *p == ']') depth--;
+            if (p == end || (*p == ',' && depth == 0)) {
+                const char *s = seg;
+                size_t slen = (size_t)(p - seg);
+                while (slen && (*s == ' ' || *s == '\t')) { s++; slen--; }
+                while (slen && (s[slen-1] == ' ' || s[slen-1] == '\t')) slen--;
+                if (slen) {
+                    char tbuf[256];
+                    if (slen < sizeof(tbuf)) {
+                        memcpy(tbuf, s, slen);
+                        tbuf[slen] = '\0';
+                        any = true;
+                        if (value_matches_type_str(val, tbuf, env)) matched = true;
+                    } else { any = true; matched = true; }  /* too long → accept */
+                }
+                seg = p + 1;
+            }
+        }
+        return any ? matched : true;
+    }
+
+    /* Remaining parametric/alias bases (Stdlib::* etc.) can't be checked from
+     * raw text without type-alias resolution — confirm only the safe bare bases
+     * and otherwise accept silently to avoid false positives. */
     if (strcmp(base, "Hash") == 0)    return val->type == PUPPET_VALUE_HASH;
     if (strcmp(base, "Array") == 0)   return val->type == PUPPET_VALUE_ARRAY;
     if (strcmp(base, "Boolean") == 0) return val->type == PUPPET_VALUE_BOOL;
