@@ -468,23 +468,28 @@ static void puppet_export_env_to_ruby(puppet_env_t *env, puppet_ruby_context_t *
                     }
                 }
 
-                // Also build a @facts / $facts hash for the Puppet 4+
+                // Also bind a @facts / $facts hash for the Puppet 4+
                 // structured-fact pattern: scope['facts']['networking']['fqdn'].
-                // Templates migrated to Puppet 8 access nested facts that
-                // way, so without this they trip on @facts being nil.
-                VALUE facts_hash = rb_hash_new();
-                for (size_t i = 0; i < node_facts->facts->bucket_count; i++) {
-                    puppet_hash_entry_t *entry = node_facts->facts->buckets[i];
-                    while (entry) {
-                        VALUE key = rb_str_new(entry->key.data, entry->key.len);
-                        VALUE val = (VALUE)puppet_value_to_ruby(entry->value, ruby_ctx);
-                        rb_hash_aset(facts_hash, key, val);
-                        entry = entry->next;
+                // Use the canonical nested builder (dotted fact names become
+                // nested hashes) so ERB sees exactly what .pp's $facts sees.
+                // CRITICAL (item 31): it must also land in $puppet_vars,
+                // because PuppetScope reads $puppet_vars — without that,
+                // scope['facts'] in the Ruby fallback resolved to nothing and
+                // every migrated `if scope['facts'][...]` condition either
+                // took the wrong branch silently (pre item 23) or crashed
+                // with "[] for nil" (post item 23).
+                puppet_value_t *all_facts = puppet_facts_get_all_as_hash(env);
+                if (all_facts) {
+                    VALUE facts_hash = (VALUE)puppet_value_to_ruby(all_facts, ruby_ctx);
+                    VALUE main_obj = rb_eval_string("self");
+                    rb_iv_set(main_obj, "@facts", facts_hash);
+                    rb_gv_set("$facts", facts_hash);
+                    VALUE pv = rb_gv_get("$puppet_vars");
+                    if (!NIL_P(pv) && TYPE(pv) == T_HASH) {
+                        rb_hash_aset(pv, rb_str_new_cstr("facts"), facts_hash);
                     }
+                    puppet_value_destroy(all_facts);
                 }
-                VALUE main_obj = rb_eval_string("self");
-                rb_iv_set(main_obj, "@facts", facts_hash);
-                rb_gv_set("$facts", facts_hash);
             }
         }
     }

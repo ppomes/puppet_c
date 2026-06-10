@@ -125,6 +125,7 @@ EXTRA_DIST = \
     test_module_facts_lint.sh \
     test_erb_strict_scope.sh \
     test_resource_policy.sh \
+    test_erb_facts_in_ruby.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -160,7 +161,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions check-enum-undef-default check-unless-defined check-erb-structured-facts check-type-aliases check-duplicate-hash-keys check-legacy-facts check-regex-anchors check-define-no-instance check-fact-function check-forward-include-getvar check-chained-index-key check-erb-legacy-scope check-module-facts-lint check-erb-strict-scope check-resource-policy
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions check-enum-undef-default check-unless-defined check-erb-structured-facts check-type-aliases check-duplicate-hash-keys check-legacy-facts check-regex-anchors check-define-no-instance check-fact-function check-forward-include-getvar check-chained-index-key check-erb-legacy-scope check-module-facts-lint check-erb-strict-scope check-resource-policy check-erb-facts-in-ruby
 	@echo "All tests completed."
 
 check-parser:
@@ -999,6 +1000,17 @@ check-resource-policy:
 	else \
 		echo "❌ Some resource-policy tests failed:"; \
 		sed 's/^/  /' output/resource_policy.out; \
+		exit 1; \
+	fi
+
+check-erb-facts-in-ruby:
+	@echo "Running Ruby-path scope['facts'] tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_erb_facts_in_ruby.sh > output/erb_facts_in_ruby.out 2>&1; then \
+		echo "✅ All erb-facts-in-ruby tests passed!"; \
+	else \
+		echo "❌ Some erb-facts-in-ruby tests failed:"; \
+		sed 's/^/  /' output/erb_facts_in_ruby.out; \
 		exit 1; \
 	fi
 
