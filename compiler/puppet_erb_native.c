@@ -37,6 +37,10 @@ typedef struct expr_node {
     /* For INDEX: target and index expression */
     struct expr_node *target;
     struct expr_node *index;
+    /* SCOPE_LOOKUP only: 1 for the scope['x'] index form, which is strict in
+     * Puppet 8 (a missing qualified variable raises); 0 for the defensive
+     * scope.lookupvar('x') form, which keeps returning nil. (Item 23.) */
+    int strict_scope;
 } expr_node_t;
 
 typedef enum {
@@ -278,6 +282,7 @@ static expr_node_t *parse_term(pcur_t *c) {
             base = puppet_calloc(1, sizeof(expr_node_t));
             base->kind = EXPR_SCOPE_LOOKUP;
             base->str = key;
+            base->strict_scope = 1;
             return parse_indexes(c, base);
         }
         if (consume_str(c, ".lookupvar(")) {
@@ -505,6 +510,10 @@ typedef struct {
     puppet_value_t **scratch;
     size_t scratch_count;
     size_t scratch_cap;
+    /* Set when a strict scope['a::b'] lookup missed (item 23). The native
+     * render aborts so the Ruby fallback re-renders and raises the proper
+     * "Undefined variable" error. */
+    bool strict_miss;
 } eval_ctx_t;
 
 static puppet_value_t *eval_alloc_scratch(eval_ctx_t *ctx, puppet_value_t *v) {
@@ -541,6 +550,15 @@ static puppet_value_t *eval_expr(expr_node_t *e, puppet_env_t *env, eval_ctx_t *
              * in some cases — track for free). */
             v = puppet_facts_get(env, e->str);
             if (v) return eval_alloc_scratch(ctx, v);
+            /* Puppet 8 strict resolver: scope['a::b'] on an undefined
+             * class-qualified variable must raise, not render empty. Abort
+             * the native render; the Ruby fallback raises the real error
+             * (item 23). lookupvar / @var stay forgiving. */
+            if (e->kind == EXPR_SCOPE_LOOKUP && e->strict_scope) {
+                const char *n = e->str;
+                if (n[0] == ':' && n[1] == ':') n += 2;
+                if (strstr(n, "::")) ctx->strict_miss = true;
+            }
             /* Undefined → empty string (matches Ruby ERB lookupvar). */
             return NULL;
         }
@@ -705,6 +723,7 @@ char *puppet_erb_native_render(const char *content,
             case NODE_PUTS: {
                 if (n->drop_prev) apply_drop_prev_to_buffer(&buf);
                 puppet_value_t *v = eval_expr(n->expr, env, &ctx);
+                if (ctx.strict_miss) { ok = false; break; }
                 if (!render_value(&buf, v)) { ok = false; break; }
                 if (n->drop_next) pending_drop_next = true;
                 break;
