@@ -9,6 +9,8 @@
 #include <sys/stat.h>
 #include <yaml.h>
 #include "puppet_hiera.h"
+#include "puppet_loader.h"   /* item 33: module-layer caches live on the loader */
+#include "puppet_program_state.h"
 #include "puppet_memory.h"
 #include "puppet_stdlib.h"
 
@@ -746,4 +748,293 @@ int puppet_hiera_register_provider(puppet_env_t *env, const char *config_path) {
     
     // Register with environment
     return puppet_register_data_provider(env, provider);
+}
+
+/* ============================================================================
+ * Item 33 — module-layer hiera (data in modules)
+ * ============================================================================
+ * Automatic parameter lookup tier 3: modules/<mod>/hiera.yaml (v5) +
+ * modules/<mod>/data/. Supported: data_hash yaml_data with paths:/path:
+ * and %{facts.x.y} interpolation. Caches live on the loader, guarded by
+ * loader->cache_mutex (module_meta pattern):
+ *   - LOCKING DISCIPLINE: under cache_mutex only scan/stat/parse/warn —
+ *     never call any puppet_loader_* function (the mutex is non-recursive)
+ *     and never evaluate manifest expressions (would re-enter APL).
+ *   - Entries are append-only and immutable until loader destroy, so
+ *     borrowed config/data pointers stay valid after unlock, and reading
+ *     the immutable parsed values outside the lock is safe.
+ */
+
+void puppet_hiera_module_config_destroy(puppet_module_hiera_t *cfg) {
+    if (!cfg) return;
+    for (size_t i = 0; i < cfg->path_count; i++) puppet_free(cfg->path_templates[i]);
+    puppet_free(cfg->path_templates);
+    puppet_free(cfg);
+}
+
+static void module_hiera_add_template(puppet_module_hiera_t *cfg,
+                                      const char *modules_path,
+                                      const char *module_name,
+                                      const char *datadir,
+                                      const char *path) {
+    size_t len = strlen(modules_path) + strlen(module_name) +
+                 strlen(datadir) + strlen(path) + 4;
+    char *t = puppet_malloc(len);
+    snprintf(t, len, "%s/%s/%s/%s", modules_path, module_name, datadir, path);
+    cfg->path_templates = puppet_realloc(cfg->path_templates,
+                                         (cfg->path_count + 1) * sizeof(char *));
+    cfg->path_templates[cfg->path_count++] = t;
+}
+
+/* Borrow a string member from a parsed-YAML hash value; NULL if absent. */
+static const char *module_hiera_hash_str(puppet_value_t *h, const char *key) {
+    if (!h || h->type != PUPPET_VALUE_HASH) return NULL;
+    puppet_value_t *v = puppet_hash_get(h->data.hash, key, strlen(key));
+    return (v && v->type == PUPPET_VALUE_STRING) ? v->data.string.data : NULL;
+}
+
+/* Parse <modules_path>/<module>/hiera.yaml. NULL when absent (silent) or
+ * unusable (warned). Runs under cache_mutex — exactly once per module, so
+ * the warnings are naturally deduped. */
+static puppet_module_hiera_t *module_hiera_parse_config(const char *modules_path,
+                                                        const char *module_name) {
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/%s/hiera.yaml", modules_path, module_name);
+    struct stat st;
+    if (stat(path, &st) != 0) return NULL;  /* no module data layer */
+
+    puppet_value_t *root = puppet_hiera_load_yaml(path);
+    if (!root || root->type != PUPPET_VALUE_HASH) {
+        if (root) puppet_value_destroy(root);
+        puppet_warn("module '%s': hiera.yaml is not a YAML mapping; skipping module data layer",
+                    module_name);
+        return NULL;
+    }
+
+    /* version must be 5 (number, or string "5") */
+    puppet_value_t *ver = puppet_hash_get(root->data.hash, "version", 7);
+    bool v5 = ver && ((ver->type == PUPPET_VALUE_NUMBER && (int)ver->data.number == 5) ||
+                      (ver->type == PUPPET_VALUE_STRING && ver->data.string.data &&
+                       strcmp(ver->data.string.data, "5") == 0));
+    if (!v5) {
+        puppet_warn("module '%s': hiera.yaml version is not 5 (only v5 with yaml_data is "
+                    "supported); skipping module data layer", module_name);
+        puppet_value_destroy(root);
+        return NULL;
+    }
+
+    puppet_value_t *defaults = puppet_hash_get(root->data.hash, "defaults", 8);
+    const char *def_datadir = module_hiera_hash_str(defaults, "datadir");
+    const char *def_datahash = module_hiera_hash_str(defaults, "data_hash");
+    if (!def_datadir) def_datadir = "data";
+    if (!def_datahash) def_datahash = "yaml_data";
+
+    puppet_module_hiera_t *cfg = puppet_calloc(1, sizeof(*cfg));
+
+    puppet_value_t *hier = puppet_hash_get(root->data.hash, "hierarchy", 9);
+    if (hier && hier->type == PUPPET_VALUE_ARRAY && hier->data.array) {
+        for (size_t i = 0; i < hier->data.array->count; i++) {
+            puppet_value_t *e = hier->data.array->items[i];
+            if (!e || e->type != PUPPET_VALUE_HASH) continue;
+            const char *ename = module_hiera_hash_str(e, "name");
+            const char *e_datahash = module_hiera_hash_str(e, "data_hash");
+            if (!e_datahash) e_datahash = def_datahash;
+            bool unsupported = strcmp(e_datahash, "yaml_data") != 0 ||
+                puppet_hash_get(e->data.hash, "lookup_key", 10) ||
+                puppet_hash_get(e->data.hash, "data_dig", 8) ||
+                puppet_hash_get(e->data.hash, "glob", 4) ||
+                puppet_hash_get(e->data.hash, "globs", 5) ||
+                puppet_hash_get(e->data.hash, "mapped_paths", 12);
+            if (unsupported) {
+                puppet_warn("module '%s': hiera.yaml entry '%s' uses an unsupported backend "
+                            "(only data_hash: yaml_data with path/paths); entry skipped",
+                            module_name, ename ? ename : "?");
+                continue;
+            }
+            const char *e_datadir = module_hiera_hash_str(e, "datadir");
+            if (!e_datadir) e_datadir = def_datadir;
+
+            puppet_value_t *paths = puppet_hash_get(e->data.hash, "paths", 5);
+            if (paths && paths->type == PUPPET_VALUE_ARRAY && paths->data.array) {
+                for (size_t j = 0; j < paths->data.array->count; j++) {
+                    puppet_value_t *p = paths->data.array->items[j];
+                    if (p && p->type == PUPPET_VALUE_STRING && p->data.string.data) {
+                        module_hiera_add_template(cfg, modules_path, module_name,
+                                                  e_datadir, p->data.string.data);
+                    }
+                }
+            } else {
+                const char *single = module_hiera_hash_str(e, "path");
+                if (single) {
+                    module_hiera_add_template(cfg, modules_path, module_name,
+                                              e_datadir, single);
+                }
+            }
+        }
+    }
+
+    puppet_value_destroy(root);
+    if (cfg->path_count == 0) {
+        puppet_hiera_module_config_destroy(cfg);
+        return NULL;
+    }
+    return cfg;
+}
+
+/* Append one %{...}-resolved value to a growable buffer. */
+static void module_hiera_buf_append(char **buf, size_t *len, size_t *cap,
+                                    const char *src, size_t n) {
+    if (*len + n + 1 > *cap) {
+        *cap = (*len + n + 1) * 2;
+        *buf = puppet_realloc(*buf, *cap);
+    }
+    memcpy(*buf + *len, src, n);
+    *len += n;
+    (*buf)[*len] = '\0';
+}
+
+/* Facts-only %{...} interpolator for module hierarchy paths. Token forms:
+ * %{facts.x.y} resolves via puppet_facts_lookup_dotted; anything else (and
+ * unresolved facts) becomes the empty string, so the resulting path simply
+ * fails stat and the level is skipped — mirroring real hiera. Deliberately
+ * NO puppet_variable_lookup_chain here: no interpreter re-entry, no APL
+ * recursion, safe under -P. */
+static char *module_hiera_interpolate_path(const char *template_str, puppet_env_t *env) {
+    size_t cap = strlen(template_str) + 32, len = 0;
+    char *buf = puppet_malloc(cap);
+    buf[0] = '\0';
+
+    const char *p = template_str;
+    while (*p) {
+        if (p[0] == '%' && p[1] == '{') {
+            const char *end = strchr(p + 2, '}');
+            if (!end) break;  /* malformed tail — drop it */
+            size_t toklen = (size_t)(end - (p + 2));
+            char token[256];
+            if (toklen < sizeof(token)) {
+                memcpy(token, p + 2, toklen);
+                token[toklen] = '\0';
+                if (strncmp(token, "facts.", 6) == 0) {
+                    puppet_value_t *v = puppet_facts_lookup_dotted(env, token + 6);
+                    if (v) {
+                        if (v->type == PUPPET_VALUE_STRING && v->data.string.data) {
+                            module_hiera_buf_append(&buf, &len, &cap,
+                                                    v->data.string.data, v->data.string.len);
+                        } else if (v->type == PUPPET_VALUE_NUMBER) {
+                            char num[64];
+                            snprintf(num, sizeof(num), "%g", v->data.number);
+                            module_hiera_buf_append(&buf, &len, &cap, num, strlen(num));
+                        } else if (v->type == PUPPET_VALUE_BOOL) {
+                            const char *b = v->data.boolean ? "true" : "false";
+                            module_hiera_buf_append(&buf, &len, &cap, b, strlen(b));
+                        }
+                        /* hash/array/undef → empty */
+                        puppet_value_destroy(v);
+                    }
+                }
+                /* non-facts tokens → empty */
+            }
+            p = end + 1;
+            continue;
+        }
+        module_hiera_buf_append(&buf, &len, &cap, p, 1);
+        p++;
+    }
+    return buf;
+}
+
+/* Per-module config cache (loader->module_hiera) — borrowed return. */
+static puppet_module_hiera_t *module_hiera_get_config(puppet_loader_t *loader,
+                                                      const char *module_name) {
+    pthread_mutex_lock(&loader->cache_mutex);
+    for (size_t i = 0; i < loader->module_hiera.count; i++) {
+        if (strcmp(loader->module_hiera.module_names[i], module_name) == 0) {
+            puppet_module_hiera_t *c = loader->module_hiera.cfgs[i];
+            pthread_mutex_unlock(&loader->cache_mutex);
+            return c;
+        }
+    }
+    puppet_module_hiera_t *cfg =
+        module_hiera_parse_config(loader->modules_path, module_name);
+    if (loader->module_hiera.count >= loader->module_hiera.capacity) {
+        size_t nc = loader->module_hiera.capacity ? loader->module_hiera.capacity * 2 : 8;
+        loader->module_hiera.module_names =
+            puppet_realloc(loader->module_hiera.module_names, nc * sizeof(char *));
+        loader->module_hiera.cfgs =
+            puppet_realloc(loader->module_hiera.cfgs, nc * sizeof(*loader->module_hiera.cfgs));
+        loader->module_hiera.capacity = nc;
+    }
+    size_t idx = loader->module_hiera.count++;
+    loader->module_hiera.module_names[idx] = puppet_strdup(module_name);
+    loader->module_hiera.cfgs[idx] = cfg;       /* NULL = negative cache */
+    pthread_mutex_unlock(&loader->cache_mutex);
+    return cfg;
+}
+
+/* Per-file data cache (loader->module_hiera_files) — borrowed return. */
+static puppet_value_t *module_hiera_get_file(puppet_loader_t *loader,
+                                             const char *abs_path) {
+    pthread_mutex_lock(&loader->cache_mutex);
+    for (size_t i = 0; i < loader->module_hiera_files.count; i++) {
+        if (strcmp(loader->module_hiera_files.paths[i], abs_path) == 0) {
+            puppet_value_t *d = loader->module_hiera_files.data[i];
+            pthread_mutex_unlock(&loader->cache_mutex);
+            return d;
+        }
+    }
+    puppet_value_t *data = NULL;
+    struct stat st;
+    if (stat(abs_path, &st) == 0) {
+        data = puppet_hiera_load_yaml(abs_path);
+        if (data && data->type != PUPPET_VALUE_HASH) {
+            puppet_warn("module hiera: %s is not a YAML mapping; skipping", abs_path);
+            puppet_value_destroy(data);
+            data = NULL;
+        }
+    }
+    if (loader->module_hiera_files.count >= loader->module_hiera_files.capacity) {
+        size_t nc = loader->module_hiera_files.capacity ?
+                    loader->module_hiera_files.capacity * 2 : 16;
+        loader->module_hiera_files.paths =
+            puppet_realloc(loader->module_hiera_files.paths, nc * sizeof(char *));
+        loader->module_hiera_files.data =
+            puppet_realloc(loader->module_hiera_files.data,
+                           nc * sizeof(*loader->module_hiera_files.data));
+        loader->module_hiera_files.capacity = nc;
+    }
+    size_t idx = loader->module_hiera_files.count++;
+    loader->module_hiera_files.paths[idx] = puppet_strdup(abs_path);
+    loader->module_hiera_files.data[idx] = data;   /* NULL = negative cache */
+    pthread_mutex_unlock(&loader->cache_mutex);
+    return data;
+}
+
+puppet_value_t *puppet_hiera_module_lookup(puppet_env_t *env,
+                                           const char *module_name,
+                                           const char *key) {
+    if (!env || !env->prog || !env->prog->loader ||
+        !env->prog->loader->modules_path ||
+        !module_name || !*module_name || !key) {
+        return NULL;
+    }
+    puppet_loader_t *loader = env->prog->loader;
+
+    puppet_module_hiera_t *cfg = module_hiera_get_config(loader, module_name);
+    if (!cfg) return NULL;
+
+    for (size_t i = 0; i < cfg->path_count; i++) {
+        /* Interpolate OUTSIDE the lock with this env's per-node facts. */
+        char *ipath = module_hiera_interpolate_path(cfg->path_templates[i], env);
+        puppet_value_t *data = module_hiera_get_file(loader, ipath);
+        puppet_free(ipath);
+        if (data && data->type == PUPPET_VALUE_HASH) {
+            puppet_value_t *found = puppet_hash_get(data->data.hash, key, strlen(key));
+            if (found) {
+                /* Cached values are immutable; copying outside the lock is
+                 * a pure read and therefore safe. First hit wins. */
+                return puppet_value_copy(found);
+            }
+        }
+    }
+    return NULL;
 }

@@ -352,6 +352,11 @@ int puppet_facts_db_load_from_facter(puppet_facts_db_t *facts_db, const char *ce
 int puppet_facts_db_set_current_node(puppet_facts_db_t *facts_db, const char *certname);
 puppet_value_t *puppet_facts_get(puppet_env_t *env, const char *fact_name);
 puppet_value_t *puppet_facts_get_all_as_hash(puppet_env_t *env);
+/* Resolve a dotted fact path ("os.name") for the current node; owned value or NULL. */
+puppet_value_t *puppet_facts_lookup_dotted(puppet_env_t *env, const char *dotted);
+/* Automatic Parameter Lookup: hiera value for "<class>::<param>" (global
+ * providers, site fallback, then the module data layer). Owned value or NULL. */
+puppet_value_t *puppet_apl_lookup(const char *class_name, const char *param_name, puppet_env_t *env);
 int puppet_env_set_facts_db(puppet_env_t *env, puppet_facts_db_t *facts_db);
 size_t puppet_facts_db_node_count(puppet_facts_db_t *facts_db);
 const char *puppet_facts_db_get_node_name(puppet_facts_db_t *facts_db, size_t index);

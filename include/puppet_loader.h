@@ -24,6 +24,9 @@
  * Maintains state for the module loading system including search paths,
  * loaded modules cache, and parsing context.
  */
+/* Item 33 — parsed module-layer hiera config (defined in puppet_hiera.h). */
+struct puppet_module_hiera;
+
 typedef struct puppet_loader {
     char *base_path;           /**< Base directory for Puppet code */
     char *modules_path;        /**< Path to modules directory */
@@ -61,6 +64,28 @@ typedef struct puppet_loader {
         size_t count;
         size_t capacity;
     } module_meta;
+
+    /* Item 33 — per-module hiera.yaml verdicts (data-in-modules APL layer).
+     * cfgs[i] == NULL means "no usable module data layer" (missing file,
+     * version != 5, or no yaml_data entries) — presence in the array IS the
+     * negative cache. Entries are append-only and immutable until loader
+     * destroy, so borrowed pointers remain valid after cache_mutex unlock. */
+    struct {
+        char **module_names;
+        struct puppet_module_hiera **cfgs;
+        size_t count;
+        size_t capacity;
+    } module_hiera;
+
+    /* Item 33 — parsed module data files keyed by INTERPOLATED absolute path.
+     * data[i] == NULL means "known missing or malformed" (negative entry).
+     * Same append-only/immutable lifetime contract as module_hiera. */
+    struct {
+        char **paths;
+        puppet_value_t **data;
+        size_t count;
+        size_t capacity;
+    } module_hiera_files;
 
     /* Thread synchronization for parallel node processing */
     pthread_mutex_t cache_mutex;   /**< Protects all caches */

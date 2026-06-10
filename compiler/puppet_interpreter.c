@@ -417,7 +417,7 @@ static bool puppet_type_is_known(puppet_env_t *env, const char *type_lower) {
  * Looks up class_name::param_name in Hiera data providers and module-specific data.
  * Returns the found value or NULL if not found.
  */
-static puppet_value_t *puppet_apl_lookup(const char *class_name, const char *param_name, puppet_env_t *env) {
+puppet_value_t *puppet_apl_lookup(const char *class_name, const char *param_name, puppet_env_t *env) {
     if (!class_name || !param_name || !env) return NULL;
 
     /* Build the lookup key: classname::paramname */
@@ -503,6 +503,18 @@ static puppet_value_t *puppet_apl_lookup(const char *class_name, const char *par
                     }
                     puppet_value_destroy(data);
                 }
+            }
+        }
+
+        /* Item 33: module data layer — modules/<mod>/hiera.yaml + data/.
+         * Lowest priority, after global providers and the site fallback
+         * (real Puppet's global → environment → module lookup order). */
+        if (!result) {
+            const char *mod = module_name;
+            if (strncmp(mod, "::", 2) == 0) mod += 2;
+            result = puppet_hiera_module_lookup(env, mod, key);
+            if (result) {
+                puppet_debug("APL: Found %s via module-layer hiera", key);
             }
         }
 
@@ -7577,6 +7589,46 @@ puppet_value_t *puppet_facts_get_all_as_hash(puppet_env_t *env) {
     puppet_hash_set(root->data.hash, "puppetversion", 13, puppetversion);
 
     return root;
+}
+
+/* Item 33 / item 21 shared helper — resolve a dotted fact path
+ * ("os.distro.codename", "mountpoints.0") for the current node. Fast path:
+ * the facts store keeps dotted names flat, so try a direct lookup first; on
+ * miss, walk the nested $facts structure segment by segment (numeric segments
+ * index arrays). Returns an owned value, or NULL when any segment is missing. */
+puppet_value_t *puppet_facts_lookup_dotted(puppet_env_t *env, const char *dotted) {
+    if (!env || !dotted || !*dotted) return NULL;
+
+    puppet_value_t *direct = puppet_facts_get(env, dotted);
+    if (direct) return direct;
+
+    puppet_value_t *current = puppet_facts_get_all_as_hash(env);
+    if (!current) return NULL;
+
+    char *path = puppet_strdup(dotted);
+    char *saveptr = NULL;
+    for (char *seg = strtok_r(path, ".", &saveptr); seg; seg = strtok_r(NULL, ".", &saveptr)) {
+        puppet_value_t *next = NULL;
+        if (current->type == PUPPET_VALUE_HASH) {
+            puppet_value_t *v = puppet_hash_get(current->data.hash, seg, strlen(seg));
+            if (v) next = puppet_value_copy(v);
+        } else if (current->type == PUPPET_VALUE_ARRAY && current->data.array) {
+            char *endp = NULL;
+            long idx = strtol(seg, &endp, 10);
+            if (endp && *endp == '\0' && idx >= 0 &&
+                (size_t)idx < current->data.array->count) {
+                next = puppet_value_copy(current->data.array->items[idx]);
+            }
+        }
+        puppet_value_destroy(current);
+        if (!next) {
+            puppet_free(path);
+            return NULL;
+        }
+        current = next;
+    }
+    puppet_free(path);
+    return current;
 }
 
 int puppet_env_set_facts_db(puppet_env_t *env, puppet_facts_db_t *facts_db) {

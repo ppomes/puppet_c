@@ -5,6 +5,7 @@
 
 #include "puppet_loader.h"
 #include "puppet_lint.h"
+#include "puppet_hiera.h"
 #include "puppet_ts_parser.h"
 #include "puppet_memory.h"
 #include "puppet_interpreter.h"
@@ -208,6 +209,22 @@ void puppet_loader_destroy(puppet_loader_t *loader) {
     puppet_free(loader->module_meta.module_names);
     puppet_free(loader->module_meta.incompatible);
     puppet_free(loader->module_meta.requirement);
+
+    /* Item 33 — module-layer hiera caches */
+    for (size_t i = 0; i < loader->module_hiera.count; i++) {
+        puppet_free(loader->module_hiera.module_names[i]);
+        puppet_hiera_module_config_destroy(loader->module_hiera.cfgs[i]);
+    }
+    puppet_free(loader->module_hiera.module_names);
+    puppet_free(loader->module_hiera.cfgs);
+    for (size_t i = 0; i < loader->module_hiera_files.count; i++) {
+        puppet_free(loader->module_hiera_files.paths[i]);
+        if (loader->module_hiera_files.data[i]) {
+            puppet_value_destroy(loader->module_hiera_files.data[i]);
+        }
+    }
+    puppet_free(loader->module_hiera_files.paths);
+    puppet_free(loader->module_hiera_files.data);
 
     /* Destroy thread synchronization */
     pthread_mutex_destroy(&loader->cache_mutex);
@@ -562,20 +579,25 @@ bool puppet_loader_include_class(puppet_loader_t *loader,
     /* Store class scope BEFORE executing body for $class::var lookups */
     puppet_hash_set(env->class_scopes, normalized_name, strlen(normalized_name), (puppet_value_t *)class_scope);
 
-    /* Process class parameters and set default values */
+    /* Process class parameters: Automatic Parameter Lookup first (hiera
+     * global layer, then the item-33 module data layer), falling back to the
+     * manifest default, then undef. This mirrors puppet_include_class_from_def
+     * — previously this autoload path skipped APL entirely, so classes loaded
+     * from modules never saw hiera-supplied parameters (e.g. apt::ppa_options
+     * from modules/apt/data/os/Ubuntu.yaml). */
     for (size_t i = 0; i < class_def->data.class_def.params.count; i++) {
         puppet_param_t *param = &class_def->data.class_def.params.params[i];
         const char *param_name = param->name.data;
 
-        if (param->default_value) {
-            /* Evaluate default value and set in class scope */
-            puppet_value_t *default_val = puppet_eval_expr(param->default_value, env);
-            puppet_scope_set_var(class_scope, param_name, default_val);
-        } else {
-            /* Set parameter to undef if no default provided */
-            puppet_value_t *undef_val = puppet_value_create_undef();
-            puppet_scope_set_var(class_scope, param_name, undef_val);
+        puppet_value_t *param_value = puppet_apl_lookup(normalized_name, param_name, env);
+        if (!param_value) {
+            if (param->default_value) {
+                param_value = puppet_eval_expr(param->default_value, env);
+            } else {
+                param_value = puppet_value_create_undef();
+            }
         }
+        puppet_scope_set_var(class_scope, param_name, param_value);
     }
 
     /* Set caller_module_name for hiera interpolation (%{module_name}).

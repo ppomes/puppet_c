@@ -185,4 +185,33 @@ puppet_value_t *puppet_hiera_merge_values(
     puppet_hiera_merge_t strategy
 );
 
+
+/* ============================================================================
+ * Item 33 — module-layer hiera (data in modules)
+ * ============================================================================
+ * Parsed view of a module's v5 hiera.yaml: just the ordered, fully-prefixed
+ * path templates (<modules_path>/<module>/<datadir>/<path>). Only
+ * `data_hash: yaml_data` levels are kept; other backends are skipped with a
+ * warning at parse time.
+ */
+typedef struct puppet_module_hiera {
+    char **path_templates;
+    size_t path_count;
+} puppet_module_hiera_t;
+
+/**
+ * @brief Look up "<class>::<param>" in a module's own data layer.
+ *
+ * Parses modules/<module>/hiera.yaml (v5) once (cached on the loader),
+ * interpolates each hierarchy path with the current node's facts
+ * (%{facts.x.y}), loads the YAML data files (cached per interpolated path)
+ * and returns an owned copy of the first hit, or NULL.
+ */
+puppet_value_t *puppet_hiera_module_lookup(puppet_env_t *env,
+                                           const char *module_name,
+                                           const char *key);
+
+/** @brief Free a parsed module hiera config (NULL-safe). */
+void puppet_hiera_module_config_destroy(puppet_module_hiera_t *cfg);
+
 #endif /* PUPPET_HIERA_H */
