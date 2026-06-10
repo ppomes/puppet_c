@@ -121,6 +121,8 @@ EXTRA_DIST = \
     test_fact_function.sh \
     test_forward_include_getvar.sh \
     test_chained_index_key.sh \
+    test_erb_legacy_scope.sh \
+    test_module_facts_lint.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -156,7 +158,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions check-enum-undef-default check-unless-defined check-erb-structured-facts check-type-aliases check-duplicate-hash-keys check-legacy-facts check-regex-anchors check-define-no-instance check-fact-function check-forward-include-getvar check-chained-index-key
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions check-enum-undef-default check-unless-defined check-erb-structured-facts check-type-aliases check-duplicate-hash-keys check-legacy-facts check-regex-anchors check-define-no-instance check-fact-function check-forward-include-getvar check-chained-index-key check-erb-legacy-scope check-module-facts-lint
 	@echo "All tests completed."
 
 check-parser:
@@ -951,6 +953,28 @@ check-chained-index-key:
 	else \
 		echo "❌ Some chained-index-key tests failed:"; \
 		sed 's/^/  /' output/chained_index_key.out; \
+		exit 1; \
+	fi
+
+check-erb-legacy-scope:
+	@echo "Running ERB legacy scope/lookupvar/@ivar scan tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_erb_legacy_scope.sh > output/erb_legacy_scope.out 2>&1; then \
+		echo "✅ All erb-legacy-scope tests passed!"; \
+	else \
+		echo "❌ Some erb-legacy-scope tests failed:"; \
+		sed 's/^/  /' output/erb_legacy_scope.out; \
+		exit 1; \
+	fi
+
+check-module-facts-lint:
+	@echo "Running module-manifest legacy-fact lint tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_module_facts_lint.sh > output/module_facts_lint.out 2>&1; then \
+		echo "✅ All module-facts-lint tests passed!"; \
+	else \
+		echo "❌ Some module-facts-lint tests failed:"; \
+		sed 's/^/  /' output/module_facts_lint.out; \
 		exit 1; \
 	fi
 

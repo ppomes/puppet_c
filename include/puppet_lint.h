@@ -41,6 +41,22 @@ puppet_lint_result_t puppet_lint_puppet8(puppet_program_t *program);
 void puppet_lint_set_strict_facts(bool strict);
 
 /**
+ * @brief Look up a legacy fact name (without :: prefix) in the removed-facts
+ *        table. Returns the structured $facts['...'] replacement string, or
+ *        NULL if the name is not a known legacy fact. Shared with the ERB
+ *        scans (items 24-26), which flag the same facts in templates.
+ */
+const char *puppet_lint_lookup_legacy_fact(const char *name);
+
+/**
+ * @brief Facts-only lint walk (items 13/27/28): flags legacy top-scope fact
+ *        reads (bare, ::-prefixed, in param defaults and interpolations) and
+ *        nothing else. Run once per lazily-loaded module manifest, which the
+ *        entry program's full puppet_lint_puppet8() never sees.
+ */
+puppet_lint_result_t puppet_lint_legacy_facts(puppet_program_t *program);
+
+/**
  * @brief Scan a directory tree for Puppet 8 issues in non-Puppet files
  *
  * Scans for:

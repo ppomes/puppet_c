@@ -4,6 +4,7 @@
  */
 
 #include "puppet_loader.h"
+#include "puppet_lint.h"
 #include "puppet_ts_parser.h"
 #include "puppet_memory.h"
 #include "puppet_interpreter.h"
@@ -445,6 +446,24 @@ puppet_program_t *puppet_loader_load_manifest(puppet_loader_t *loader,
         loader->parsed_manifests.programs[loader->parsed_manifests.count] = program;
         loader->parsed_manifests.count++;
         pthread_mutex_unlock(&loader->cache_mutex);
+    }
+
+    /* Item 28: module manifests are loaded lazily and never pass through the
+     * entry program's Puppet 8 lint, so legacy fact reads in modules (the
+     * ${::fqdn}-in-string sites on the real tree) went unflagged. Run the
+     * facts-only lint once per parsed file (the cache above guarantees a
+     * single parse per path). The entry site.pp is skipped — main already
+     * full-lints it. */
+    {
+        bool is_entry_site = false;
+        if (loader && loader->manifests_path) {
+            char site_path[1024];
+            snprintf(site_path, sizeof(site_path), "%s/site.pp", loader->manifests_path);
+            is_entry_site = (strcmp(file_path, site_path) == 0);
+        }
+        if (!is_entry_site) {
+            puppet_lint_legacy_facts(program);
+        }
     }
 
     return program;

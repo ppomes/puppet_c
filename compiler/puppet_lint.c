@@ -220,6 +220,14 @@ static const legacy_fact_t legacy_facts[] = {
     {NULL, NULL}  /* sentinel */
 };
 
+const char *puppet_lint_lookup_legacy_fact(const char *name) {
+    if (!name || !*name) return NULL;
+    for (const legacy_fact_t *f = legacy_facts; f->old_name; f++) {
+        if (strcmp(name, f->old_name) == 0) return f->replacement;
+    }
+    return NULL;
+}
+
 /* ----------------------------------------------------------------------------
  * Item 13 — bare-word top-scope fact detection.
  *
@@ -235,8 +243,14 @@ static const legacy_fact_t legacy_facts[] = {
  * back on exit. Lint runs single-threaded, so file-static state is fine.
  * -------------------------------------------------------------------------- */
 static bool   g_strict_facts = false;
-static char **g_shadow = NULL;
-static size_t g_shadow_count = 0, g_shadow_cap = 0;
+/* Thread-local: module manifests are linted as they're loaded (item 28), and
+ * the loader can be driven from parallel -P workers. */
+static __thread char **g_shadow = NULL;
+static __thread size_t g_shadow_count = 0, g_shadow_cap = 0;
+/* When set, the walk only performs the legacy-fact variable checks (items
+ * 13/27/28) — funcall/import/inherits/dup-key checks are skipped so module
+ * files don't grow error-grade findings the entry-program lint never made. */
+static __thread bool g_facts_only = false;
 
 void puppet_lint_set_strict_facts(bool strict) { g_strict_facts = strict; }
 
@@ -274,6 +288,7 @@ static void lint_stmt_list(puppet_lint_result_t *r, puppet_stmt_list_t *list);
 
 static void lint_check_funcall(puppet_lint_result_t *r, const char *name,
                                puppet_location_t loc) {
+    if (g_facts_only) return;
     for (const deprecated_func_t *f = deprecated_functions; f->name; f++) {
         if (strcmp(name, f->name) == 0) {
             if (f->removed) {
@@ -439,7 +454,8 @@ static void lint_expr(puppet_lint_result_t *r, puppet_expr_t *expr) {
                  * hash is a fatal error (it silently overwrote in Puppet 7).
                  * Only literal string keys can be proven at compile time;
                  * variable/dynamic keys are left to runtime. */
-                if (ki && ki->type == PUPPET_EXPR_VALUE && ki->data.value &&
+                if (!g_facts_only &&
+                    ki && ki->type == PUPPET_EXPR_VALUE && ki->data.value &&
                     ki->data.value->type == PUPPET_VALUE_STRING) {
                     for (size_t j = 0; j < i; j++) {
                         puppet_expr_t *kj = expr->data.hash_entries.keys[j];
@@ -490,8 +506,10 @@ static void lint_stmt(puppet_lint_result_t *r, puppet_stmt_t *stmt) {
 
     switch (stmt->type) {
         case PUPPET_STMT_IMPORT:
-            lint_error(r, stmt->loc,
-                      "'import' was removed in Puppet 4 and is not supported in Puppet 8");
+            if (!g_facts_only) {
+                lint_error(r, stmt->loc,
+                          "'import' was removed in Puppet 4 and is not supported in Puppet 8");
+            }
             break;
 
         case PUPPET_STMT_NODE: {
@@ -504,23 +522,28 @@ static void lint_stmt(puppet_lint_result_t *r, puppet_stmt_t *stmt) {
 
         case PUPPET_STMT_CLASS_DEF: {
             /* Class inheritance */
-            if (stmt->data.class_def.inherits &&
+            if (!g_facts_only && stmt->data.class_def.inherits &&
                 stmt->data.class_def.inherits->data) {
                 lint_warning(r, stmt->loc,
                             "class inheritance (inherits '%s') is deprecated, "
                             "use composition with include/contain instead",
                             stmt->data.class_def.inherits->data);
             }
-            for (size_t i = 0; i < stmt->data.class_def.params.count; i++) {
-                if (stmt->data.class_def.params.params[i].default_value) {
-                    lint_expr(r, stmt->data.class_def.params.params[i].default_value);
-                }
-            }
-            /* New scope: parameters shadow facts of the same name within. */
+            /* New scope: parameters shadow facts of the same name. Register
+             * them BEFORE linting defaults — real Puppet evaluates parameter
+             * defaults in the class's own scope, so a default referencing an
+             * earlier parameter ($greeting = "hi ${hostname}") is the param,
+             * not the fact (item 27). A bareword fact that is NOT a parameter
+             * ($accepteddomains = [$domain]) is still flagged. */
             size_t mark = shadow_mark();
             for (size_t i = 0; i < stmt->data.class_def.params.count; i++) {
                 if (stmt->data.class_def.params.params[i].name.data)
                     shadow_add(stmt->data.class_def.params.params[i].name.data);
+            }
+            for (size_t i = 0; i < stmt->data.class_def.params.count; i++) {
+                if (stmt->data.class_def.params.params[i].default_value) {
+                    lint_expr(r, stmt->data.class_def.params.params[i].default_value);
+                }
             }
             lint_stmt_list(r, &stmt->data.class_def.body);
             shadow_truncate(mark);
@@ -528,15 +551,16 @@ static void lint_stmt(puppet_lint_result_t *r, puppet_stmt_t *stmt) {
         }
 
         case PUPPET_STMT_DEFINE: {
-            for (size_t i = 0; i < stmt->data.define.params.count; i++) {
-                if (stmt->data.define.params.params[i].default_value) {
-                    lint_expr(r, stmt->data.define.params.params[i].default_value);
-                }
-            }
+            /* Params shadow before defaults are linted — see CLASS_DEF. */
             size_t mark = shadow_mark();
             for (size_t i = 0; i < stmt->data.define.params.count; i++) {
                 if (stmt->data.define.params.params[i].name.data)
                     shadow_add(stmt->data.define.params.params[i].name.data);
+            }
+            for (size_t i = 0; i < stmt->data.define.params.count; i++) {
+                if (stmt->data.define.params.params[i].default_value) {
+                    lint_expr(r, stmt->data.define.params.params[i].default_value);
+                }
             }
             lint_stmt_list(r, &stmt->data.define.body);
             shadow_truncate(mark);
@@ -544,15 +568,16 @@ static void lint_stmt(puppet_lint_result_t *r, puppet_stmt_t *stmt) {
         }
 
         case PUPPET_STMT_FUNCTION_DEF: {
-            for (size_t i = 0; i < stmt->data.function_def.params.count; i++) {
-                if (stmt->data.function_def.params.params[i].default_value) {
-                    lint_expr(r, stmt->data.function_def.params.params[i].default_value);
-                }
-            }
+            /* Params shadow before defaults are linted — see CLASS_DEF. */
             size_t mark = shadow_mark();
             for (size_t i = 0; i < stmt->data.function_def.params.count; i++) {
                 if (stmt->data.function_def.params.params[i].name.data)
                     shadow_add(stmt->data.function_def.params.params[i].name.data);
+            }
+            for (size_t i = 0; i < stmt->data.function_def.params.count; i++) {
+                if (stmt->data.function_def.params.params[i].default_value) {
+                    lint_expr(r, stmt->data.function_def.params.params[i].default_value);
+                }
             }
             lint_stmt_list(r, &stmt->data.function_def.body);
             shadow_truncate(mark);
@@ -873,6 +898,21 @@ static void lint_scan_directory(puppet_lint_result_t *r, const char *dir_path) {
 /* ============================================================================
  * Public API
  * ============================================================================ */
+
+puppet_lint_result_t puppet_lint_legacy_facts(puppet_program_t *program) {
+    puppet_lint_result_t result = {0, 0};
+    if (!program) return result;
+    /* Facts-only walk: just the legacy top-scope fact checks (items 13/27/28).
+     * Used for lazily-loaded module manifests, which never pass through the
+     * entry program's full lint; the funcall/import/inherits/dup-key checks
+     * stay off so module files don't grow new error-grade findings. */
+    shadow_clear();
+    g_facts_only = true;
+    lint_stmt_list(&result, &program->statements);
+    g_facts_only = false;
+    shadow_clear();
+    return result;
+}
 
 puppet_lint_result_t puppet_lint_puppet8(puppet_program_t *program) {
     puppet_lint_result_t result = {0, 0};

@@ -96,6 +96,34 @@ ns=$(echo "$strict" | grep -c '\[ERROR\].*is a \(Hash\|number\) in Facter 4')
 [ "$ns" -eq 5 ]
 check "--strict-erb escalates all 5 to errors (got $ns)" $?
 
+# --- Item 29 extensions: ::-prefixed form, more methods, more Hash facts ---
+cat > "$TMP/mods/nag/templates/u.erb" <<'ERB'
+<% scope['::mountpoints'].split(',').each { |m| } %>
+<% scope['networking'].length %>
+<% scope['mountpoints'].scan(/x/) %>
+<% scope['filesystems'].split(',') %>
+ERB
+cat > "$TMP/site2.pp" <<'PP'
+node default { $x = template('nag/u.erb') }
+PP
+out=$("$PUPPETC" -s -m "$TMP/mods" "$TMP/site2.pp" 2>&1)
+
+# 11) scope['::mountpoints'].split — the ::-prefixed form is recognised.
+echo "$out" | grep -qE "u\.erb:1: .*'mountpoints' is a Hash"
+check "item 29: scope['::mountpoints'].split flagged (:: form)" $?
+
+# 12) networking.length — new fact + new method.
+echo "$out" | grep -qE "u\.erb:2: .*'networking' is a Hash"
+check "item 29: scope['networking'].length flagged" $?
+
+# 13) mountpoints.scan — new method.
+echo "$out" | grep -qE "u\.erb:3: .*'mountpoints' is a Hash"
+check "item 29: scope['mountpoints'].scan flagged" $?
+
+# 14) filesystems.split is NOT flagged — still a String in Facter 4/5.
+echo "$out" | grep -qvE "'filesystems' is"
+check "item 29: filesystems.split not flagged (still a String)" $?
+
 echo
 echo "Results: $PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ]

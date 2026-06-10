@@ -18,6 +18,7 @@
 #include "puppet_stdlib.h"
 #include "puppet_loader.h"
 #include "puppet_program_state.h"
+#include "puppet_lint.h"   /* legacy-fact table (items 24-26 ERB scans) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -758,14 +759,19 @@ static const struct {
     { "blockdevices", "a Hash",   "use .keys" },
     { "processors",   "a Hash",   "use ['count']" },
     { "memorysize",   "a number", "use $facts['memory']['system']['total']" },
+    { "networking",   "a Hash",   "use its sub-keys, e.g. ['hostname'], ['ip']" },
+    { "disks",        "a Hash",   "use .keys" },
+    { "dmi",          "a Hash",   "use its sub-keys, e.g. ['product']['name']" },
 };
 
 static void erb_warn_structured_facts(const char *content, const char *template_name,
                                       puppet_env_t *env) {
     if (!content) return;
     bool strict = env && env->prog && env->prog->strict_erb;
-    /* String methods whose use on a Hash/number/Array is the symptom. */
-    static const char *str_methods[] = { "split", "gsub", "tr", "to_a", NULL };
+    /* String methods whose use on a Hash/number/Array is the symptom.
+     * "start_with" also covers start_with? (the matcher stops at '?'). */
+    static const char *str_methods[] = { "split", "gsub", "tr", "to_a",
+                                         "scan", "length", "start_with", NULL };
     int line = 1;
     bool in_tag = false;
     const char *p = content;
@@ -793,6 +799,9 @@ static void erb_warn_structured_facts(const char *content, const char *template_
                 while (*e && *e != quote) e++;
                 if (*e != quote || e[1] != ']') { ok = false; break; }
                 size_t klen = (size_t)(e - k);
+                /* scope['::mountpoints'] is the same fact as scope['mountpoints']
+                 * — strip a leading :: so the table matches (item 29). */
+                if (klen >= 2 && k[0] == ':' && k[1] == ':') { k += 2; klen -= 2; }
                 if (klen < sizeof(last_key)) {
                     memcpy(last_key, k, klen);
                     last_key[klen] = '\0';
@@ -841,6 +850,155 @@ static void erb_warn_structured_facts(const char *content, const char *template_
     }
 }
 
+/* Emit the structured replacement for a legacy fact in ERB form:
+ * "$facts['x']['y']" -> "scope['facts']['x']['y']". */
+static void erb_print_scope_replacement(char *buf, size_t bufsize, const char *replacement) {
+    if (replacement && strncmp(replacement, "$facts", 6) == 0) {
+        snprintf(buf, bufsize, "scope['facts']%s", replacement + 6);
+    } else {
+        snprintf(buf, bufsize, "%s", replacement ? replacement : "the structured $facts hash");
+    }
+}
+
+/* Still-valid top-scope names that must never be flagged as legacy facts. */
+static bool erb_fact_name_is_exempt(const char *name) {
+    return strcmp(name, "facts") == 0 || strcmp(name, "trusted") == 0 ||
+           strcmp(name, "server_facts") == 0 || strcmp(name, "environment") == 0;
+}
+
+/* Items 24/25 — qualified top-scope fact lookups in ERB. Under Puppet 8 strict
+ * both scope['::hostname'] and scope.lookupvar('::hostname') raise "Undefined
+ * variable '::hostname'" (even with include_legacy_facts): the legacy fact no
+ * longer exists as a variable. Flag string-literal forms whose single-segment
+ * name is a known legacy fact, suggesting the structured scope['facts'][…]
+ * path. Names with a further :: are class variables (item 23's runtime
+ * concern) and are left alone. Scans only inside ERB tags. */
+static void erb_warn_qualified_scope_facts(const char *content, const char *template_name,
+                                           puppet_env_t *env) {
+    if (!content) return;
+    bool strict = env && env->prog && env->prog->strict_erb;
+    int line = 1;
+    bool in_tag = false;
+    const char *p = content;
+    while (*p) {
+        if (*p == '\n') { line++; p++; continue; }
+        if (!in_tag) {
+            if (p[0] == '<' && p[1] == '%') { in_tag = true; p += 2; }
+            else p++;
+            continue;
+        }
+        if (p[0] == '%' && p[1] == '>') { in_tag = false; p += 2; continue; }
+
+        if (strncmp(p, "scope", 5) == 0) {
+            const char *after = p + 5;
+            bool is_lookupvar = false;
+            const char *open = NULL;
+            if (after[0] == '[') {
+                open = after + 1;
+            } else if (strncmp(after, ".lookupvar(", 11) == 0) {
+                is_lookupvar = true;
+                open = after + 11;
+            }
+            if (open && (open[0] == '\'' || open[0] == '"') &&
+                open[1] == ':' && open[2] == ':') {
+                char quote = open[0];
+                const char *k = open + 3;     /* past quote and :: */
+                const char *e = k;
+                while (*e && *e != quote) e++;
+                size_t klen = (size_t)(e - k);
+                char name[128];
+                if (*e == quote && klen > 0 && klen < sizeof(name)) {
+                    memcpy(name, k, klen);
+                    name[klen] = '\0';
+                    const char *repl = strchr(name, ':') ? NULL
+                                       : (erb_fact_name_is_exempt(name) ? NULL
+                                          : puppet_lint_lookup_legacy_fact(name));
+                    if (repl) {
+                        char sugg[256];
+                        erb_print_scope_replacement(sugg, sizeof(sugg), repl);
+                        puppet_location_t loc = { template_name, line, 0 };
+                        const char *fmt = is_lookupvar
+                            ? "ERB scope.lookupvar('::%s'): lookupvar is also strict under Puppet 8 "
+                              "and raises on the removed fact; use %s"
+                            : "ERB scope['::%s'] raises \"Undefined variable\" under Puppet 8 "
+                              "(legacy facts are gone); use %s";
+                        if (strict) puppet_error_at(loc, fmt, name, sugg);
+                        else        puppet_warning_at(loc, fmt, name, sugg);
+                    }
+                    p = e + 1;
+                    continue;
+                }
+            }
+            p += 5;
+            continue;
+        }
+        p++;
+    }
+}
+
+/* Item 26 — `@<legacy_fact>` Ruby instance variables in ERB. On a Facter 5 /
+ * Puppet 8 agent the legacy fact no longer exists, so @lsbdistrelease is nil
+ * and e.g. `nil.to_s >= '20.04'` silently takes the wrong branch — the catalog
+ * compiles but the generated file is wrong. Flag any @name that is a known
+ * legacy fact. @class::var namespaced sugar is item 2's scan; names followed
+ * by :: are skipped here. Scans only inside ERB tags. */
+static void erb_warn_legacy_ivar_facts(const char *content, const char *template_name,
+                                       puppet_env_t *env) {
+    if (!content) return;
+    bool strict = env && env->prog && env->prog->strict_erb;
+    int line = 1;
+    bool in_tag = false;
+    const char *p = content;
+    char prev = '\0';
+    while (*p) {
+        if (*p == '\n') { line++; prev = '\0'; p++; continue; }
+        if (!in_tag) {
+            if (p[0] == '<' && p[1] == '%') { in_tag = true; p += 2; prev = '\0'; }
+            else { prev = *p; p++; }
+            continue;
+        }
+        if (p[0] == '%' && p[1] == '>') { in_tag = false; p += 2; prev = '\0'; continue; }
+        if (p[0] == '@' && (isalpha((unsigned char)p[1]) || p[1] == '_') &&
+            !(isalnum((unsigned char)prev) || prev == '_' || prev == '@')) {
+            const char *k = p + 1;
+            const char *e = k;
+            while (isalnum((unsigned char)*e) || *e == '_') e++;
+            /* @class::var is item 2's namespaced-sugar scan — skip here. */
+            if (!(e[0] == ':' && e[1] == ':')) {
+                size_t klen = (size_t)(e - k);
+                char name[128];
+                if (klen > 0 && klen < sizeof(name)) {
+                    memcpy(name, k, klen);
+                    name[klen] = '\0';
+                    const char *repl = erb_fact_name_is_exempt(name) ? NULL
+                                       : puppet_lint_lookup_legacy_fact(name);
+                    if (repl) {
+                        char sugg[256];
+                        erb_print_scope_replacement(sugg, sizeof(sugg), repl);
+                        puppet_location_t loc = { template_name, line, 0 };
+                        if (strict) {
+                            puppet_error_at(loc,
+                                "ERB '@%s': legacy fact instance variable is nil under "
+                                "Facter 5/Puppet 8 (wrong branch taken silently); use %s",
+                                name, sugg);
+                        } else {
+                            puppet_warning_at(loc,
+                                "ERB '@%s': legacy fact instance variable is nil under "
+                                "Facter 5/Puppet 8 (wrong branch taken silently); use %s",
+                                name, sugg);
+                        }
+                    }
+                }
+            }
+            prev = e > k ? e[-1] : '@';
+            p = e;
+            continue;
+        }
+        prev = *p;
+        p++;
+    }
+}
+
 char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_ruby_context_t *ruby_ctx, const char *template_name) {
     (void)ruby_ctx;  /* legacy parameter — Ruby context is owned by the daemon */
 
@@ -853,6 +1011,8 @@ char *puppet_erb_render(const char *template_content, puppet_env_t *env, puppet_
     // --strict-erb) before rendering rewrites it away.
     erb_warn_namespaced_ivars(template_content, template_name, env);
     erb_warn_structured_facts(template_content, template_name, env);
+    erb_warn_qualified_scope_facts(template_content, template_name, env);
+    erb_warn_legacy_ivar_facts(template_content, template_name, env);
 
     // Fast path: native (Ruby-free) renderer for the supported subset.
     // The native engine caches its parsed AST per template_name and is
