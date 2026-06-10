@@ -80,6 +80,23 @@ typedef struct puppet_program_state {
     bool verbose;
     bool strict_erb;   /* --strict-erb: promote ERB @class::var sugar warnings to errors */
 
+    /* Item 30 — opt-in per-tree resource policy, loaded lazily from
+     * <base_path>/.puppetc-policy.json under reg_mutex. When the file is
+     * absent the whole feature is a no-op. Entries flag deprecated resource
+     * declarations (e.g. apt::source['openvox7'] on a branch that targets
+     * OpenVox 8). policy_warned dedups to one diagnostic per type[title]. */
+    struct puppet_policy_entry {
+        char *type;          /* resource type, matched case-insensitively */
+        char *title;         /* exact title to match, or NULL */
+        char *title_pattern; /* POSIX ERE for the title, or NULL */
+        char *reason;        /* appended to the diagnostic, may be NULL */
+        bool  level_error;   /* true: error; false: warning (default) */
+    } *policy_entries;
+    size_t policy_entry_count;
+    bool policy_loaded;
+    char **policy_warned;
+    size_t policy_warned_count, policy_warned_cap;
+
     /* Mutex protecting concurrent writes against parallel reads.
      * Currently only used by puppet_init_ruby_types' lazy population.
      *

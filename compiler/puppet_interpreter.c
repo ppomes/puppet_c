@@ -8,6 +8,7 @@
 #include "puppet_hiera.h"
 #include "puppet_json_parser.h"
 #include "puppet_json.h"
+#include "puppet_json_common.h"
 #include "puppetdb.h"
 #include "facter.h"
 #include <stdlib.h>
@@ -1211,6 +1212,9 @@ static bool value_matches_type_str(puppet_value_t *val, const char *type_str,
  * val matches, 0 if it's an alias and val does not match, -1 if not an alias. */
 static int match_type_alias(puppet_value_t *val, const char *base, puppet_env_t *env);
 extern puppet_stmt_list_t *puppet_ts_parse_file(const char *filename);
+/* Item 30 — opt-in per-tree resource policy (.puppetc-policy.json). */
+static void puppet_policy_check_resource(puppet_env_t *env, const char *type,
+                                         const char *title, puppet_location_t loc);
 
 /* Guards runaway recursion in user-defined functions (e.g. f() calls f()). */
 #define PUPPET_MAX_CALL_DEPTH 256
@@ -2725,6 +2729,122 @@ static int match_type_alias(puppet_value_t *val, const char *base, puppet_env_t 
     bool m = value_matches_type_str(val, body->data.string.data, env);
     alias_depth--;
     return m ? 1 : 0;
+}
+
+/* ----------------------------------------------------------------------------
+ * Item 30 — per-tree resource policy.
+ *
+ * If <base_path>/.puppetc-policy.json exists, its "deprecated_resources"
+ * entries flag resource declarations by type + title (exact or POSIX-ERE
+ * pattern), e.g. apt::source['openvox7'] on a branch that targets OpenVox 8:
+ *
+ *   { "deprecated_resources": [
+ *       { "type": "apt::source", "title": "openvox7",
+ *         "reason": "this branch targets OpenVox 8 — use the openvox8 repo",
+ *         "level": "warning" } ] }
+ *
+ * "title_pattern" may be used instead of "title"; "level" is "warning"
+ * (default) or "error". The file is per-branch, so each env branch carries
+ * its own policy. Absent file = feature off. Checks run at declaration time
+ * (the resolved title), deduped to one diagnostic per type[title] per run.
+ * -------------------------------------------------------------------------- */
+static void puppet_policy_load_locked(puppet_env_t *env) {
+    puppet_program_state_t *prog = env->prog;
+    prog->policy_loaded = true;
+
+    if (!prog->loader || !prog->loader->base_path) return;
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/.puppetc-policy.json", prog->loader->base_path);
+    struct stat st;
+    if (stat(path, &st) != 0) return;  /* no policy file — feature off */
+
+    json_value_t *root = json_parse_file(path);
+    if (!root || !json_is_object(root)) {
+        if (root) json_value_destroy(root);
+        puppet_warn("Ignoring malformed policy file %s (not a JSON object)", path);
+        return;
+    }
+    json_value_t *arr = json_object_get(root, "deprecated_resources");
+    if (arr && json_is_array(arr)) {
+        size_t n = json_array_size(arr);
+        prog->policy_entries = puppet_calloc(n ? n : 1, sizeof(*prog->policy_entries));
+        for (size_t i = 0; i < n; i++) {
+            json_value_t *e = json_array_get(arr, i);
+            if (!e || !json_is_object(e)) continue;
+            const char *ty = json_get_string(json_object_get(e, "type"));
+            const char *ti = json_get_string(json_object_get(e, "title"));
+            const char *tp = json_get_string(json_object_get(e, "title_pattern"));
+            if (!ty || (!ti && !tp)) continue;  /* need a type and a title form */
+            struct puppet_policy_entry *pe =
+                &prog->policy_entries[prog->policy_entry_count++];
+            pe->type = puppet_strdup(ty);
+            pe->title = ti ? puppet_strdup(ti) : NULL;
+            pe->title_pattern = tp ? puppet_strdup(tp) : NULL;
+            const char *rs = json_get_string(json_object_get(e, "reason"));
+            pe->reason = rs ? puppet_strdup(rs) : NULL;
+            const char *lv = json_get_string(json_object_get(e, "level"));
+            pe->level_error = (lv && strcmp(lv, "error") == 0);
+        }
+    }
+    json_value_destroy(root);
+}
+
+static void puppet_policy_check_resource(puppet_env_t *env, const char *type,
+                                         const char *title, puppet_location_t loc) {
+    if (!env || !env->prog || !type || !title) return;
+    puppet_program_state_t *prog = env->prog;
+
+    if (!prog->policy_loaded) {
+        pthread_mutex_lock(&prog->reg_mutex);
+        if (!prog->policy_loaded) puppet_policy_load_locked(env);
+        pthread_mutex_unlock(&prog->reg_mutex);
+    }
+    if (prog->policy_entry_count == 0) return;
+
+    for (size_t i = 0; i < prog->policy_entry_count; i++) {
+        struct puppet_policy_entry *pe = &prog->policy_entries[i];
+        if (strcasecmp(pe->type, type) != 0) continue;
+        bool hit = false;
+        if (pe->title) {
+            hit = (strcmp(pe->title, title) == 0);
+        } else if (pe->title_pattern) {
+            regex_t rx;
+            if (puppet_regcomp(&rx, pe->title_pattern, REG_EXTENDED | REG_NOSUB) == 0) {
+                hit = (regexec(&rx, title, 0, NULL, 0) == 0);
+                regfree(&rx);
+            }
+        }
+        if (!hit) continue;
+
+        /* Dedup: one diagnostic per type[title] per run. */
+        char key[640];
+        snprintf(key, sizeof(key), "%s[%s]", type, title);
+        bool seen = false;
+        pthread_mutex_lock(&prog->reg_mutex);
+        for (size_t j = 0; j < prog->policy_warned_count && !seen; j++) {
+            if (strcmp(prog->policy_warned[j], key) == 0) seen = true;
+        }
+        if (!seen) {
+            if (prog->policy_warned_count == prog->policy_warned_cap) {
+                prog->policy_warned_cap = prog->policy_warned_cap ? prog->policy_warned_cap * 2 : 8;
+                prog->policy_warned = puppet_realloc(prog->policy_warned,
+                    prog->policy_warned_cap * sizeof(char *));
+            }
+            prog->policy_warned[prog->policy_warned_count++] = puppet_strdup(key);
+        }
+        pthread_mutex_unlock(&prog->reg_mutex);
+        if (seen) return;
+
+        const char *reason = pe->reason ? pe->reason : "deprecated by tree policy";
+        if (pe->level_error) {
+            puppet_error_at(loc, "Policy (.puppetc-policy.json): resource %s['%s'] "
+                            "is disallowed: %s", type, title, reason);
+        } else {
+            puppet_warning_at(loc, "Policy (.puppetc-policy.json): resource %s['%s'] "
+                              "is deprecated: %s", type, title, reason);
+        }
+        return;
+    }
 }
 
 puppet_value_t *puppet_eval_binop(puppet_binop_t op, puppet_value_t *left, puppet_value_t *right) {
@@ -4391,6 +4511,10 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         puppet_value_t *marker = puppet_value_create_bool(true);
                         puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);
 
+                        /* Item 30: per-tree resource policy (deprecated repos etc.) */
+                        puppet_policy_check_resource(env, stmt->data.resource.type.data,
+                                                     title_str, stmt->loc);
+
                         puppet_debug("Deferring defined type %s with title: %s",
                                     stmt->data.resource.type.data, title_str);
 
@@ -4518,6 +4642,10 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                         // Add to duplicate detection catalog
                         puppet_value_t *marker = puppet_value_create_bool(true);
                         puppet_hash_set(env->resource_catalog, resource_id, strlen(resource_id), marker);
+
+                        /* Item 30: per-tree resource policy (deprecated repos etc.) */
+                        puppet_policy_check_resource(env, stmt->data.resource.type.data,
+                                                     title_str, stmt->loc);
 
                         puppet_debug("  Title: %s", title_str);
 
