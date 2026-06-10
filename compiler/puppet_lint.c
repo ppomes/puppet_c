@@ -154,6 +154,10 @@ static const deprecated_func_t deprecated_functions[] = {
 typedef struct {
     const char *old_name;     /* without :: prefix */
     const char *replacement;
+    bool still_exists;        /* still populated under Facter 5/Puppet 8 —
+                                 migration is best practice, not breakage
+                                 (item 34 side note: puppetversion, clientcert,
+                                 clientversion) */
 } legacy_fact_t;
 
 static const legacy_fact_t legacy_facts[] = {
@@ -205,9 +209,9 @@ static const legacy_fact_t legacy_facts[] = {
     {"gid",                   "$facts['identity']['group']"},
 
     /* Puppet facts */
-    {"puppetversion",         "$facts['puppetversion']"},
-    {"clientcert",            "$facts['clientcert']"},
-    {"clientversion",         "$facts['clientversion']"},
+    {"puppetversion",         "$facts['puppetversion']", true},
+    {"clientcert",            "$facts['clientcert']", true},
+    {"clientversion",         "$facts['clientversion']", true},
     {"environment",           "$facts['environment']"},
 
     /* Path/location */
@@ -330,17 +334,19 @@ static void lint_check_variable(puppet_lint_result_t *r, const char *name,
 
     const char *pfx = explicit_topscope ? "$::" : "$";
 
-    /* Known legacy fact → suggest the structured replacement. */
+    /* Known legacy fact → suggest the structured replacement. Facts that are
+     * still populated under Facter 5/Puppet 8 (puppetversion, clientcert, …)
+     * get softer wording: migrating them is best practice, not breakage
+     * (item 34 side note). */
     for (const legacy_fact_t *f = legacy_facts; f->old_name; f++) {
         if (strcmp(fact_name, f->old_name) == 0) {
+            const char *fmt = f->still_exists
+                ? "%s%s still works under Puppet 8, but prefer %s"
+                : "%s%s is a legacy top-scope fact removed in Puppet 8, use %s";
             if (g_strict_facts)
-                lint_error(r, loc,
-                    "%s%s is a legacy top-scope fact removed in Puppet 8, use %s",
-                    pfx, fact_name, f->replacement);
+                lint_error(r, loc, fmt, pfx, fact_name, f->replacement);
             else
-                lint_warning(r, loc,
-                    "%s%s is a legacy top-scope fact removed in Puppet 8, use %s",
-                    pfx, fact_name, f->replacement);
+                lint_warning(r, loc, fmt, pfx, fact_name, f->replacement);
             return;
         }
     }

@@ -2077,9 +2077,18 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
              * left alone; only a chain whose intermediate vanished is flagged. */
             if (obj && obj->type == PUPPET_VALUE_UNDEF &&
                 expr->data.index.object->type == PUPPET_EXPR_INDEX) {
-                puppet_error_at(expr->loc,
-                                "Operator '[]' is not applicable to an Undef Value");
-                puppet_env_increment_error(env);
+                /* Item 34: in -a mode the top-level statements are first
+                 * executed once with NO node bound (a registration pre-pass;
+                 * $facts is undef there), then re-executed per node with the
+                 * real facts. Real Puppet has no such context — site.pp only
+                 * ever evaluates with facts present — so suppress the strict
+                 * error in that pre-pass; the per-node evaluation performs
+                 * the real check. puppet_error_at already counts the error —
+                 * no explicit increment (it double-counted; item 34 bug 2). */
+                if (!(env->execute_all_nodes && !env->current_node_certname)) {
+                    puppet_error_at(expr->loc,
+                                    "Operator '[]' is not applicable to an Undef Value");
+                }
                 puppet_value_destroy(obj);
                 puppet_value_destroy(key);
                 return puppet_value_create_undef();
