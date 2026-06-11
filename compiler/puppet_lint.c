@@ -212,7 +212,7 @@ static const legacy_fact_t legacy_facts[] = {
     {"puppetversion",         "$facts['puppetversion']", true},
     {"clientcert",            "$facts['clientcert']", true},
     {"clientversion",         "$facts['clientversion']", true},
-    {"environment",           "$facts['environment']"},
+    {"environment",           "$facts['environment']", true},
 
     /* Path/location */
     {"selinux",               "$facts['os']['selinux']['enabled']"},

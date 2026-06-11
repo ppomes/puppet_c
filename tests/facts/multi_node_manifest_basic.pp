@@ -2,8 +2,8 @@
 
 node "web01.example.com" {
   # This should use web01's facts
-  $my_hostname = $hostname
-  $my_os = $operatingsystem  
+  $my_hostname = $facts['hostname']
+  $my_os = $facts['operatingsystem']  
   $my_role = $role
   
   if $role == "webserver" {
@@ -13,8 +13,8 @@ node "web01.example.com" {
 
 node "db01.example.com" {
   # This should use db01's facts  
-  $my_hostname = $hostname
-  $my_os = $operatingsystem
+  $my_hostname = $facts['hostname']
+  $my_os = $facts['operatingsystem']
   $my_role = $role
   
   if $role == "database" {
@@ -24,8 +24,8 @@ node "db01.example.com" {
 
 node "default" {
   # This should use default facts
-  $my_hostname = $hostname
-  $my_os = $operatingsystem
+  $my_hostname = $facts['hostname']
+  $my_os = $facts['operatingsystem']
   $my_role = $role
   
   $service_type = "unknown"

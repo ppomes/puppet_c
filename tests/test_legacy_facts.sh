@@ -39,15 +39,18 @@ class need_fact {
 if $::osfamily == 'Debian' { include apt }
 PP
 out=$("$PUPPETC" -s "$F1" 2>&1)
-[ "$(warn_count "$out")" -eq 2 ] && echo "$out" | grep -qE 'Total errors: +0'
-check "fixture: exactly 2 fact warnings, 0 errors" $? "$out"
+# Item 37: the evaluated $::osfamily read now ALSO fails like real Puppet 8
+# ("Unknown variable"); the class body is never included, so its read only
+# lints. 2 warnings + 1 eval error.
+[ "$(warn_count "$out")" -eq 2 ] && echo "$out" | grep -qE "Unknown variable: 'osfamily'" && echo "$out" | grep -qE 'Total errors: +1'
+check "fixture: 2 fact warnings + 1 eval error (item 37)" $? "$out"
 echo "$out" | grep -qE "\\\$hostname is a legacy" && echo "$out" | grep -qE "\\\$::osfamily is a legacy"
 check "both bare \$hostname and \$::osfamily flagged, with suggestions" $? "$out"
 
 # 2) --puppet8-strict-facts turns the warnings into errors.
 out=$("$PUPPETC" -s --puppet8-strict-facts "$F1" 2>&1)
-echo "$out" | grep -qE 'Total errors: +2'
-check "--puppet8-strict-facts: 2 errors instead of warnings" $? "$out"
+echo "$out" | grep -qE 'Total errors: +3'
+check "--puppet8-strict-facts: lint errors + eval error (3 total)" $? "$out"
 
 # 3) Order-sensitivity: a read AFTER the assignment is NOT flagged (shadowed),
 #    a read BEFORE is. The fixture's first ${hostname} warns, second doesn't —

@@ -2,8 +2,8 @@
 # bound to top-level vars and resource declarations. State from a
 # previous node must not leak into the next compilation.
 
-# Top-level: depends on $hostname
-$jbossenv = $hostname ? {
+# Top-level: depends on $facts['hostname']
+$jbossenv = $facts['hostname'] ? {
   /^alpha/ => 'web',
   /^beta/  => 'db',
   /^gamma/ => 'cache',
@@ -20,7 +20,7 @@ $role_path = $role ? {
 
 class profile {
   notify { "profile-info":
-    message => "host=${hostname} jbossenv=${jbossenv} role_path=${role_path} nodepath=${nodepath}",
+    message => "host=${facts['hostname']} jbossenv=${jbossenv} role_path=${role_path} nodepath=${nodepath}",
   }
 }
 

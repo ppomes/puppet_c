@@ -9,6 +9,7 @@
 #include "puppet_json_parser.h"
 #include "puppet_json.h"
 #include "puppet_json_common.h"
+#include "puppet_lint.h"   /* item 37: legacy-fact severity */
 #include "puppetdb.h"
 #include "facter.h"
 #include <stdlib.h>
@@ -2274,7 +2275,19 @@ puppet_value_t *puppet_eval_variable(const char *name, puppet_location_t loc, pu
          * Also suppress in a truthiness context (`if $x`, `unless $x`,
          * `$x and $y`, `! $x`): Puppet semantics treat undef as false
          * there, so it's not a real bug — just a defensive check. */
-        if (!env->defer_node_execution && env->in_truthiness_check == 0) {
+        const char *lf = name;
+        if (strncmp(lf, "::", 2) == 0) lf += 2;
+        bool lf_survives = false;
+        bool lf_legacy = !strchr(lf, ':') &&
+            puppet_lint_lookup_legacy_fact_ex(lf, &lf_survives) && !lf_survives;
+        if (lf_legacy && !env->defer_node_execution &&
+            !(env->execute_all_nodes && !env->current_node_certname)) {
+            /* Item 37: real Puppet 8 raises "Unknown variable" for a bare
+             * removed-legacy fact read (strict_variables) — the catalog
+             * fails, so the compile must too. Truthiness contexts are NOT
+             * exempt: `if $lsbdistcodename` also raises on the real server. */
+            puppet_error_at(loc, "Unknown variable: '%s'", lf);
+        } else if (!env->defer_node_execution && env->in_truthiness_check == 0) {
             puppet_warning_at(loc, "Undefined variable: %s", name);
         }
         return puppet_value_create_undef();
@@ -6843,6 +6856,18 @@ puppet_value_t *puppet_variable_lookup_chain(puppet_env_t *env, const char *name
         if (strcmp(lookup_name, "facts") == 0) {
             value = puppet_facts_get_all_as_hash(env);
             if (value) return value;
+        }
+        /* Item 37: Puppet 8 no longer binds removed legacy facts as
+         * variables — a bare $lsbdistcodename read fails on the real
+         * server even when Facter still emits the fact, so the fallback
+         * must not resolve them. Survivors (puppetversion, clientcert,
+         * environment, ...) keep resolving. Hiera %{...} interpolation is
+         * exempt: its legacy-variable hierarchy levels just go empty. */
+        if (!env->in_hiera_interpolation) {
+            bool survives = false;
+            if (puppet_lint_lookup_legacy_fact_ex(lookup_name, &survives) && !survives) {
+                return NULL;
+            }
         }
         // Direct fact access (e.g., $hostname, $operatingsystem)
         value = puppet_facts_get(env, lookup_name);

@@ -2,22 +2,22 @@
 # This manifest uses facts to make decisions about configuration
 
 # Access basic facts directly
-$server_hostname = $hostname
-$os_name = $operatingsystem
-$os_version = $operatingsystemrelease
+$server_hostname = $facts['hostname']
+$os_name = $facts['operatingsystem']
+$os_version = $facts['operatingsystemrelease']
 $server_arch = $architecture
 
 # Use facts in conditional logic for OS-specific configuration
 class apache($port = 80) {
   # Use hostname in configuration
-  $server_name = $hostname
-  $config_file = "/etc/apache2/sites-enabled/${hostname}.conf"
+  $server_name = $facts['hostname']
+  $config_file = "/etc/apache2/sites-enabled/${facts['hostname']}.conf"
   
   # OS-specific package names
-  if $operatingsystem == "Ubuntu" {
+  if $facts['operatingsystem'] == "Ubuntu" {
     $package_name = "apache2"
     $service_name = "apache2"
-  } elsif $operatingsystem == "CentOS" {
+  } elsif $facts['operatingsystem'] == "CentOS" {
     $package_name = "httpd"
     $service_name = "httpd"
   } else {
@@ -100,7 +100,7 @@ if $processor_count > 2 {
 }
 
 # Summary variables showing fact integration
-$deployment_summary = "Deploying to ${hostname} (${operatingsystem} ${operatingsystemrelease}) in ${environment} environment"
+$deployment_summary = "Deploying to ${facts['hostname']} (${facts['operatingsystem']} ${facts['operatingsystemrelease']}) in ${environment} environment"
 $network_summary = "Primary interface: ${primary_ip}/${primary_netmask} on ${networking.hostname}"
 $resource_summary = "Resources: ${processor_count} CPUs, ${memory.system.total} RAM"
 

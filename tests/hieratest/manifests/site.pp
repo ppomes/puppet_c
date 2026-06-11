@@ -1,5 +1,5 @@
 # Top-level $env drives the hiera %{::env} interpolation.
-$env = $hostname ? {
+$env = $facts['hostname'] ? {
   /^prod/ => 'prod',
   default => 'global',
 }

@@ -21,7 +21,7 @@ node 'web01' {
   file { 'hosts-file':
     ensure  => present,
     path    => '/etc/hosts',
-    content => "127.0.0.1 localhost ${hostname}",
+    content => "127.0.0.1 localhost ${facts['hostname']}",
     mode    => '0644',
   }
 }

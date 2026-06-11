@@ -6,6 +6,7 @@
 #include "puppet_loader.h"
 #include "puppet_lint.h"
 #include "puppet_hiera.h"
+#include "puppet_stdlib.h"   /* item 37: puppet_get_log_env for count routing */
 #include "puppet_ts_parser.h"
 #include "puppet_memory.h"
 #include "puppet_interpreter.h"
@@ -479,7 +480,17 @@ puppet_program_t *puppet_loader_load_manifest(puppet_loader_t *loader,
             is_entry_site = (strcmp(file_path, site_path) == 0);
         }
         if (!is_entry_site) {
-            puppet_lint_legacy_facts(program);
+            puppet_lint_result_t lr = puppet_lint_legacy_facts(program);
+            /* Item 37 bug 2: these diagnostics printed but were never
+             * counted — fold them into the per-thread log env so the run
+             * summary reflects them (thread-correct under -P, where each
+             * worker's env aggregates into the final totals). */
+            puppet_env_t *log_env = puppet_get_log_env();
+            if (log_env && (lr.errors || lr.warnings)) {
+                log_env->errors_count += lr.errors;
+                log_env->warnings_count += lr.warnings;
+                if (lr.errors) log_env->current_node_failed = true;
+            }
         }
     }
 

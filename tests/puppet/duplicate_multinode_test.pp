@@ -10,7 +10,7 @@ node 'web01' {
     ensure => absent,
   }
   
-  file { $hostname:
+  file { $facts['hostname']:
     ensure => present,
   }
 }
@@ -21,7 +21,7 @@ node 'web02' {
     ensure => present,
   }
   
-  file { $hostname:
+  file { $facts['hostname']:
     ensure => present,
   }
 }
