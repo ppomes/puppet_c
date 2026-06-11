@@ -69,6 +69,43 @@ ns=$(echo "$strict" | grep -cE '\[ERROR\].*(raises "Undefined variable"|lookupva
 [ "$ns" -eq 3 ]
 check "--strict-erb escalates all 3 to errors (got $ns)" $?
 
+# --- Item 35: unqualified legacy reads (no ::) are flagged AND fail at eval --
+mkdir -p "$TMP/mods/m35/templates" "$TMP/manifests"
+cat > "$TMP/mods/m35/templates/u.erb" <<'ERB'
+ip=<%= scope['ipaddress'] %>
+host=<%= scope['hostname'] %>
+ERB
+printf 'node default { $x = template(%s) }\n' "'m35/u.erb'" > "$TMP/site35.pp"
+printf 'facts:\n  n.example.com:\n    hostname: n\n    ipaddress: 1.2.3.4\n' > "$TMP/facts35.yaml"
+out=$("$PUPPETC" -e -s -n n.example.com -f "$TMP/facts35.yaml" -m "$TMP/mods" "$TMP/site35.pp" 2>&1)
+
+# 6) Both unqualified reads flagged by the lint.
+n=$(echo "$out" | grep -cE "ERB scope\['(ipaddress|hostname)'\] raises")
+[ "$n" -eq 2 ]
+check "item 35: scope['ipaddress']/scope['hostname'] (no ::) flagged (got $n)" $? "$out"
+
+# 7) Evaluation raises like real Puppet 8 even though the facts hold values.
+echo "$out" | grep -qE "Undefined variable '(ipaddress|hostname)'"
+check "item 35: unqualified legacy read raises at evaluation" $? "$out"
+
+# 8) A genuine manifest variable of the same name still resolves.
+cat > "$TMP/mods/m35/templates/v.erb" <<'ERB'
+host=<%= scope['hostname'] %>
+ERB
+printf 'node default { $hostname = "fromvar"\n notice("G=${template(%s)}") }\n' "'m35/v.erb'" > "$TMP/site35b.pp"
+out=$("$PUPPETC" -e -n n.example.com -f "$TMP/facts35.yaml" -m "$TMP/mods" "$TMP/site35b.pp" 2>&1)
+echo "$out" | grep -qE 'G=host=fromvar'
+check "item 35: genuine \$hostname manifest variable still resolves" $? "$out"
+
+# 9) lookupvar of a legacy name -> nil (defensive API); survivors don't raise.
+cat > "$TMP/mods/m35/templates/w.erb" <<'ERB'
+lv=<%= scope.lookupvar('hostname').nil? ? 'absent' : 'present' %> pv_ok=<%= scope['puppetversion'].nil? ? 'yes' : 'yes' %>
+ERB
+printf 'node default { notice("W=${template(%s)}") }\n' "'m35/w.erb'" > "$TMP/site35c.pp"
+out=$("$PUPPETC" -e -n n.example.com -f "$TMP/facts35.yaml" -m "$TMP/mods" "$TMP/site35c.pp" 2>&1)
+echo "$out" | grep -qE 'W=lv=absent pv_ok=yes' && echo "$out" | grep -qv "Undefined variable 'puppetversion'"
+check "item 35: lookupvar(legacy)->nil; survivor puppetversion never raises" $? "$out"
+
 echo
 echo "Results: $PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ]

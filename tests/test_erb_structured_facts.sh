@@ -40,7 +40,7 @@ mount = <%= m %>
 <% scope['memorysize'].gsub(/x/, '') -%>
 <% scope['facts']['interfaces'].split(',') -%>
 <% scope['blockdevices'].to_a -%>
-<% scope['hostname'].split('.') -%>
+<% scope['rackrow'].split('.') -%>
 <% scope['facts']['networking']['mtu'].to_s -%>
 ERB
 cat > "$TMP/site.pp" <<'PP'
@@ -77,9 +77,9 @@ check "nested scope['facts']['interfaces'].split flagged" $?
 echo "$out" | grep -qE "ERB scope\['blockdevices'\]\.to_a.* is a Hash"
 check "blockdevices.to_a flagged" $?
 
-# 7) A non-changed fact (.split on hostname) is NOT flagged (no false positive).
-echo "$out" | grep -qvE "scope\['hostname'\]"
-check "hostname.split not flagged (unchanged fact)" $?
+# 7) A non-changed, non-legacy fact (.split on rackrow) is NOT flagged.
+echo "$out" | grep -qvE "scope\['rackrow'\]"
+check "rackrow.split not flagged (unchanged fact)" $?
 
 # 8) A nested non-changed key (mtu.to_s) is NOT flagged.
 echo "$out" | grep -qvE "scope\['mtu'\]|'mtu' is"

@@ -2184,6 +2184,41 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
                 puppet_value_t *val = puppet_eval_expr(expr->data.hash_entries.values[i], env);
 
                 if (key && key->type == PUPPET_VALUE_STRING && val) {
+                    /* Item 36: real Puppet 8 rejects a key declared more than
+                     * once in a hash LITERAL at evaluation — including keys
+                     * that only collide after interpolation
+                     * ("a@10.2.${vlan}.%" twice with the same $vlan). Two
+                     * exclusions: when both colliding key expressions are
+                     * plain literals the parse-time lint already reported it
+                     * (item 12 — don't double-report); and the factless -a
+                     * registration pre-pass is skipped (item 34 — undef
+                     * interpolations collapse distinct templates to equal
+                     * strings there, a context real Puppet never has). */
+                    if (puppet_hash_get(result->data.hash,
+                                        key->data.string.data, key->data.string.len) &&
+                        !(env->execute_all_nodes && !env->current_node_certname)) {
+                        bool both_literal = false;
+                        puppet_expr_t *ki = expr->data.hash_entries.keys[i];
+                        if (ki && ki->type == PUPPET_EXPR_VALUE) {
+                            for (size_t j = 0; j < i && !both_literal; j++) {
+                                puppet_expr_t *kj = expr->data.hash_entries.keys[j];
+                                if (kj && kj->type == PUPPET_EXPR_VALUE &&
+                                    kj->data.value &&
+                                    kj->data.value->type == PUPPET_VALUE_STRING &&
+                                    kj->data.value->data.string.len == key->data.string.len &&
+                                    memcmp(kj->data.value->data.string.data,
+                                           key->data.string.data,
+                                           key->data.string.len) == 0) {
+                                    both_literal = true;
+                                }
+                            }
+                        }
+                        if (!both_literal) {
+                            puppet_error_at(expr->loc,
+                                "The key '%s' is declared more than once",
+                                key->data.string.data);
+                        }
+                    }
                     puppet_hash_set(result->data.hash,
                                    key->data.string.data,
                                    key->data.string.len,
@@ -6030,17 +6065,11 @@ static void puppet_exec_node_for_certname(puppet_stmt_t *node_stmt, const char *
     puppet_scope_t *saved_node_scope = env->node_scope;
     env->node_scope = node_scope;
 
-    /* Set $hostname from certname only if no hostname fact exists.
-     * Facts take precedence since $hostname fact is the short hostname,
-     * while certname is typically the FQDN.
-     */
-    puppet_value_t *hostname_fact = puppet_facts_get(env, "hostname");
-    if (!hostname_fact) {
-        puppet_value_t *hostname_value = puppet_value_create_string(certname, strlen(certname));
-        puppet_scope_set_var(node_scope, "hostname", hostname_value);
-    } else {
-        puppet_value_destroy(hostname_fact);
-    }
+    /* Item 35: the old Puppet-7 shim that seeded $hostname into the node
+     * scope (from the certname when the fact wasn't resolvable yet) is gone.
+     * It created a "real" variable that leaked into ERB scopes, defeating
+     * Puppet 8's removed-legacy-fact semantics. Manifest reads of $hostname
+     * still resolve through the lookup chain's facts fallback. */
 
     /* Re-run site.pp top-level $var = ... assignments now that node
      * facts ($hostname, $fqdn, $facts[...]) are bound in scope.
@@ -6294,14 +6323,8 @@ void puppet_exec_node(puppet_stmt_t *node_stmt, puppet_env_t *env) {
         puppet_scope_t *node_scope = puppet_scope_create(env->current_scope, node_name);
         puppet_scope_push(env, node_scope);
 
-        /* Set $hostname from node name only if no hostname fact exists */
-        puppet_value_t *hostname_fact = puppet_facts_get(env, "hostname");
-        if (!hostname_fact) {
-            puppet_value_t *hostname_value = puppet_value_create_string(node_name, strlen(node_name));
-            puppet_scope_set_var(node_scope, "hostname", hostname_value);
-        } else {
-            puppet_value_destroy(hostname_fact);
-        }
+        /* Item 35: $hostname node-scope seeding removed — see the matching
+         * comment in puppet_exec_node_for_certname. */
 
         /* Execute node body */
         puppet_exec_stmt_list(&node_stmt->data.node.body, env);
@@ -7482,6 +7505,28 @@ const char *puppet_facts_db_get_node_name(puppet_facts_db_t *facts_db, size_t in
     return facts_db->nodes[index].certname;
 }
 
+/* Resolve the facts-db node index for the current evaluation context.
+ * Tries the per-thread certname, then the shared current_node; when both
+ * miss and the DB holds exactly ONE node (single-node JSON/--node compiles
+ * where the certname spelling differs from the facts key), that node is
+ * unambiguous — use it. Never triggers under -a/-P (node_count > 1).
+ * Returns -1 when no node can be resolved. */
+static long puppet_facts_db_resolve_node(puppet_env_t *env) {
+    if (!env || !env->prog || !env->prog->facts_db) return -1;
+    puppet_facts_db_t *db = env->prog->facts_db;
+    const char *names[2] = { env->current_node_certname, db->current_node };
+    for (int i = 0; i < 2; i++) {
+        if (!names[i]) continue;
+        puppet_value_t *iv = puppet_hash_get(db->node_index, names[i], strlen(names[i]));
+        if (iv && iv->type == PUPPET_VALUE_NUMBER &&
+            (size_t)iv->data.number < db->node_count) {
+            return (long)iv->data.number;
+        }
+    }
+    if (db->node_count == 1) return 0;
+    return -1;
+}
+
 puppet_value_t *puppet_facts_get(puppet_env_t *env, const char *fact_name) {
     if (!fact_name) {
         return NULL;
@@ -7498,22 +7543,11 @@ puppet_value_t *puppet_facts_get(puppet_env_t *env, const char *fact_name) {
 
     puppet_facts_db_t *facts_db = env->prog->facts_db;
 
-    /* Use env->current_node_certname for thread-safe access, fall back to facts_db->current_node */
-    const char *certname = env->current_node_certname ? env->current_node_certname : facts_db->current_node;
-    if (!certname) {
+    long nidx = puppet_facts_db_resolve_node(env);
+    if (nidx < 0) {
         return NULL;
     }
-
-    // Find current node by index
-    puppet_value_t *index_value = puppet_hash_get(facts_db->node_index, certname, strlen(certname));
-    if (!index_value || index_value->type != PUPPET_VALUE_NUMBER) {
-        return NULL;
-    }
-
-    size_t index = (size_t)index_value->data.number;
-    if (index >= facts_db->node_count) {
-        return NULL;
-    }
+    size_t index = (size_t)nidx;
 
     puppet_node_facts_t *node = &facts_db->nodes[index];
 
@@ -7537,17 +7571,9 @@ puppet_value_t *puppet_facts_get_all_as_hash(puppet_env_t *env) {
 
     puppet_facts_db_t *facts_db = env->prog->facts_db;
 
-    /* Use env->current_node_certname for thread-safe access, fall back to facts_db->current_node */
-    const char *certname = env->current_node_certname ? env->current_node_certname : facts_db->current_node;
-    if (!certname) return NULL;
-
-    /* Find current node */
-    puppet_value_t *index_value = puppet_hash_get(facts_db->node_index,
-        certname, strlen(certname));
-    if (!index_value || index_value->type != PUPPET_VALUE_NUMBER) return NULL;
-
-    size_t index = (size_t)index_value->data.number;
-    if (index >= facts_db->node_count) return NULL;
+    long nidx = puppet_facts_db_resolve_node(env);
+    if (nidx < 0) return NULL;
+    size_t index = (size_t)nidx;
 
     puppet_node_facts_t *node = &facts_db->nodes[index];
     if (!node->facts) return NULL;

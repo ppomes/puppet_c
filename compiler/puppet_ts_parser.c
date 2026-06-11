@@ -684,8 +684,18 @@ static puppet_expr_t *convert_hash(TSNode node, const char *source) {
                 temp_keys[idx] = convert_expression(key_node, source);
                 temp_vals[idx] = convert_expression(val_node, source);
 
-                /* Check if value is a literal */
+                /* Check if value is a literal. The KEY must be a literal
+                 * string too: the collapse loop below can only insert literal
+                 * string keys, so an interpolated key ("a${x}") in the
+                 * fast path would be silently DROPPED from the hash (item 36
+                 * found this — entries vanished at runtime). Keep such hashes
+                 * in the dynamic PUPPET_EXPR_HASH form. */
                 if (temp_vals[idx] && temp_vals[idx]->type != PUPPET_EXPR_VALUE) {
+                    all_literals = false;
+                }
+                if (!temp_keys[idx] || temp_keys[idx]->type != PUPPET_EXPR_VALUE ||
+                    !temp_keys[idx]->data.value ||
+                    temp_keys[idx]->data.value->type != PUPPET_VALUE_STRING) {
                     all_literals = false;
                 }
                 idx++;

@@ -49,6 +49,21 @@ void puppet_lint_set_strict_facts(bool strict);
 const char *puppet_lint_lookup_legacy_fact(const char *name);
 
 /**
+ * @brief Like puppet_lint_lookup_legacy_fact, additionally reporting whether
+ *        the fact still exists under Facter 5/Puppet 8 (puppetversion,
+ *        clientcert, clientversion — flagged softly, never treated as
+ *        removed at evaluation).
+ */
+const char *puppet_lint_lookup_legacy_fact_ex(const char *name, bool *still_exists);
+
+/**
+ * @brief Iterate the legacy-fact table: returns the name at idx (NULL past
+ *        the end). still_exists (if non-NULL) reports the survivor flag.
+ *        Used to build the ERB renderer's removed-facts set (item 35).
+ */
+const char *puppet_lint_legacy_fact_at(size_t idx, bool *still_exists);
+
+/**
  * @brief Facts-only lint walk (items 13/27/28): flags legacy top-scope fact
  *        reads (bare, ::-prefixed, in param defaults and interpolations) and
  *        nothing else. Run once per lazily-loaded module manifest, which the

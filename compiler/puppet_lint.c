@@ -225,11 +225,26 @@ static const legacy_fact_t legacy_facts[] = {
 };
 
 const char *puppet_lint_lookup_legacy_fact(const char *name) {
+    return puppet_lint_lookup_legacy_fact_ex(name, NULL);
+}
+
+const char *puppet_lint_lookup_legacy_fact_ex(const char *name, bool *still_exists) {
+    if (still_exists) *still_exists = false;
     if (!name || !*name) return NULL;
     for (const legacy_fact_t *f = legacy_facts; f->old_name; f++) {
-        if (strcmp(name, f->old_name) == 0) return f->replacement;
+        if (strcmp(name, f->old_name) == 0) {
+            if (still_exists) *still_exists = f->still_exists;
+            return f->replacement;
+        }
     }
     return NULL;
+}
+
+const char *puppet_lint_legacy_fact_at(size_t idx, bool *still_exists) {
+    size_t n = sizeof(legacy_facts) / sizeof(legacy_facts[0]) - 1;  /* minus sentinel */
+    if (idx >= n) return NULL;
+    if (still_exists) *still_exists = legacy_facts[idx].still_exists;
+    return legacy_facts[idx].old_name;
 }
 
 /* ----------------------------------------------------------------------------
@@ -460,8 +475,11 @@ static void lint_expr(puppet_lint_result_t *r, puppet_expr_t *expr) {
                  * hash is a fatal error (it silently overwrote in Puppet 7).
                  * Only literal string keys can be proven at compile time;
                  * variable/dynamic keys are left to runtime. */
-                if (!g_facts_only &&
-                    ki && ki->type == PUPPET_EXPR_VALUE && ki->data.value &&
+                /* Item 36: this check ALSO runs in the facts-only module
+                 * walk — the live trial proved real Puppet 8 fails language
+                 * validation on duplicate literal keys in module files too
+                 * (percona/env/preprod/*.pp), so it is not optional there. */
+                if (ki && ki->type == PUPPET_EXPR_VALUE && ki->data.value &&
                     ki->data.value->type == PUPPET_VALUE_STRING) {
                     for (size_t j = 0; j < i; j++) {
                         puppet_expr_t *kj = expr->data.hash_entries.keys[j];

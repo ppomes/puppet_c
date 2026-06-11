@@ -92,6 +92,55 @@ check "distinct / variable / case-distinct keys: no false positives" $? "$out"
 [ "$?" -ne 0 ]
 check "duplicate key makes the compile fail (non-zero exit)" $?
 
+# --- Item 36: evaluation-time detection ------------------------------------
+
+# 7) Keys that only collide AFTER interpolation error at evaluation.
+F7="$TMP/interp.pp"
+cat > "$F7" <<'PP'
+node default {
+  $vlan = '122'
+  $h = {
+    "ituser@10.2.${vlan}.%/db" => 1,
+    "ituser@10.2.122.%/db"     => 1,
+  }
+  notice('done')
+}
+PP
+out=$("$PUPPETC" -s -e "$F7" 2>&1)
+echo "$out" | grep -qE "The key 'ituser@10.2.122.%/db' is declared more than once"
+check "item 36: post-interpolation duplicate detected at evaluation" $? "$out"
+
+# 8) Distinct interpolations do NOT error, and interpolated-key entries are
+#    no longer silently dropped from all-literal-value hashes.
+F8="$TMP/distinct.pp"
+cat > "$F8" <<'PP'
+node default {
+  $a = 'x'
+  $h = { "k${a}" => 'v', "j${a}" => 'w' }
+  notice("kept=${h['kx']}${h['jx']}")
+}
+PP
+out=$("$PUPPETC" -e "$F8" 2>&1)
+echo "$out" | grep -qE 'kept=vw' && echo "$out" | grep -qv 'declared more than once'
+check "item 36: distinct interpolated keys kept, no false positive" $? "$out"
+
+# 9) Duplicate literal keys in a MODULE file (lazily loaded) are detected —
+#    real Puppet 8 fails language validation on module files too.
+mkdir -p "$TMP/modules/dup36/manifests"
+cat > "$TMP/modules/dup36/manifests/init.pp" <<'PP'
+class dup36 {
+  $users = {
+    'heartbeat@host.preprod' => 1,
+    'heartbeat@host.preprod' => 1,
+  }
+}
+PP
+F9="$TMP/site36.pp"
+printf 'node default { include dup36 }\n' > "$F9"
+out=$("$PUPPETC" -s -m "$TMP/modules" "$F9" 2>&1)
+echo "$out" | grep -qE "key 'heartbeat@host.preprod' is declared more than once"
+check "item 36: duplicate literal key in module file detected" $? "$out"
+
 echo
 echo "Results: $PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ]

@@ -12,6 +12,7 @@
  */
 
 #include "puppet_erb_native.h"
+#include "puppet_lint.h"   /* item 35: legacy-fact table */
 #include "puppet_memory.h"
 #include "puppet_stdlib.h"
 
@@ -544,6 +545,26 @@ static puppet_value_t *eval_expr(expr_node_t *e, puppet_env_t *env, eval_ctx_t *
         }
         case EXPR_VAR:
         case EXPR_SCOPE_LOOKUP: {
+            /* Item 35: scope['hostname'] / scope.lookupvar('hostname') (with
+             * or without ::) must behave like Puppet 8, which no longer binds
+             * removed legacy facts as variables — but our lookup chain's fact
+             * fallback WOULD find them. Abort to the Ruby renderer, whose
+             * PuppetScope is the arbiter (raises for scope[], nil for
+             * lookupvar, and still resolves a genuine manifest variable of
+             * the same name). Survivors (puppetversion, ...) resolve here. */
+            if (e->kind == EXPR_SCOPE_LOOKUP) {
+                const char *n = e->str;
+                if (n[0] == ':' && n[1] == ':') n += 2;
+                if (!strchr(n, ':') &&
+                    strcmp(n, "facts") != 0 && strcmp(n, "trusted") != 0 &&
+                    strcmp(n, "server_facts") != 0 && strcmp(n, "environment") != 0) {
+                    bool survives = false;
+                    if (puppet_lint_lookup_legacy_fact_ex(n, &survives) && !survives) {
+                        ctx->strict_miss = true;
+                        return NULL;
+                    }
+                }
+            }
             puppet_value_t *v = puppet_variable_lookup_chain(env, e->str);
             if (v) return v;
             /* Fall back to facts (puppet_facts_get returns a fresh value

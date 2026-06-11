@@ -131,13 +131,16 @@ puppet_ruby_context_t *puppet_ruby_init(void) {
         "  def [](name)\n"
         "    # Puppet 8 strict resolver: an undefined CLASS-QUALIFIED variable\n"
         "    # raises instead of returning nil, so even a defensive\n"
-        "    # `if scope[X]` crashes (item 23). Unqualified names keep the\n"
-        "    # forgiving nil (strict_variables is off by default for those).\n"
+        "    # `if scope[X]` crashes (item 23). Removed legacy top-scope facts\n"
+        "    # ('hostname', 'ipaddress', ... — with or without ::) also raise:\n"
+        "    # Puppet 8 no longer binds them as variables (item 35). Other\n"
+        "    # unqualified names keep the forgiving nil.\n"
         "    clean = name.start_with?('::') ? name.sub(/^::/, '') : name\n"
         "    return @vars[clean] if @vars.key?(clean)\n"
         "    safe_name = clean.gsub('::', '__')\n"
         "    return @vars[safe_name] if @vars.key?(safe_name)\n"
-        "    if clean.include?('::')\n"
+        "    if clean.include?('::') ||\n"
+        "       (defined?(LEGACY_FACTS) && LEGACY_FACTS.key?(clean))\n"
         "      raise NameError, \"Undefined variable '#{name}'\"\n"
         "    end\n"
         "    nil\n"
@@ -207,6 +210,31 @@ puppet_ruby_context_t *puppet_ruby_init(void) {
         &state);
     if (state != 0) {
         printf("Warning: Failed to define PuppetScope class (state=%d)\n", state);
+    }
+
+    /* Item 35 — inject the removed-legacy-fact set (survivors like
+     * puppetversion/clientcert excluded). PuppetScope#[] raises "Undefined
+     * variable" for these names, mirroring Puppet 8, which no longer binds
+     * legacy top-scope facts as variables. */
+    {
+        char legacy_buf[4096];
+        size_t off = 0;
+        off += snprintf(legacy_buf + off, sizeof(legacy_buf) - off,
+                        "class PuppetScope; LEGACY_FACTS = {");
+        bool survives = false;
+        for (size_t i = 0; ; i++) {
+            const char *nm = puppet_lint_legacy_fact_at(i, &survives);
+            if (!nm) break;
+            if (survives) continue;
+            if (off + strlen(nm) + 16 >= sizeof(legacy_buf)) break;
+            off += snprintf(legacy_buf + off, sizeof(legacy_buf) - off,
+                            "'%s'=>true,", nm);
+        }
+        snprintf(legacy_buf + off, sizeof(legacy_buf) - off, "}.freeze; end");
+        (void)rb_eval_string_protect(legacy_buf, &state);
+        if (state != 0) {
+            printf("Warning: Failed to define LEGACY_FACTS (state=%d)\n", state);
+        }
     }
 
     ctx->initialized = 1;
@@ -459,18 +487,36 @@ static void puppet_export_env_to_ruby(puppet_env_t *env, puppet_ruby_context_t *
                                           strlen(env->prog->facts_db->current_node));
         }
     }
-    if (node_lookup) {
-        if (node_lookup->type == PUPPET_VALUE_NUMBER) {
-            size_t node_idx = (size_t)node_lookup->data.number;
+    /* Item 35/31: single-node facts DBs (JSON --node compiles) may key the
+     * node under a spelling neither certname source matches; with exactly
+     * one node it is unambiguous. Mirrors puppet_facts_db_resolve_node. */
+    bool single_node_fallback =
+        (!node_lookup || node_lookup->type != PUPPET_VALUE_NUMBER) &&
+        env->prog->facts_db && env->prog->facts_db->node_count == 1;
+    if (node_lookup || single_node_fallback) {
+        if (single_node_fallback ||
+            (node_lookup && node_lookup->type == PUPPET_VALUE_NUMBER)) {
+            size_t node_idx = single_node_fallback ? 0
+                              : (size_t)node_lookup->data.number;
             if (node_idx < env->prog->facts_db->node_count) {
                 puppet_node_facts_t *node_facts = &env->prog->facts_db->nodes[node_idx];
                 
-                // Export all facts as individual @variables (legacy
-                // top-level fact access: @fqdn, @hostname, ...).
+                // Export facts as individual @variables — EXCEPT removed
+                // legacy top-scope facts (item 35): Puppet 8 no longer binds
+                // @hostname / scope['hostname'] etc. even when Facter still
+                // emits the fact, so exporting them here made templates render
+                // values the real puppetserver raises on. Survivors
+                // (puppetversion, clientcert, ...) stay exported; genuine
+                // manifest variables are exported by the scope loop above.
                 for (size_t i = 0; i < node_facts->facts->bucket_count; i++) {
                     puppet_hash_entry_t *entry = node_facts->facts->buckets[i];
                     while (entry) {
-                        puppet_set_ruby_variable(entry->key.data, entry->value, ruby_ctx);
+                        bool survives = false;
+                        const char *legacy =
+                            puppet_lint_lookup_legacy_fact_ex(entry->key.data, &survives);
+                        if (!legacy || survives) {
+                            puppet_set_ruby_variable(entry->key.data, entry->value, ruby_ctx);
+                        }
                         entry = entry->next;
                     }
                 }
@@ -923,10 +969,11 @@ static void erb_warn_qualified_scope_facts(const char *content, const char *temp
                 is_lookupvar = true;
                 open = after + 11;
             }
-            if (open && (open[0] == '\'' || open[0] == '"') &&
-                open[1] == ':' && open[2] == ':') {
+            if (open && (open[0] == '\'' || open[0] == '"')) {
                 char quote = open[0];
-                const char *k = open + 3;     /* past quote and :: */
+                const char *k = open + 1;
+                bool qualified = false;
+                if (k[0] == ':' && k[1] == ':') { k += 2; qualified = true; }  /* item 35: :: optional */
                 const char *e = k;
                 while (*e && *e != quote) e++;
                 size_t klen = (size_t)(e - k);
@@ -934,20 +981,24 @@ static void erb_warn_qualified_scope_facts(const char *content, const char *temp
                 if (*e == quote && klen > 0 && klen < sizeof(name)) {
                     memcpy(name, k, klen);
                     name[klen] = '\0';
+                    bool survives = false;
                     const char *repl = strchr(name, ':') ? NULL
                                        : (erb_fact_name_is_exempt(name) ? NULL
-                                          : puppet_lint_lookup_legacy_fact(name));
-                    if (repl) {
+                                          : puppet_lint_lookup_legacy_fact_ex(name, &survives));
+                    /* puppetversion/clientcert/... still exist as variables
+                     * under Puppet 8 — never claim they raise (item 34/35). */
+                    if (repl && !survives) {
                         char sugg[256];
                         erb_print_scope_replacement(sugg, sizeof(sugg), repl);
                         puppet_location_t loc = { template_name, line, 0 };
+                        const char *pfx2 = qualified ? "::" : "";
                         const char *fmt = is_lookupvar
-                            ? "ERB scope.lookupvar('::%s'): lookupvar is also strict under Puppet 8 "
+                            ? "ERB scope.lookupvar('%s%s'): lookupvar is also strict under Puppet 8 "
                               "and raises on the removed fact; use %s"
-                            : "ERB scope['::%s'] raises \"Undefined variable\" under Puppet 8 "
+                            : "ERB scope['%s%s'] raises \"Undefined variable\" under Puppet 8 "
                               "(legacy facts are gone); use %s";
-                        if (strict) puppet_error_at(loc, fmt, name, sugg);
-                        else        puppet_warning_at(loc, fmt, name, sugg);
+                        if (strict) puppet_error_at(loc, fmt, pfx2, name, sugg);
+                        else        puppet_warning_at(loc, fmt, pfx2, name, sugg);
                     }
                     p = e + 1;
                     continue;
