@@ -106,6 +106,37 @@ out=$("$PUPPETC" -e -n n.example.com -f "$TMP/facts35.yaml" -m "$TMP/mods" "$TMP
 echo "$out" | grep -qE 'W=lv=absent pv_ok=yes' && echo "$out" | grep -qv "Undefined variable 'puppetversion'"
 check "item 35: lookupvar(legacy)->nil; survivor puppetversion never raises" $? "$out"
 
+# --- Item 38: params/locals shadow the @ivar legacy-fact lint ---------------
+mkdir -p "$TMP/mods/m38/manifests" "$TMP/mods/m38/templates"
+printf 'gid = <%%= @gid %%>\n' > "$TMP/mods/m38/templates/t.erb"
+cat > "$TMP/mods/m38/manifests/init.pp" <<'PP'
+define m38::d($gid = 'nogroup') {
+  file { "/tmp/m38-${name}": content => template('m38/t.erb') }
+}
+class m38 {
+  m38::d { 'a': }
+  file { '/tmp/m38-noparam': content => template('m38/t.erb') }
+}
+PP
+printf 'node default { include m38 }\n' > "$TMP/site38.pp"
+out=$("$PUPPETC" -e -s -n n.example.com -f "$TMP/facts35.yaml" -m "$TMP/mods" "$TMP/site38.pp" 2>&1)
+
+# 10) @gid warns ONLY from the scope without the parameter (1 of 2 renders).
+[ "$(echo "$out" | grep -cE "'@gid'")" -eq 1 ]
+check "item 38: @gid silent under define(\$gid=...), warns without param" $? "$out"
+
+# 11) scope['gid'] gets the same shadow-awareness.
+printf 'g=<%%= scope["gid"] %%>\n' > "$TMP/mods/m38/templates/s.erb"
+cat > "$TMP/mods/m38/manifests/init.pp" <<'PP'
+define m38::d($gid = 'nogroup') {
+  file { "/tmp/m38-${name}": content => template('m38/s.erb') }
+}
+class m38 { m38::d { 'a': } }
+PP
+out=$("$PUPPETC" -e -s -n n.example.com -f "$TMP/facts35.yaml" -m "$TMP/mods" "$TMP/site38.pp" 2>&1)
+[ "$(echo "$out" | grep -cE "scope\['gid'\]")" -eq 0 ] && echo "$out" | grep -qv "Undefined variable 'gid'"
+check "item 38: scope['gid'] under define(\$gid=...) silent and resolves" $? "$out"
+
 echo
 echo "Results: $PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ]

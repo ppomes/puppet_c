@@ -986,7 +986,15 @@ static void erb_warn_qualified_scope_facts(const char *content, const char *temp
                                        : (erb_fact_name_is_exempt(name) ? NULL
                                           : puppet_lint_lookup_legacy_fact_ex(name, &survives));
                     /* puppetversion/clientcert/... still exist as variables
-                     * under Puppet 8 — never claim they raise (item 34/35). */
+                     * under Puppet 8 — never claim they raise (item 34/35).
+                     * Item 38: a genuine param/local of the same name shadows
+                     * the fact (scope['gid'] resolves it at eval) — no
+                     * diagnostic; the lookup chain only finds real variables
+                     * for removed-legacy names since item 37. */
+                    if (repl && !survives && env &&
+                        puppet_variable_lookup_chain(env, name) != NULL) {
+                        repl = NULL;
+                    }
                     if (repl && !survives) {
                         char sugg[256];
                         erb_print_scope_replacement(sugg, sizeof(sugg), repl);
@@ -1045,8 +1053,21 @@ static void erb_warn_legacy_ivar_facts(const char *content, const char *template
                 if (klen > 0 && klen < sizeof(name)) {
                     memcpy(name, k, klen);
                     name[klen] = '\0';
+                    bool survives = false;
                     const char *repl = erb_fact_name_is_exempt(name) ? NULL
-                                       : puppet_lint_lookup_legacy_fact(name);
+                                       : puppet_lint_lookup_legacy_fact_ex(name, &survives);
+                    /* Item 38: Puppet binds ALL scope variables as ERB ivars,
+                     * so @gid inside define m($gid=...) is the PARAMETER, not
+                     * the removed fact. Since item 37 the lookup chain only
+                     * resolves removed-legacy names via genuine variables
+                     * (the facts fallback skips them), so a hit here means a
+                     * param/local shadows the fact — no diagnostic. Survivors
+                     * (@puppetversion, ...) are bound under Puppet 8 too. */
+                    if (repl && survives) repl = NULL;
+                    if (repl && env &&
+                        puppet_variable_lookup_chain(env, name) != NULL) {
+                        repl = NULL;  /* borrowed scope value — not freed */
+                    }
                     if (repl) {
                         char sugg[256];
                         erb_print_scope_replacement(sugg, sizeof(sugg), repl);
