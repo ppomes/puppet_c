@@ -24,7 +24,15 @@ system resources (files, packages, services, users, etc.).
 Path to configuration file. Default: \fB/etc/puppetc/puppet.conf\fR
 .TP
 .BR \-s ", " \-\-server " " \fIURL\fR
-Server URL. Default: \fBhttp://localhost:8140\fR
+Server URL. Default: \fBhttp://localhost:8140\fR.
+Remote servers require \fBhttps://\fR \- a plaintext \fBhttp://\fR URL is
+only accepted for loopback addresses (which cannot be intercepted), or with
+\fB\-\-allow\-http\fR.
+.TP
+.BR \-\-allow\-http
+Permit plaintext HTTP to a \fIremote\fR server. Insecure: catalogs and
+pluginsync downloads (executable Ruby code) become readable and modifiable
+in transit. Intended for isolated lab networks only.
 .TP
 .BR \-\-certname " " \fINAME\fR
 Node certificate name. Default: system hostname.

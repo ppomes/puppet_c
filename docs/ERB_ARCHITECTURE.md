@@ -37,7 +37,12 @@ The ERB system exports all Puppet variables and facts to Ruby instance variables
 #### Variable Mapping:
 
 - **Puppet Variables**: `$variable` becomes `@variable` in ERB
-- **Facts**: System facts become `@factname` (e.g., `@hostname`, `@operatingsystem`)
+- **Facts**: facts are exposed through the structured `@facts` / `scope['facts']`
+  hash (the same nested view `.pp` code sees). Legacy top-scope fact names
+  removed in Puppet 8 (`@hostname`, `@operatingsystem`, ...) are deliberately
+  NOT bound — they are nil, and `scope['hostname']` raises, matching a real
+  OpenVox/Puppet 8 server. Survivors (`@puppetversion`, `@clientcert`) stay
+  bound.
 - **Dot Conversion**: Variable names with dots become underscores (e.g., `service.name` → `@service_name`)
 
 #### Processing Flow:
@@ -101,7 +106,11 @@ ERB require error: uninitialized constant Encoding::#<Symbol:0x0000000000782b0c>
 
 - **File Not Found**: Return NULL and log error message
 - **Ruby Exceptions**: Catch with `rb_eval_string_protect()` and report details
-- **Variable Not Found**: Undefined variables appear as nil in ERB context
+- **Variable Not Found**: plain undefined names appear as nil; undefined
+  CLASS-QUALIFIED names (`scope['a::b']`) and removed legacy fact names raise
+  "Undefined variable" like Puppet 8 strict mode. `scope.lookupvar(...)`
+  always returns nil on a miss (the defensive API) and `scope.exist?(name)`
+  is the sanctioned probe.
 - **Memory Issues**: Proper cleanup with `puppet_free()` on all allocations
 
 ## Integration with Puppet Interpreter

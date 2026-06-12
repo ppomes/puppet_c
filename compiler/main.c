@@ -47,8 +47,8 @@ static void print_usage(const char *program_name) {
     printf("  -o, --output      Output file (default: stdout)\n");
     printf("  -m, --modules     Path to modules directory (default: ./modules)\n");
     printf("  -n, --node        Execute only the specified node\n");
-    printf("  -a, --all-nodes   Execute all nodes (skips ERB for faster CI/CD)\n");
-    printf("  -f, --facts       Load facts from JSON file (facter or PuppetDB format)\n");
+    printf("  -a, --all-nodes   Execute all literal node definitions (CI/CD validation)\n");
+    printf("  -f, --facts       Load facts from JSON or YAML file (facter, PuppetDB or allfacts format)\n");
     printf("  -t, --template    Display template output for file resource with specified title\n");
     printf("  -D, --hiera-data  Path to Hiera data directory (default: ./data)\n");
     printf("  -s, --summary     Print validation summary (for CI, implies -e)\n");

@@ -19,7 +19,10 @@ A fast, lightweight Puppet compiler written in C for local manifest development 
 
 - **Fast**: Compile a full catalog with templates in <1 second
 - **Parallel validation**: Check hundreds of nodes in parallel for CI/CD
-- **Puppet 8 linter**: Detect legacy facts, deprecated functions, ERB issues, Ruby API changes
+- **Puppet 8 by default**: strict evaluation reproduces what a real OpenVox/Puppet 8 server accepts or rejects — removed legacy facts fail, strict ERB scope lookups raise, duplicate hash keys error, typed parameters are checked (including `Stdlib::*` aliases)
+- **Puppet 8 linter**: legacy facts (bare, `$::`, `${::x}` in strings, param defaults, ERB `@ivars`/`scope[...]`), removed functions, duplicate keys, Ruby API changes, `metadata.json` ranges — shadow-aware, with structured `$facts[...]` suggestions
+- **Data in modules**: Automatic Parameter Lookup consults `modules/*/hiera.yaml` (v5) + `data/` with `%{facts.x.y}` interpolation, like a real server
+- **Per-tree policy**: optional `.puppetc-policy.json` flags deprecated resources (e.g. an old `apt::source` repo) per environment branch
 - **Dead-code detection**: Find classes, defines, types, functions and templates never reached at runtime
 - **Minimal dependencies**: Pure C with optional Ruby for ERB templates
 - **Native ERB engine**: Renders the common ERB subset directly in C (cached AST). Halves sequential `--all-nodes` time. Parallel mode (`-P`) parallelises the native renders across worker threads; templates outside the subset are marshalled to a single Ruby daemon thread (puppetresources-style) so libruby is only ever called from one OS thread
@@ -200,46 +203,86 @@ puppetc-compile manifest.pp
 puppetc-compile -v -p -n mynode manifests/site.pp
 ```
 
-#### Puppet 8 Migration Check
+#### Puppet 8 Compatibility (always on)
+
+Puppet 8 semantics are the default — there is no opt-in flag (the former
+`--puppet8` flag was removed). Every compile both **lints** for migration
+issues and **evaluates with Puppet 8 strictness**, so the compiler fails
+where a real OpenVox/Puppet 8 server fails:
 
 ```bash
-# Check an entire Puppet directory (manifests + modules + templates + Ruby)
-puppetc-compile --puppet8 /etc/puppet
+# Full-tree migration audit (every node, parallel, CI summary)
+puppetc-compile -a -P -s -f allfacts.yaml /etc/puppet
 
-# Check a single manifest
-puppetc-compile --puppet8 manifests/site.pp
-
-# Lint and evaluate together
-puppetc-compile --puppet8 -e -n mynode manifests/site.pp
+# Promote the migration lint from warnings to errors
+puppetc-compile -a -P -s --puppet8-strict-facts --strict-erb -f allfacts.yaml /etc/puppet
 ```
 
-The `--puppet8` flag runs a two-phase compatibility check:
+**Static lint** (warnings by default; `--puppet8-strict-facts` / `--strict-erb`
+promote them to errors):
+- Legacy top-scope facts in every position: bare `$hostname`, qualified
+  `$::osfamily`, `${::fqdn}` inside strings, parameter defaults — shadow-aware
+  (a local assignment or parameter of the same name is not flagged), with the
+  structured `$facts[...]` replacement suggested. Lazily-loaded module
+  manifests are linted too.
+- ERB templates (scanned when rendered): removed `@class::var` sugar,
+  `scope['hostname']` / `scope.lookupvar('::fqdn')` legacy reads (with or
+  without `::`, shadow-aware), `@legacy_fact` instance variables (nil under
+  Facter 5), and String methods on facts that became Hashes in Facter 4+
+  (`mountpoints.split`, ...).
+- Removed functions as errors (`hiera*`, stdlib `validate_*` / `is_*`),
+  deprecated ones as warnings; duplicate literal hash keys; class
+  inheritance; `import`.
+- Ruby provider/function files (old API, Ruby 3.x issues, `def foo(arg:,)`
+  shorthand) and `metadata.json` puppet ranges that exclude Puppet 8.
 
-**Phase 1 - AST analysis** (parsed `.pp` files):
-- Legacy top-scope facts (`$::ipaddress` -> `$facts['networking']['ip']`, 45+ facts mapped)
-- Removed Hiera 3 functions (`hiera()` -> `lookup()`)
-- Deprecated stdlib functions (`validate_*`, `is_*`, `str2bool`, `create_resources`, etc.)
-- Class inheritance (`inherits` keyword)
-- Import statements
-
-**Phase 2 - File scanning** (when input is a directory):
-- ERB templates: `scope.lookupvar()`, `scope['var']`, variables without `@` prefix
-- Ruby files: old function API (`Puppet::Parser::Functions.newfunction`), Ruby 3.x issues (`File.exists?`, `URI.escape`, `PSON`)
-- `metadata.json`: version constraints that exclude Puppet 8
+**Strict evaluation** (always errors, like the real server):
+- Reading a removed legacy fact fails: `Unknown variable: 'lsbdistcodename'`
+  in manifests, `Undefined variable 'hostname'` for ERB `scope[...]` — even
+  when Facter still emits the fact. Survivors (`puppetversion`,
+  `clientcert`, `environment`) and genuinely assigned variables keep
+  resolving; `scope.lookupvar` returns nil and `scope.exist?` probes safely.
+- `scope['class::var']` on an undefined class variable raises, so defensive
+  `<% if scope[X] %>` patterns fail exactly as they do live.
+- Duplicate hash keys error — including keys that only collide after string
+  interpolation.
+- Typed parameters and function arguments are enforced (`String[1]`, `Enum`,
+  `Pattern`, `Variant`, `Optional`, user-defined aliases like `Stdlib::Fqdn`
+  loaded from `modules/*/types/`), with Ruby `\A`/`\z` regex anchors
+  translated.
+- Automatic Parameter Lookup includes the **module data layer**
+  (`modules/<mod>/hiera.yaml` v5 + `data/` with `%{facts.x.y}`
+  interpolation), and migration-era built-ins are native: `fact()`,
+  user-defined `function`s, `defined(File['x'])`, method-call dispatch,
+  multi-title resource references.
 
 **Example output:**
 ```
-error[puppet8]: manifests/site.pp:10: 'hiera' was removed in Puppet 8, use lookup() instead
-error[puppet8]: manifests/site.pp:42: $::ipaddress is removed in Puppet 8, use $facts['networking']['ip']
-warning[puppet8]: modules/mymod/manifests/init.pp:3: class inheritance (inherits 'mymod::params') is deprecated
-error[puppet8]: modules/mymod/templates/config.erb:5: scope.lookupvar() is removed in Puppet 8
-warning[puppet8]: modules/mymod/lib/puppet/parser/functions/myfunc.rb:1: old Ruby API, rewrite using create_function
-
-Puppet 8 compatibility summary: 3 errors, 2 warnings
-File scan results: 2 errors, 1 warning
+warning[puppet8]: site.pp:2: $hostname is a legacy top-scope fact removed in Puppet 8, use $facts['networking']['hostname']
+warning[puppet8]: modules/x/templates/c.erb:5: ERB scope['ipaddress'] raises "Undefined variable" under Puppet 8 (legacy facts are gone); use scope['facts']['networking']['ip']
+error[puppet8]: modules/x/manifests/init.pp:14: The key 'a' is declared more than once in this hash (first at line 12); a duplicate hash key is a fatal error in Puppet 8
+[ERROR] modules/x/manifests/init.pp:23: Unknown variable: 'lsbdistcodename'
+[ERROR] modules/apt/manifests/source.pp:28: Module 'apt' requires puppet >= 3.0.0 < 5.0.0, incompatible with the Puppet 8 target
 ```
 
-Exit code is 1 if errors (removed features) are found, 0 if only warnings or clean.
+Exit code is 1 when any error is reported; counts in the `-s` summary match
+the diagnostics printed.
+
+#### Per-tree Resource Policy
+
+An optional `.puppetc-policy.json` at the tree root (next to `manifests/`)
+lets each environment branch deprecate resources:
+
+```json
+{ "deprecated_resources": [
+    { "type": "apt::source", "title_pattern": "^openvox[0-7]$",
+      "reason": "this branch targets OpenVox 8 - use the openvox8 repo",
+      "level": "warning" } ] }
+```
+
+`title` (exact) or `title_pattern` (POSIX ERE); `level` is `warning`
+(default) or `error`. Checks run on the resolved title at declaration time,
+one diagnostic per resource per run. No file means the feature is off.
 
 #### Dead-code Detection
 
@@ -358,7 +401,7 @@ Puppet agent with mTLS authentication for secure catalog retrieval and applicati
 **Features:**
 - Automatic certificate request (CSR) workflow on first run
 - Client-side mTLS authentication with certificate validation
-- HTTPS-only communication with server
+- HTTPS-enforced communication: plaintext HTTP is only accepted for loopback addresses, or explicitly with `--allow-http` (insecure, lab use)
 - Secure certificate storage with proper permissions
 
 ```bash

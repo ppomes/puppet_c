@@ -1,4 +1,4 @@
-.TH PUPPETC-COMPILE 1 "January 2026" "puppetc 0.0.1" "User Commands"
+.TH PUPPETC-COMPILE 1 "June 2026" "puppetc 0.0.1" "User Commands"
 .SH NAME
 puppetc-compile \- Puppet manifest compiler and validator
 .SH SYNOPSIS
@@ -38,10 +38,13 @@ Execute only the specified node definition. Supports regex node matching.
 .TP
 .BR \-a ", " \-\-all\-nodes
 Execute all literal node definitions. Regex nodes are skipped.
-Useful for CI/CD validation.
+Useful for CI/CD validation. Top-level statements are executed once for
+registration, then re-evaluated per node with that node's facts.
 .TP
 .BR \-f ", " \-\-facts " " \fIFILE\fR
-Load facts from a JSON file. Supports both facter and PuppetDB formats.
+Load facts from a JSON or YAML file. Supports single-node facter output,
+the PuppetDB export format, and the multi-node \fBfacts:\fR YAML map used
+for \fB\-\-all\-nodes\fR runs.
 .TP
 .BR \-t ", " \-\-template " " \fITITLE\fR
 Display the template output for a file resource with the specified title.
@@ -56,36 +59,17 @@ Exit code: 0 = all nodes OK, 1 = errors found.
 .BR \-P ", " \-\-parallel
 Process nodes in parallel for faster execution. Requires \fB\-\-all\-nodes\fR.
 .TP
-.BR \-8 ", " \-\-puppet8
-Check Puppet 8 compatibility. Detects deprecated and removed language features
-to help migrate from older Puppet versions. Can be used standalone (lint-only)
-or combined with \fB\-e\fR to lint and evaluate.
-.sp
-\fBPhase 1 \- AST checks:\fR
-.RS
-.IP \(bu 2
-Removed Hiera 3 functions: \fBhiera()\fR, \fBhiera_array()\fR, \fBhiera_hash()\fR, \fBhiera_include()\fR
-.IP \(bu 2
-Legacy top-scope fact variables: \fB$::ipaddress\fR, \fB$::fqdn\fR, \fB$::osfamily\fR, etc. (45+ facts mapped to \fB$facts[]\fR replacements)
-.IP \(bu 2
-Deprecated functions: \fBvalidate_*\fR, \fBis_*\fR, \fBstr2bool\fR, \fBcreate_resources\fR, etc.
-.IP \(bu 2
-Class inheritance (\fBinherits\fR keyword)
-.IP \(bu 2
-Import statements
-.RE
-.sp
-\fBPhase 2 \- File scanning:\fR (when input is a directory)
-.RS
-.IP \(bu 2
-ERB templates: \fBscope.lookupvar()\fR, \fBscope['var']\fR, variables without \fB@\fR prefix
-.IP \(bu 2
-Ruby files: old function API (\fBPuppet::Parser::Functions.newfunction\fR), Ruby 3.x issues (\fBFile.exists?\fR, \fBURI.escape\fR, \fBPSON\fR)
-.IP \(bu 2
-metadata.json: version constraints incompatible with Puppet 8
-.RE
-.sp
-Exit code is 1 if any errors (removed features) are found.
+.BR \-\-strict\-erb
+Promote the ERB migration warnings (removed \fB@class::var\fR sugar,
+legacy fact reads in templates, structured-fact type drift) from warnings
+to errors.
+.TP
+.BR \-\-puppet8\-strict\-facts
+Promote the legacy top-scope fact lint (\fB$hostname\fR, \fB$::osfamily\fR,
+\fB${::fqdn}\fR in strings, parameter defaults) from warnings to errors.
+Note that \fIevaluated\fR reads of removed legacy facts always fail with
+"Unknown variable", matching Puppet 8 \- this flag only hardens the static
+lint, which also covers code paths the compile does not reach.
 .TP
 .BR \-X ", " \-\-dead\-code
 Report classes, defines, Ruby types/functions and templates that are declared
@@ -110,6 +94,69 @@ Enable verbose/debug output.
 .TP
 .BR \-h ", " \-\-help
 Show help message and exit.
+.SH PUPPET 8 COMPATIBILITY
+Puppet 8 semantics are the default and the compatibility checks always run
+(the former \fB\-8\fR/\fB\-\-puppet8\fR opt-in flag was removed); the
+compiler is meant to reproduce what a real OpenVox/Puppet 8 server accepts
+or rejects.
+.SS Static checks (lint)
+.IP \(bu 2
+Legacy top-scope facts, bare or qualified (\fB$hostname\fR,
+\fB$::osfamily\fR, \fB${::fqdn}\fR inside strings, parameter defaults),
+shadow-aware: a local assignment or parameter of the same name suppresses
+the diagnostic. Facts that still exist under Puppet 8
+(\fBpuppetversion\fR, \fBclientcert\fR, ...) get softer wording.
+Lazily-loaded module manifests are linted once per file.
+.IP \(bu 2
+Removed functions as errors: Hiera 3 (\fBhiera*\fR), stdlib
+\fBvalidate_*\fR / \fBis_*\fR; deprecated patterns as warnings.
+.IP \(bu 2
+Duplicate literal hash keys (fatal in Puppet 8), in the entry program and
+in module files.
+.IP \(bu 2
+ERB templates, scanned when rendered: removed \fB@class::var\fR sugar;
+\fBscope['hostname']\fR / \fBscope.lookupvar('::fqdn')\fR legacy reads
+(with or without \fB::\fR, shadow-aware); \fB@legacy_fact\fR instance
+variables (nil under Facter 5); String methods called on facts that became
+Hashes in Facter 4+ (\fBmountpoints.split\fR, ...).
+.IP \(bu 2
+Ruby provider/function files: removed APIs, Ruby 3.x issues, the
+\fBdef foo(arg:, ...)\fR keyword shorthand.
+.IP \(bu 2
+\fBmetadata.json\fR puppet \fBversion_requirement\fR ranges that exclude
+Puppet 8, checked when a module is included.
+.SS Strict evaluation
+Evaluation reproduces Puppet 8 runtime failures rather than warning past
+them:
+.IP \(bu 2
+Reading a removed legacy fact as a variable fails with
+\fBUnknown variable\fR (manifests) or \fBUndefined variable\fR (ERB
+\fBscope[...]\fR), even when Facter still emits the fact. Survivors and
+genuinely assigned variables of the same name keep resolving;
+\fBscope.lookupvar\fR keeps returning nil (the defensive API).
+.IP \(bu 2
+\fBscope['class::var']\fR on an undefined class variable raises, so a
+defensive \fB<%% if scope[X] %%>\fR fails exactly like the real server;
+\fBscope.exist?\fR is the sanctioned probe.
+.IP \(bu 2
+Duplicate hash keys are also caught when they only collide after string
+interpolation.
+.IP \(bu 2
+Class/define/function parameters and function arguments are checked against
+their declared types (String[N], Enum, Pattern, Variant, Optional, and
+user-defined type aliases such as \fBStdlib::Fqdn\fR loaded from
+\fBmodules/*/types/\fR). Ruby \fB\\A\fR/\fB\\z\fR regex anchors are
+translated for the matcher.
+.IP \(bu 2
+Automatic Parameter Lookup consults global Hiera and the module data layer
+(\fBmodules/<mod>/hiera.yaml\fR v5 + \fBdata/\fR with
+\fB%{facts.x.y}\fR interpolation), so e.g. \fBapt::ppa_options\fR
+resolves as on a real server.
+.IP \(bu 2
+Built-ins commonly hit during migrations are implemented natively:
+\fBfact('os.distro.codename')\fR, user-defined \fBfunction\fR
+definitions, \fBdefined(File['x'])\fR, method-call dispatch, multi-title
+resource references.
 .SH NODE EXECUTION
 By default, only the \fBdefault\fR node is executed. Use \fB\-\-node\fR to
 execute a specific node (supports regex matching), or \fB\-\-all\-nodes\fR
@@ -146,16 +193,10 @@ Output catalog as JSON:
 puppetc-compile \-c \-o catalog.json /etc/puppet
 .RE
 .PP
-Check Puppet 8 compatibility (manifests + templates + Ruby files):
+Migration audit with the lint promoted to errors:
 .PP
 .RS
-puppetc-compile \-\-puppet8 /etc/puppet
-.RE
-.PP
-Check a single manifest for Puppet 8 issues:
-.PP
-.RS
-puppetc-compile \-\-puppet8 manifests/site.pp
+puppetc-compile \-a \-P \-s \-\-puppet8\-strict\-facts \-f allfacts.yaml /etc/puppet
 .RE
 .PP
 Report dead code in a modules tree (needs complete facts for full coverage):
@@ -173,6 +214,27 @@ Modules directory containing Puppet modules.
 .TP
 .I data/
 Default Hiera data directory.
+.TP
+.I modules/<module>/hiera.yaml, modules/<module>/data/
+Module data layer (Hiera v5, \fBdata_hash: yaml_data\fR with
+\fBpath\fR/\fBpaths\fR and \fB%{facts.x.y}\fR interpolation), consulted
+by Automatic Parameter Lookup after the global hierarchy. Other backends are
+skipped with a warning.
+.TP
+.I .puppetc-policy.json
+Optional per-tree resource policy at the tree root. Entries under
+\fBdeprecated_resources\fR flag resource declarations by \fBtype\fR and
+exact \fBtitle\fR or POSIX-ERE \fBtitle_pattern\fR, with an optional
+\fBreason\fR and \fBlevel\fR (\fBwarning\fR, the default, or
+\fBerror\fR). Example:
+.sp
+.RS
+{ "deprecated_resources": [
+    { "type": "apt::source", "title_pattern": "^openvox[0-7]$",
+      "reason": "this branch targets OpenVox 8", "level": "error" } ] }
+.RE
+.sp
+Absent file disables the feature. One diagnostic per resource per run.
 .SH SEE ALSO
 .BR puppetc-server (1),
 .BR puppetc-agent (1),
