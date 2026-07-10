@@ -130,6 +130,7 @@ EXTRA_DIST = \
     test_module_hiera.sh \
     test_global_prepass.sh \
     test_eval_legacy_facts.sh \
+    test_duplicate_define.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -165,7 +166,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions check-enum-undef-default check-unless-defined check-erb-structured-facts check-type-aliases check-duplicate-hash-keys check-legacy-facts check-regex-anchors check-define-no-instance check-fact-function check-forward-include-getvar check-chained-index-key check-erb-legacy-scope check-module-facts-lint check-erb-strict-scope check-resource-policy check-erb-facts-in-ruby check-erb-scope-exist check-module-hiera check-global-prepass check-eval-legacy-facts
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions check-enum-undef-default check-unless-defined check-erb-structured-facts check-type-aliases check-duplicate-hash-keys check-legacy-facts check-regex-anchors check-define-no-instance check-fact-function check-forward-include-getvar check-chained-index-key check-erb-legacy-scope check-module-facts-lint check-erb-strict-scope check-resource-policy check-erb-facts-in-ruby check-erb-scope-exist check-module-hiera check-global-prepass check-eval-legacy-facts check-duplicate-define
 	@echo "All tests completed."
 
 check-parser:
@@ -1059,6 +1060,17 @@ check-eval-legacy-facts:
 	else \
 		echo "❌ Some eval-legacy-facts tests failed:"; \
 		sed 's/^/  /' output/eval_legacy_facts.out; \
+		exit 1; \
+	fi
+
+check-duplicate-define:
+	@echo "Running duplicate defined-type declaration tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_duplicate_define.sh > output/duplicate_define.out 2>&1; then \
+		echo "✅ All duplicate-define tests passed!"; \
+	else \
+		echo "❌ Some duplicate-define tests failed:"; \
+		sed 's/^/  /' output/duplicate_define.out; \
 		exit 1; \
 	fi
 

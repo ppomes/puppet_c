@@ -4572,7 +4572,13 @@ void puppet_exec_stmt(puppet_stmt_t *stmt, puppet_env_t *env) {
                                 puppet_error_at(stmt->loc, "Duplicate declaration - %s is already declared", resource_id);
                                 puppet_env_increment_error(env);
                                 puppet_free(resource_id);
-                                puppet_value_destroy(title_val);
+                                /* Item 39: do NOT destroy title_val here — it is
+                                 * owned by the per-instance cleanup after the
+                                 * title-expansion loop. Destroying it in this
+                                 * branch double-freed it (SIGABRT), and for
+                                 * multi-title arrays would have poisoned the
+                                 * remaining iterations, which read elements
+                                 * pointing into it. */
                                 continue;
                             }
                         }
