@@ -50,7 +50,7 @@ static void print_usage(const char *program_name) {
     printf("  -a, --all-nodes   Execute all literal node definitions (CI/CD validation)\n");
     printf("  -f, --facts       Load facts from JSON or YAML file (facter, PuppetDB or allfacts format)\n");
     printf("  -t, --template    Display template output for file resource with specified title\n");
-    printf("  -D, --hiera-data  Path to Hiera data directory (default: ./data)\n");
+    printf("  -D, --hiera-data  Override the Hiera datadir (default: hiera.yaml's own, else ./data)\n");
     printf("  -s, --summary     Print validation summary (for CI, implies -e)\n");
     printf("  -P, --parallel    Process nodes in parallel (faster, requires --all-nodes)\n");
     printf("  -X, --dead-code   Report classes/defines/functions/templates never used (implies -a)\n");
@@ -60,6 +60,14 @@ static void print_usage(const char *program_name) {
     printf("  -h, --help        Show this help message\n");
     printf("\nWhen a directory is provided, site.pp will be loaded from manifests/\n");
     printf("and modules will be loaded from modules/ subdirectory.\n");
+    printf("\nHiera:\n");
+    printf("  The environment hiera.yaml is read in both Hiera 5 (version: 5, defaults,\n");
+    printf("  hierarchy of name/path/paths entries) and legacy Hiera 3 (:hierarchy:,\n");
+    printf("  :yaml: :datadir:) format. Only data_hash: yaml_data is supported; eyaml\n");
+    printf("  and other backends are skipped with a warning. Paths interpolate\n");
+    printf("  %%{module_name}, %%{facts.x.y} and scope variables. A relative datadir is\n");
+    printf("  resolved against the hiera.yaml's own directory, not the current one;\n");
+    printf("  --hiera-data overrides it.\n");
     printf("\nNode execution:\n");
     printf("  By default, only the 'default' node is executed.\n");
     printf("  Use --node <name> to execute a specific node (matches regex nodes).\n");

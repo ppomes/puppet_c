@@ -21,6 +21,7 @@ A fast, lightweight Puppet compiler written in C for local manifest development 
 - **Parallel validation**: Check hundreds of nodes in parallel for CI/CD
 - **Puppet 8 by default**: strict evaluation reproduces what a real OpenVox/Puppet 8 server accepts or rejects — removed legacy facts fail, strict ERB scope lookups raise, duplicate hash keys error, typed parameters are checked (including `Stdlib::*` aliases)
 - **Puppet 8 linter**: legacy facts (bare, `$::`, `${::x}` in strings, param defaults, ERB `@ivars`/`scope[...]`), removed functions, duplicate keys, Ruby API changes, `metadata.json` ranges — shadow-aware, with structured `$facts[...]` suggestions
+- **Hiera 5 and Hiera 3**: the environment `hiera.yaml` is read in both formats (`version: 5` with `defaults` + a `hierarchy` of `name`/`path`/`paths` entries, or the legacy `:hierarchy:`), with `%{module_name}`, `%{facts.x.y}` and scope-variable interpolation
 - **Data in modules**: Automatic Parameter Lookup consults `modules/*/hiera.yaml` (v5) + `data/` with `%{facts.x.y}` interpolation, like a real server
 - **Per-tree policy**: optional `.puppetc-policy.json` flags deprecated resources (e.g. an old `apt::source` repo) per environment branch
 - **Dead-code detection**: Find classes, defines, types, functions and templates never reached at runtime
@@ -255,6 +256,9 @@ promote them to errors):
   interpolation), and migration-era built-ins are native: `fact()`,
   user-defined `function`s, `defined(File['x'])`, method-call dispatch,
   multi-title resource references.
+- The environment `hiera.yaml` is read in **Hiera 5** and **Hiera 3** format
+  (see [Hiera](#hiera) below), so `lookup()` and APL resolve against the same
+  hierarchy the server uses.
 
 **Example output:**
 ```
@@ -561,7 +565,7 @@ docker compose -f docker-compose.demo.yml down
 - Variable scoping, string interpolation, heredocs
 - ERB templates: native C engine for the common subset (instance vars, `scope.lookupvar`, indexing, comments, trim markers), embedded Ruby fallback for the rest
 - EPP templates (native Puppet templating)
-- Hiera lookups (YAML backend)
+- Hiera lookups (YAML backend), environment `hiera.yaml` in v5 and v3 format
 - Module autoloading
 - Virtual resources (`@resource`), `realize()`, collectors (`<| |>`)
 - Exported resources (`@@resource`), exported collectors (`<<| |>>`) with PuppetDB
@@ -572,6 +576,53 @@ docker compose -f docker-compose.demo.yml down
 - Deferred functions (`Deferred()` with agent-side evaluation)
 - Pluginsync (server serves module plugins to agents)
 - ~50 stdlib functions
+
+### Hiera
+
+The environment `hiera.yaml` (found in the directory given on the command
+line, or next to `manifests/`) is read in both formats:
+
+```yaml
+# Hiera 5
+version: 5
+defaults:
+  datadir: hieradata
+  data_hash: yaml_data
+hierarchy:
+  - name: "Per node"
+    path: "%{module_name}/%{facts.networking.fqdn}.yaml"
+  - name: "Per environment"
+    path: "local/%{module_name}/%{jbossenv}.yaml"
+  - name: "Global data"
+    path: "global.yaml"
+```
+
+```yaml
+# Hiera 3 (still supported)
+:hierarchy:
+  - "%{module_name}/%{::env}"
+  - "global"
+:yaml:
+    :datadir: hieralocal
+```
+
+- Only `data_hash: yaml_data` is supported. A level using `lookup_key`
+  (including `eyaml_lookup_key`), `data_dig`, `glob`/`globs`, `mapped_paths`
+  or another `data_hash` is skipped with a warning naming the level and the
+  backend — never silently treated as a missing file. eYAML decryption is not
+  implemented.
+- A `hiera.yaml` matching neither format gives an empty hierarchy and a
+  warning instead of silently failing every lookup.
+- Path templates interpolate `%{module_name}` (the calling class's module, or
+  the namespace of a qualified key), `%{facts.x.y}` / `%{::facts.x.y}`
+  structured facts, and scope variables such as `%{jbossenv}` or `%{::fqdn}`.
+  An unresolved token becomes an empty segment, so the level just misses.
+- A relative `datadir` is resolved against the `hiera.yaml`'s own directory
+  and an absolute one is used as-is, so results do not depend on the current
+  working directory. `-D`/`--hiera-data` overrides the datadir of every level.
+- Lookup order for class parameters: environment hierarchy first, then the
+  module data layer (`modules/<mod>/hiera.yaml` v5 + `data/`), then the
+  manifest default.
 
 ### Implemented Functions
 

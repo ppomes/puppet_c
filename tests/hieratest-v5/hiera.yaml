@@ -1,0 +1,18 @@
+---
+version: 5
+defaults:
+  datadir: hieradata
+  data_hash: yaml_data
+hierarchy:
+  - name: "Secrets"
+    path: "secrets.yaml"
+    lookup_key: eyaml_lookup_key
+    options:
+      pkcs7_private_key: /dev/null
+      pkcs7_public_key: /dev/null
+  - name: "Local module specific data per environment"
+    path: "local/%{module_name}/%{jbossenv}.yaml"
+  - name: "Module specific data per domain"
+    path: "%{module_name}/%{facts.networking.domain}.yaml"
+  - name: "Global data"
+    path: "global.yaml"

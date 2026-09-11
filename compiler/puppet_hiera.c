@@ -162,6 +162,110 @@ puppet_value_t *puppet_hiera_load_yaml(const char *filepath) {
 
 /* YAML support is now mandatory - removed conditional compilation */
 
+/* ============================================================================
+ * Shared hiera.yaml v5 parsing (item 33 module layer, item 40 environment)
+ * ============================================================================ */
+
+/* Borrow a string member from a parsed-YAML hash value; NULL if absent. */
+static const char *hiera_hash_str(puppet_value_t *h, const char *key) {
+    if (!h || h->type != PUPPET_VALUE_HASH) return NULL;
+    puppet_value_t *v = puppet_hash_get(h->data.hash, key, strlen(key));
+    return (v && v->type == PUPPET_VALUE_STRING) ? v->data.string.data : NULL;
+}
+
+/* True when the document declares "version: 5" (number or string). */
+static bool hiera_doc_is_v5(puppet_value_t *root) {
+    if (!root || root->type != PUPPET_VALUE_HASH) return false;
+    puppet_value_t *ver = puppet_hash_get(root->data.hash, "version", 7);
+    if (!ver) return false;
+    if (ver->type == PUPPET_VALUE_NUMBER && (int)ver->data.number == 5) return true;
+    return ver->type == PUPPET_VALUE_STRING && ver->data.string.data &&
+           strcmp(ver->data.string.data, "5") == 0;
+}
+
+/* Name the backend of a hierarchy entry we cannot read, or NULL when the
+ * entry is a plain yaml_data one. Only data_hash: yaml_data with path/paths
+ * is supported; eyaml (lookup_key), data_dig, globs and mapped_paths all
+ * need machinery we do not have, so they are reported, never silently
+ * treated as a missing file. */
+static const char *hiera_v5_unsupported_backend(puppet_value_t *entry,
+                                                const char *def_data_hash) {
+    if (!entry || entry->type != PUPPET_VALUE_HASH) return "entry is not a mapping";
+    const char *lk = hiera_hash_str(entry, "lookup_key");
+    if (puppet_hash_get(entry->data.hash, "lookup_key", 10)) {
+        return lk ? lk : "lookup_key";
+    }
+    if (puppet_hash_get(entry->data.hash, "data_dig", 8))     return "data_dig";
+    if (puppet_hash_get(entry->data.hash, "glob", 4))         return "glob";
+    if (puppet_hash_get(entry->data.hash, "globs", 5))        return "globs";
+    if (puppet_hash_get(entry->data.hash, "mapped_paths", 12)) return "mapped_paths";
+    const char *dh = hiera_hash_str(entry, "data_hash");
+    if (!dh) dh = def_data_hash;
+    if (dh && strcmp(dh, "yaml_data") != 0) return dh;
+    return NULL;
+}
+
+/* Called once per usable path of a v5 hierarchy, in file order.
+ * `datadir` is the entry's effective datadir (entry override, else the
+ * document default, else the caller's fallback); `path` is verbatim from
+ * the file and already carries its extension. */
+typedef void (*hiera_v5_path_cb)(void *ctx, const char *name,
+                                 const char *datadir, const char *path);
+
+/* Walk a v5 hiera.yaml document. Returns false when it is not v5 at all so
+ * the caller can fall back (environment layer: hiera 3) or warn. `label`
+ * prefixes warnings, e.g. "module 'apt'" or "hiera.yaml". */
+static bool hiera_v5_walk(puppet_value_t *root, const char *label,
+                          const char *fallback_datadir,
+                          hiera_v5_path_cb cb, void *cb_ctx) {
+    if (!hiera_doc_is_v5(root)) return false;
+
+    puppet_value_t *defaults = puppet_hash_get(root->data.hash, "defaults", 8);
+    const char *def_datadir = hiera_hash_str(defaults, "datadir");
+    const char *def_data_hash = hiera_hash_str(defaults, "data_hash");
+    if (!def_datadir) def_datadir = fallback_datadir;
+    if (!def_data_hash) def_data_hash = "yaml_data";
+
+    puppet_value_t *hier = puppet_hash_get(root->data.hash, "hierarchy", 9);
+    if (!hier || hier->type != PUPPET_VALUE_ARRAY || !hier->data.array) return true;
+
+    for (size_t i = 0; i < hier->data.array->count; i++) {
+        puppet_value_t *e = hier->data.array->items[i];
+        const char *ename = hiera_hash_str(e, "name");
+        if (!ename) ename = "?";
+
+        const char *bad = hiera_v5_unsupported_backend(e, def_data_hash);
+        if (bad) {
+            puppet_warn("%s: hierarchy level '%s' ignored: unsupported backend '%s' "
+                        "(only data_hash: yaml_data with path/paths is supported)",
+                        label, ename, bad);
+            continue;
+        }
+
+        const char *e_datadir = hiera_hash_str(e, "datadir");
+        if (!e_datadir) e_datadir = def_datadir;
+
+        puppet_value_t *paths = puppet_hash_get(e->data.hash, "paths", 5);
+        if (paths && paths->type == PUPPET_VALUE_ARRAY && paths->data.array) {
+            for (size_t j = 0; j < paths->data.array->count; j++) {
+                puppet_value_t *p = paths->data.array->items[j];
+                if (p && p->type == PUPPET_VALUE_STRING && p->data.string.data) {
+                    cb(cb_ctx, ename, e_datadir, p->data.string.data);
+                }
+            }
+        } else {
+            const char *single = hiera_hash_str(e, "path");
+            if (single) {
+                cb(cb_ctx, ename, e_datadir, single);
+            } else {
+                puppet_warn("%s: hierarchy level '%s' ignored: no path/paths",
+                            label, ename);
+            }
+        }
+    }
+    return true;
+}
+
 /**
  * @brief Create default Hiera configuration
  */
@@ -186,8 +290,45 @@ puppet_hiera_config_t *puppet_hiera_config_create_default(const char *datadir) {
     return config;
 }
 
+/* Resolve a datadir from hiera.yaml against the file's own directory:
+ * absolute paths are used as-is, relative ones hang off basedir. */
+static char *hiera_resolve_datadir(const char *basedir, const char *datadir) {
+    if (datadir && datadir[0] == '/') return puppet_strdup(datadir);
+    size_t len = strlen(basedir) + 1 + strlen(datadir ? datadir : "") + 1;
+    char *out = puppet_malloc(len);
+    snprintf(out, len, "%s/%s", basedir, datadir ? datadir : "");
+    return out;
+}
+
+/* hiera_v5_walk context for the environment layer: append one hierarchy
+ * level per path, keeping file order. */
+typedef struct {
+    const char *basedir;
+    puppet_hiera_config_t *config;
+    puppet_hiera_level_t *last;
+} hiera_env_v5_ctx_t;
+
+static void hiera_env_v5_add_level(void *vctx, const char *name,
+                                   const char *datadir, const char *path) {
+    hiera_env_v5_ctx_t *ctx = (hiera_env_v5_ctx_t *)vctx;
+    puppet_hiera_level_t *level = puppet_calloc(1, sizeof(puppet_hiera_level_t));
+    level->name = puppet_strdup(name);
+    /* v5 paths already carry their extension — never append ".yaml" */
+    level->path_template = puppet_strdup(path);
+    level->datadir = hiera_resolve_datadir(ctx->basedir, datadir);
+    level->backend = HIERA_BACKEND_YAML;
+
+    if (ctx->last) ctx->last->next = level;
+    else ctx->config->hierarchy = level;
+    ctx->last = level;
+}
+
 /**
  * @brief Create Hiera configuration from file (hiera.yaml)
+ *
+ * Reads both formats: hiera 5 (version: 5, defaults.datadir/data_hash,
+ * hierarchy as a list of name/path/paths mappings) and the legacy hiera 3
+ * (:hierarchy: list of extension-less strings, :yaml: :datadir:).
  */
 puppet_hiera_config_t *puppet_hiera_config_create(const char *config_path) {
     puppet_value_t *yaml_config = puppet_hiera_load_yaml(config_path);
@@ -213,53 +354,70 @@ puppet_hiera_config_t *puppet_hiera_config_create(const char *config_path) {
     config->version = 5;
     config->default_merge = HIERA_MERGE_FIRST;
 
-    /* Get datadir from :yaml / :json section, or use default. YAML keys
-     * like ":yaml:" parse as ":yaml" — the trailing colon is the key/value
-     * separator, not part of the name. Accept both spellings so typos in
-     * hand-written hiera.yaml files don't cause a silent fallback. */
-    const char *rel_datadir = "hieradata";
-    puppet_value_t *yaml_section = puppet_hash_get(yaml_config->data.hash, ":yaml", 5);
-    if (!yaml_section) {
-        yaml_section = puppet_hash_get(yaml_config->data.hash, ":yaml:", 6);
-    }
-    if (yaml_section && yaml_section->type == PUPPET_VALUE_HASH) {
-        puppet_value_t *datadir_val = puppet_hash_get(yaml_section->data.hash, ":datadir", 8);
-        if (!datadir_val) {
-            datadir_val = puppet_hash_get(yaml_section->data.hash, ":datadir:", 9);
-        }
-        if (datadir_val && datadir_val->type == PUPPET_VALUE_STRING) {
-            rel_datadir = datadir_val->data.string.data;
-        }
-    }
-    /* Make datadir absolute relative to basedir */
-    char abs_datadir[1024];
-    snprintf(abs_datadir, sizeof(abs_datadir), "%s/%s", basedir, rel_datadir);
-    config->datadir = puppet_strdup(abs_datadir);
+    /* --- hiera 5 ------------------------------------------------------- */
+    hiera_env_v5_ctx_t v5ctx = { basedir, config, NULL };
+    if (hiera_v5_walk(yaml_config, config_path, "data",
+                      hiera_env_v5_add_level, &v5ctx)) {
+        puppet_value_t *defaults = puppet_hash_get(yaml_config->data.hash, "defaults", 8);
+        const char *def_datadir = hiera_hash_str(defaults, "datadir");
+        config->datadir = hiera_resolve_datadir(basedir, def_datadir ? def_datadir : "data");
+    } else {
+        /* --- hiera 3 --------------------------------------------------- */
+        config->version = 3;
 
-    /* Parse hierarchy */
-    puppet_value_t *hierarchy = puppet_hash_get(yaml_config->data.hash, ":hierarchy", 10);
-    if (hierarchy && hierarchy->type == PUPPET_VALUE_ARRAY) {
-        puppet_hiera_level_t *last_level = NULL;
-        for (size_t i = 0; i < hierarchy->data.array->count; i++) {
-            puppet_value_t *item = hierarchy->data.array->items[i];
-            if (item && item->type == PUPPET_VALUE_STRING) {
-                puppet_hiera_level_t *level = puppet_calloc(1, sizeof(puppet_hiera_level_t));
-                /* Build path template with .yaml extension */
-                size_t path_len = item->data.string.len + 6; /* ".yaml\0" */
-                level->path_template = puppet_malloc(path_len);
-                snprintf(level->path_template, path_len, "%s.yaml", item->data.string.data);
-                level->name = puppet_strdup(item->data.string.data);
-                level->datadir = puppet_strdup(config->datadir);
-                level->backend = HIERA_BACKEND_YAML;
-
-                if (last_level) {
-                    last_level->next = level;
-                } else {
-                    config->hierarchy = level;
-                }
-                last_level = level;
+        /* Get datadir from :yaml / :json section, or use default. YAML keys
+         * like ":yaml:" parse as ":yaml" — the trailing colon is the key/value
+         * separator, not part of the name. Accept both spellings so typos in
+         * hand-written hiera.yaml files don't cause a silent fallback. */
+        const char *rel_datadir = "hieradata";
+        puppet_value_t *yaml_section = puppet_hash_get(yaml_config->data.hash, ":yaml", 5);
+        if (!yaml_section) {
+            yaml_section = puppet_hash_get(yaml_config->data.hash, ":yaml:", 6);
+        }
+        if (yaml_section && yaml_section->type == PUPPET_VALUE_HASH) {
+            puppet_value_t *datadir_val = puppet_hash_get(yaml_section->data.hash, ":datadir", 8);
+            if (!datadir_val) {
+                datadir_val = puppet_hash_get(yaml_section->data.hash, ":datadir:", 9);
+            }
+            if (datadir_val && datadir_val->type == PUPPET_VALUE_STRING) {
+                rel_datadir = datadir_val->data.string.data;
             }
         }
+        config->datadir = hiera_resolve_datadir(basedir, rel_datadir);
+
+        /* Parse hierarchy */
+        puppet_value_t *hierarchy = puppet_hash_get(yaml_config->data.hash, ":hierarchy", 10);
+        if (hierarchy && hierarchy->type == PUPPET_VALUE_ARRAY) {
+            puppet_hiera_level_t *last_level = NULL;
+            for (size_t i = 0; i < hierarchy->data.array->count; i++) {
+                puppet_value_t *item = hierarchy->data.array->items[i];
+                if (item && item->type == PUPPET_VALUE_STRING) {
+                    puppet_hiera_level_t *level = puppet_calloc(1, sizeof(puppet_hiera_level_t));
+                    /* Build path template with .yaml extension */
+                    size_t path_len = item->data.string.len + 6; /* ".yaml\0" */
+                    level->path_template = puppet_malloc(path_len);
+                    snprintf(level->path_template, path_len, "%s.yaml", item->data.string.data);
+                    level->name = puppet_strdup(item->data.string.data);
+                    level->datadir = puppet_strdup(config->datadir);
+                    level->backend = HIERA_BACKEND_YAML;
+
+                    if (last_level) {
+                        last_level->next = level;
+                    } else {
+                        config->hierarchy = level;
+                    }
+                    last_level = level;
+                }
+            }
+        }
+    }
+
+    /* An empty hierarchy makes every lookup fail; say so instead of
+     * returning silently broken data (the hiera 5 / hiera 3 confusion). */
+    if (!config->hierarchy) {
+        puppet_warn("%s: no usable hierarchy (expected hiera 5 'version: 5' + "
+                    "'hierarchy:', or hiera 3 ':hierarchy:'); all lookups will fail",
+                    config_path);
     }
 
     /* Initialize cache and defaults */
@@ -361,6 +519,40 @@ char *puppet_hiera_interpolate(const char *template, puppet_hiera_context_t *con
                         var_name, strlen(var_name));
                     if (var_val && var_val->type == PUPPET_VALUE_STRING) {
                         value = var_val->data.string.data;
+                    }
+                }
+
+                /* %{facts.x.y} / %{::facts.x.y}: structured fact access,
+                 * the hiera 5 spelling of %{::fqdn} & friends. Resolved
+                 * against the node's facts, exactly as the module data
+                 * layer does for its own hierarchy paths. */
+                if (!value && context->env) {
+                    const char *fname = var_name;
+                    if (strncmp(fname, "::", 2) == 0) fname += 2;
+                    if (strncmp(fname, "facts.", 6) == 0) {
+                        puppet_value_t *fv = puppet_facts_lookup_dotted(context->env, fname + 6);
+                        if (fv) {
+                            if (fv->type == PUPPET_VALUE_STRING && fv->data.string.data) {
+                                strncpy(value_buf, fv->data.string.data, sizeof(value_buf) - 1);
+                                value = value_buf;
+                            } else if (fv->type == PUPPET_VALUE_NUMBER) {
+                                snprintf(value_buf, sizeof(value_buf), "%g", fv->data.number);
+                                value = value_buf;
+                            } else if (fv->type == PUPPET_VALUE_BOOL) {
+                                strncpy(value_buf, fv->data.boolean ? "true" : "false",
+                                        sizeof(value_buf) - 1);
+                                value = value_buf;
+                            }
+                            /* hash/array/undef -> empty: the level just misses */
+                            puppet_value_destroy(fv);
+                        }
+                        /* Never fall through to the scope chain: a missing
+                         * fact is an empty segment, not a variable read. */
+                        if (!value) {
+                            puppet_free(var_name);
+                            p = end + 1;
+                            continue;
+                        }
                     }
                 }
 
@@ -786,11 +978,20 @@ static void module_hiera_add_template(puppet_module_hiera_t *cfg,
     cfg->path_templates[cfg->path_count++] = t;
 }
 
-/* Borrow a string member from a parsed-YAML hash value; NULL if absent. */
-static const char *module_hiera_hash_str(puppet_value_t *h, const char *key) {
-    if (!h || h->type != PUPPET_VALUE_HASH) return NULL;
-    puppet_value_t *v = puppet_hash_get(h->data.hash, key, strlen(key));
-    return (v && v->type == PUPPET_VALUE_STRING) ? v->data.string.data : NULL;
+/* hiera_v5_walk context for the module layer: one absolute template per
+ * path, rooted at <modules_path>/<module>/<datadir>/. */
+typedef struct {
+    puppet_module_hiera_t *cfg;
+    const char *modules_path;
+    const char *module_name;
+} module_hiera_v5_ctx_t;
+
+static void module_hiera_v5_add_path(void *vctx, const char *name,
+                                     const char *datadir, const char *path) {
+    (void)name;
+    module_hiera_v5_ctx_t *ctx = (module_hiera_v5_ctx_t *)vctx;
+    module_hiera_add_template(ctx->cfg, ctx->modules_path, ctx->module_name,
+                              datadir, path);
 }
 
 /* Parse <modules_path>/<module>/hiera.yaml. NULL when absent (silent) or
@@ -811,69 +1012,20 @@ static puppet_module_hiera_t *module_hiera_parse_config(const char *modules_path
         return NULL;
     }
 
-    /* version must be 5 (number, or string "5") */
-    puppet_value_t *ver = puppet_hash_get(root->data.hash, "version", 7);
-    bool v5 = ver && ((ver->type == PUPPET_VALUE_NUMBER && (int)ver->data.number == 5) ||
-                      (ver->type == PUPPET_VALUE_STRING && ver->data.string.data &&
-                       strcmp(ver->data.string.data, "5") == 0));
+    char label[512];
+    snprintf(label, sizeof(label), "module '%s'", module_name);
+
+    puppet_module_hiera_t *cfg = puppet_calloc(1, sizeof(*cfg));
+    module_hiera_v5_ctx_t ctx = { cfg, modules_path, module_name };
+    bool v5 = hiera_v5_walk(root, label, "data", module_hiera_v5_add_path, &ctx);
+    puppet_value_destroy(root);
+
     if (!v5) {
         puppet_warn("module '%s': hiera.yaml version is not 5 (only v5 with yaml_data is "
                     "supported); skipping module data layer", module_name);
-        puppet_value_destroy(root);
+        puppet_hiera_module_config_destroy(cfg);
         return NULL;
     }
-
-    puppet_value_t *defaults = puppet_hash_get(root->data.hash, "defaults", 8);
-    const char *def_datadir = module_hiera_hash_str(defaults, "datadir");
-    const char *def_datahash = module_hiera_hash_str(defaults, "data_hash");
-    if (!def_datadir) def_datadir = "data";
-    if (!def_datahash) def_datahash = "yaml_data";
-
-    puppet_module_hiera_t *cfg = puppet_calloc(1, sizeof(*cfg));
-
-    puppet_value_t *hier = puppet_hash_get(root->data.hash, "hierarchy", 9);
-    if (hier && hier->type == PUPPET_VALUE_ARRAY && hier->data.array) {
-        for (size_t i = 0; i < hier->data.array->count; i++) {
-            puppet_value_t *e = hier->data.array->items[i];
-            if (!e || e->type != PUPPET_VALUE_HASH) continue;
-            const char *ename = module_hiera_hash_str(e, "name");
-            const char *e_datahash = module_hiera_hash_str(e, "data_hash");
-            if (!e_datahash) e_datahash = def_datahash;
-            bool unsupported = strcmp(e_datahash, "yaml_data") != 0 ||
-                puppet_hash_get(e->data.hash, "lookup_key", 10) ||
-                puppet_hash_get(e->data.hash, "data_dig", 8) ||
-                puppet_hash_get(e->data.hash, "glob", 4) ||
-                puppet_hash_get(e->data.hash, "globs", 5) ||
-                puppet_hash_get(e->data.hash, "mapped_paths", 12);
-            if (unsupported) {
-                puppet_warn("module '%s': hiera.yaml entry '%s' uses an unsupported backend "
-                            "(only data_hash: yaml_data with path/paths); entry skipped",
-                            module_name, ename ? ename : "?");
-                continue;
-            }
-            const char *e_datadir = module_hiera_hash_str(e, "datadir");
-            if (!e_datadir) e_datadir = def_datadir;
-
-            puppet_value_t *paths = puppet_hash_get(e->data.hash, "paths", 5);
-            if (paths && paths->type == PUPPET_VALUE_ARRAY && paths->data.array) {
-                for (size_t j = 0; j < paths->data.array->count; j++) {
-                    puppet_value_t *p = paths->data.array->items[j];
-                    if (p && p->type == PUPPET_VALUE_STRING && p->data.string.data) {
-                        module_hiera_add_template(cfg, modules_path, module_name,
-                                                  e_datadir, p->data.string.data);
-                    }
-                }
-            } else {
-                const char *single = module_hiera_hash_str(e, "path");
-                if (single) {
-                    module_hiera_add_template(cfg, modules_path, module_name,
-                                              e_datadir, single);
-                }
-            }
-        }
-    }
-
-    puppet_value_destroy(root);
     if (cfg->path_count == 0) {
         puppet_hiera_module_config_destroy(cfg);
         return NULL;

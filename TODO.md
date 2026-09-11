@@ -6,6 +6,10 @@
 - [ ] `PUPPET_EXPR_DOT` - Method calls (`$array.each`, `$string.length`)
 - [x] `PUPPET_EXPR_LAMBDA` - Lambdas/closures (`|$x| { ... }`)
 - [x] Expression-body lambdas (`|$x| { $x * 2 }`)
+- [ ] **item 41** — chained hash access on a *qualified* variable yields the
+      key instead of the value: with `class secrets { $mmm = { 'ota' => { 'otauser' => 'ituserota' } } }`,
+      `"${secrets::mmm['ota']['otauser']}"` renders `otauser`, expected
+      `ituserota`. The same chained access on a local variable is correct.
 
 ### Statement Types
 - [x] `PUPPET_STMT_DEFINE` - Defined types (`define mytype($param) { }`)
@@ -160,10 +164,20 @@ The native renderer (`compiler/puppet_erb_native.c`) currently covers ~2/3 of te
 - [x] YAML backend
 - [x] Basic hierarchy
 - [x] `lookup()` function
+- [x] hiera.yaml v5 (environment): `version: 5`, `defaults.datadir`/`data_hash`,
+      `hierarchy` of `name`/`path`/`paths`/`datadir`/`data_hash` entries —
+      `%{module_name}`, `%{facts.x.y}` and scope-variable interpolation,
+      datadir relative to the hiera.yaml (not the cwd), `-D` override
+- [x] hiera.yaml v3 (environment): `:hierarchy:` + `:yaml: :datadir:`
+- [x] hiera.yaml v5 (module data layer, `modules/<mod>/hiera.yaml` + `data/`)
+- [x] Unsupported backends and unrecognised hiera.yaml files warn instead of
+      failing every lookup silently
 
 ### Missing
 - [ ] JSON backend
-- [ ] eYAML (encrypted YAML)
+- [ ] eYAML (encrypted YAML) — `lookup_key: eyaml_lookup_key` levels are
+      skipped with a warning; no decryption
+- [ ] Other v5 backends: `data_dig`, `glob`/`globs`, `mapped_paths`
 - [ ] Deep merge strategies
 - [ ] `hiera_include()` function
 

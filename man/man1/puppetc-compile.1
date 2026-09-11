@@ -50,7 +50,9 @@ for \fB\-\-all\-nodes\fR runs.
 Display the template output for a file resource with the specified title.
 .TP
 .BR \-D ", " \-\-hiera\-data " " \fIPATH\fR
-Path to Hiera data directory. Default: \fB./data\fR
+Override the Hiera data directory, replacing the \fBdatadir\fR of every
+hierarchy level of the environment \fBhiera.yaml\fR. Without it the datadir
+comes from the \fBhiera.yaml\fR itself, or \fB./data\fR when there is none.
 .TP
 .BR \-s ", " \-\-summary
 Print a validation summary suitable for CI/CD. Implies \fB\-e\fR.
@@ -157,6 +159,37 @@ Built-ins commonly hit during migrations are implemented natively:
 \fBfact('os.distro.codename')\fR, user-defined \fBfunction\fR
 definitions, \fBdefined(File['x'])\fR, method-call dispatch, multi-title
 resource references.
+.SH HIERA
+The environment \fBhiera.yaml\fR is read in both formats.
+.TP
+.B Hiera 5
+\fBversion: 5\fR, a \fBdefaults\fR mapping (\fBdatadir\fR,
+\fBdata_hash\fR) and a \fBhierarchy\fR list of mappings with
+\fBname\fR and \fBpath\fR or \fBpaths\fR; a level may override
+\fBdatadir\fR or \fBdata_hash\fR. Paths carry their own extension and are
+used verbatim.
+.TP
+.B Hiera 3
+The legacy \fB:hierarchy:\fR list of extension-less strings with
+\fB:yaml:\fR \fB:datadir:\fR; \fB.yaml\fR is appended to each entry.
+.PP
+Only \fBdata_hash: yaml_data\fR is supported. Levels using
+\fBlookup_key\fR (including \fBeyaml_lookup_key\fR), \fBdata_dig\fR,
+\fBglob\fR/\fBglobs\fR, \fBmapped_paths\fR or another \fBdata_hash\fR
+are skipped, each with a warning naming the level and the backend; they are
+never silently treated as a missing file. A \fBhiera.yaml\fR that matches
+neither format yields an empty hierarchy and a warning.
+.PP
+Path templates interpolate \fB%{module_name}\fR (the calling class's
+module, or the namespace of a qualified key), \fB%{facts.x.y}\fR and
+\fB%{::facts.x.y}\fR (structured facts) and scope variables such as
+\fB%{jbossenv}\fR or \fB%{::fqdn}\fR. A token that resolves to nothing
+becomes an empty segment, so the level simply misses.
+.PP
+A relative \fBdatadir\fR is resolved against the directory holding the
+\fBhiera.yaml\fR, an absolute one is used as-is: lookups do not depend on
+the current working directory. \fB\-D\fR overrides the datadir of every
+level.
 .SH NODE EXECUTION
 By default, only the \fBdefault\fR node is executed. Use \fB\-\-node\fR to
 execute a specific node (supports regex matching), or \fB\-\-all\-nodes\fR

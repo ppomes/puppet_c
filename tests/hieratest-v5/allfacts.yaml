@@ -1,0 +1,9 @@
+---
+facts:
+  v5node.preprod.it.int:
+    fqdn: v5node.preprod.it.int
+    hostname: v5node
+    networking:
+      fqdn: v5node.preprod.it.int
+      domain: preprod.it.int
+      hostname: v5node

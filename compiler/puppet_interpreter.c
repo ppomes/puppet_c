@@ -439,7 +439,7 @@ puppet_value_t *puppet_apl_lookup(const char *class_name, const char *param_name
         }
     }
 
-    /* If not found, try module-specific hieradata files */
+    /* Not in the environment layer: fall through to the module data layer */
     if (!result) {
         /* Extract module name (first component of class_name) */
         const char *sep = strchr(class_name, ':');
@@ -453,59 +453,14 @@ puppet_value_t *puppet_apl_lookup(const char *class_name, const char *param_name
             module_name = puppet_strdup(class_name);
         }
 
-        /* Get environment name from scope (try jbossenv, then env).
-         * Use puppet_variable_lookup_chain so we cross class/node boundaries
-         * and reach the top scope where these variables are typically set. */
-        const char *env_name = NULL;
-        puppet_value_t *env_val = puppet_variable_lookup_chain(env, "jbossenv");
-        if (!env_val) env_val = puppet_variable_lookup_chain(env, "::jbossenv");
-        if (env_val && env_val->type == PUPPET_VALUE_STRING) {
-            env_name = env_val->data.string.data;
-        }
-        if (!env_name) {
-            env_val = puppet_variable_lookup_chain(env, "environment");
-            if (!env_val) env_val = puppet_variable_lookup_chain(env, "::environment");
-            if (env_val && env_val->type == PUPPET_VALUE_STRING) {
-                env_name = env_val->data.string.data;
-            }
-        }
-
-        /* Try various hieradata paths - including preprod-relative paths */
-        char path[1024];
-        const char *hieradata_dirs[] = {
-            "hieradata", "data", "hieralocal", "hieradata/local",
-            "preprod/hieradata", "preprod/hieralocal", "preprod/hieradata/local"
-        };
-
-        for (size_t i = 0; i < sizeof(hieradata_dirs)/sizeof(hieradata_dirs[0]) && !result; i++) {
-            /* Try module/env.yaml */
-            if (env_name) {
-                snprintf(path, sizeof(path), "%s/%s/%s.yaml", hieradata_dirs[i], module_name, env_name);
-                puppet_value_t *data = puppet_hiera_load_yaml(path);
-                if (data && data->type == PUPPET_VALUE_HASH) {
-                    result = puppet_hash_get(data->data.hash, key, strlen(key));
-                    if (result) {
-                        result = puppet_value_copy(result);
-                        puppet_debug("APL: Found %s in %s", key, path);
-                    }
-                    puppet_value_destroy(data);
-                }
-            }
-
-            /* Try module/global.yaml */
-            if (!result) {
-                snprintf(path, sizeof(path), "%s/%s/global.yaml", hieradata_dirs[i], module_name);
-                puppet_value_t *data = puppet_hiera_load_yaml(path);
-                if (data && data->type == PUPPET_VALUE_HASH) {
-                    result = puppet_hash_get(data->data.hash, key, strlen(key));
-                    if (result) {
-                        result = puppet_value_copy(result);
-                        puppet_debug("APL: Found %s in %s", key, path);
-                    }
-                    puppet_value_destroy(data);
-                }
-            }
-        }
+        /* Item 40: the cwd-relative hieradata_dirs[] scan that used to sit
+         * here is gone. It guessed "hieradata", "hieralocal", "preprod/…"
+         * relative to the *current directory*, so APL results depended on
+         * where puppetc-compile was launched from and it covered only the
+         * <module>/<env>.yaml and <module>/global.yaml shapes. The
+         * environment hiera.yaml provider above now reads both hiera 3 and
+         * hiera 5 hierarchies, anchored on the hiera.yaml's own directory,
+         * so the guesswork is unnecessary. */
 
         /* Item 33: module data layer — modules/<mod>/hiera.yaml + data/.
          * Lowest priority, after global providers and the site fallback

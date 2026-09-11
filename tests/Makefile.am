@@ -131,6 +131,7 @@ EXTRA_DIST = \
     test_global_prepass.sh \
     test_eval_legacy_facts.sh \
     test_duplicate_define.sh \
+    test_hiera_v5.sh \
     facts/multinode_topvar_facts.yaml \
     facts/multinode_isolation_facts.yaml \
     puppet/multinode_topvar.pp \
@@ -150,6 +151,13 @@ EXTRA_DIST = \
     hieratest/hieralocal/mymod/global.yaml \
     hieratest/hieralocal/mymod/prod.yaml \
     hieratest/modules/mymod/manifests/init.pp \
+    hieratest-v5/hiera.yaml \
+    hieratest-v5/allfacts.yaml \
+    hieratest-v5/manifests/site.pp \
+    hieratest-v5/hieradata/global.yaml \
+    hieratest-v5/hieradata/foo/preprod.it.int.yaml \
+    hieratest-v5/hieradata/local/foo/preprod.yaml \
+    hieratest-v5/modules/foo/manifests/bar.pp \
     modules/loadertest/manifests/init.pp \
     modules/loadertest/manifests/sub.pp \
     modules/loadertest/lib/puppet/type/loadertest_type.rb \
@@ -166,7 +174,7 @@ EXTRA_DIST = \
     modules/epp_test/templates/ini_section.epp
 
 # Test output directory
-check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions check-enum-undef-default check-unless-defined check-erb-structured-facts check-type-aliases check-duplicate-hash-keys check-legacy-facts check-regex-anchors check-define-no-instance check-fact-function check-forward-include-getvar check-chained-index-key check-erb-legacy-scope check-module-facts-lint check-erb-strict-scope check-resource-policy check-erb-facts-in-ruby check-erb-scope-exist check-module-hiera check-global-prepass check-eval-legacy-facts check-duplicate-define
+check-local: check-parser check-nodes check-facts check-core-functions check-hiera check-iterators check-collectors check-virtual check-simple-core check-erb check-epp check-features check-chains check-append check-tags check-virtual-override check-parallel-consistency check-multinode-isolation check-class-loader check-hiera-advanced check-catalog-refs check-source-url check-unknown-type check-template-fidelity check-puppet8-lint check-user-functions check-method-dispatch check-multi-title-refs check-strict-undef-index check-function-argtypes check-strict-erb check-ruby-kwarg-shorthand check-module-metadata check-parametric-types check-parallel-user-functions check-enum-undef-default check-unless-defined check-erb-structured-facts check-type-aliases check-duplicate-hash-keys check-legacy-facts check-regex-anchors check-define-no-instance check-fact-function check-forward-include-getvar check-chained-index-key check-erb-legacy-scope check-module-facts-lint check-erb-strict-scope check-resource-policy check-erb-facts-in-ruby check-erb-scope-exist check-module-hiera check-global-prepass check-eval-legacy-facts check-duplicate-define check-hiera-v5
 	@echo "All tests completed."
 
 check-parser:
@@ -496,6 +504,9 @@ check-valgrind: $(top_builddir)/compiler/puppetc-compile
 	                                  -m "$$S/hieratest/modules" \
 	                                  -D "$$S/hieratest/hieralocal" \
 	                                  "$$S/hieratest/manifests/site.pp"; \
+	run_case hiera-v5              "$$C" -p -n v5node.preprod.it.int \
+	                                  -f "$$S/hieratest-v5/allfacts.yaml" \
+	                                  "$$S/hieratest-v5"; \
 	run_case template-render       "$$C" -e -n test.example.com \
 	                                  -t /tmp/erbtest.cfg -m "$$S/modules" \
 	                                  "$$S/puppet/erbtest_site.pp"; \
@@ -1038,6 +1049,17 @@ check-module-hiera:
 	else \
 		echo "❌ Some module-hiera tests failed:"; \
 		sed 's/^/  /' output/module_hiera.out; \
+		exit 1; \
+	fi
+
+check-hiera-v5:
+	@echo "Running hiera.yaml v5 (environment layer) tests..."
+	@$(MKDIR_P) output
+	@if $(srcdir)/test_hiera_v5.sh > output/hiera_v5.out 2>&1; then \
+		echo "✅ All hiera-v5 tests passed!"; \
+	else \
+		echo "❌ Some hiera-v5 tests failed:"; \
+		sed 's/^/  /' output/hiera_v5.out; \
 		exit 1; \
 	fi
 
