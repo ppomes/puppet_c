@@ -1941,6 +1941,24 @@ puppet_value_t *puppet_eval_expr(puppet_expr_t *expr, puppet_env_t *env) {
             return ret;
         }
 
+        case PUPPET_EXPR_BLOCK: {
+            /* No new scope: assignments in an if-rvalue block are visible
+             * after it, as in Puppet. Value = last expression statement. */
+            puppet_value_t *result = NULL;
+            puppet_stmt_list_t *body = expr->data.block;
+            for (size_t i = 0; body && i < body->count; i++) {
+                puppet_stmt_t *s = body->stmts[i];
+                bool last = (i + 1 == body->count);
+                if (last && s && (s->type == PUPPET_STMT_EXPRESSION ||
+                                  s->type == PUPPET_STMT_FUNCTION_CALL)) {
+                    result = puppet_eval_expr(s->data.expr, env);
+                } else {
+                    puppet_exec_stmt(s, env);
+                }
+            }
+            return result ? result : puppet_value_create_undef();
+        }
+
         case PUPPET_EXPR_CONDITIONAL: {
             // Ternary conditional: condition ? then_expr : else_expr
             puppet_value_t *cond = puppet_eval_expr(expr->data.conditional.condition, env);

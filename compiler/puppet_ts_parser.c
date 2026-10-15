@@ -1082,19 +1082,32 @@ static puppet_expr_t *convert_named_access(TSNode node, const char *source) {
 }
 
 /* Main expression conversion dispatcher */
-/* Extract the "value expression" of a block used as an rvalue: the last
- * statement if it's an expression-statement. Otherwise returns NULL. */
+/* Extract the "value expression" of a block used as an rvalue. A single
+ * meaningful child is converted directly; with several (e.g. an assignment
+ * followed by the value) the whole block becomes a PUPPET_EXPR_BLOCK so the
+ * leading statements are executed too:
+ *   $pin = if $x { $o = [...]; "release ${o.join(',')}" } */
 static puppet_expr_t *block_last_expr(TSNode block_node, const char *source) {
     if (ts_node_is_null(block_node)) return NULL;
     uint32_t count = ts_node_named_child_count(block_node);
-    for (int32_t i = (int32_t)count - 1; i >= 0; i--) {
-        TSNode child = ts_node_named_child(block_node, (uint32_t)i);
-        const char *ctype = ts_node_type(child);
-        if (strcmp(ctype, "comment") == 0) continue;
-        /* The last meaningful child IS the value expression */
-        return convert_expression(child, source);
+    uint32_t meaningful = 0;
+    TSNode last = {0};
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(block_node, i);
+        if (strcmp(ts_node_type(child), "comment") == 0) continue;
+        meaningful++;
+        last = child;
     }
-    return NULL;
+    if (meaningful == 0) return NULL;
+    /* The last meaningful child IS the value expression */
+    if (meaningful == 1) return convert_expression(last, source);
+
+    puppet_expr_t *expr = puppet_calloc(1, sizeof(puppet_expr_t));
+    expr->type = PUPPET_EXPR_BLOCK;
+    expr->loc = node_location(block_node);
+    expr->data.block = puppet_calloc(1, sizeof(puppet_stmt_list_t));
+    *expr->data.block = convert_block(block_node, source);
+    return expr;
 }
 
 static puppet_expr_t *convert_expression(TSNode node, const char *source) {
@@ -1104,9 +1117,8 @@ static puppet_expr_t *convert_expression(TSNode node, const char *source) {
 
     /* "if" used as an rvalue expression (Puppet 4+):
      *   $x = if cond { a } elsif cond2 { b } else { c }
-     * Convert to nested ternary (PUPPET_EXPR_CONDITIONAL). Only the last
-     * expression of each block is kept as the branch value — multi-statement
-     * rvalue blocks are uncommon and would need a full block-eval primitive. */
+     * Convert to nested ternary (PUPPET_EXPR_CONDITIONAL). Each branch value
+     * comes from block_last_expr (PUPPET_EXPR_BLOCK when several statements). */
     if (strcmp(type, "if") == 0) {
         /* Collect branches: list of (cond, value_expr) + optional else value */
         TSNode elsif_conds[16];
@@ -1178,6 +1190,48 @@ static puppet_expr_t *convert_expression(TSNode node, const char *source) {
         root->data.conditional.condition = top_cond;
         root->data.conditional.then_expr = if_val;
         root->data.conditional.else_expr = acc;
+        return root;
+    }
+
+    /* "unless" used as an rvalue:
+     *   $x = unless cond { a } else { b }
+     * Same lowering as "if" with the branches swapped (no elsif for unless). */
+    if (strcmp(type, "unless") == 0) {
+        TSNode cond = find_child(node, "condition");
+        TSNode body = find_child(node, "block");
+        TSNode els = find_child(node, "else");
+
+        puppet_expr_t *else_val = NULL;
+        if (!ts_node_is_null(els)) {
+            else_val = block_last_expr(find_child(els, "block"), source);
+        }
+        if (!else_val) {
+            else_val = puppet_calloc(1, sizeof(puppet_expr_t));
+            else_val->type = PUPPET_EXPR_VALUE;
+            else_val->loc = node_location(node);
+            else_val->data.value = puppet_calloc(1, sizeof(puppet_value_t));
+            else_val->data.value->type = PUPPET_VALUE_UNDEF;
+        }
+
+        puppet_expr_t *cond_expr = NULL;
+        if (!ts_node_is_null(cond) && ts_node_named_child_count(cond) > 0) {
+            cond_expr = convert_expression(ts_node_named_child(cond, 0), source);
+        }
+        puppet_expr_t *body_val = block_last_expr(body, source);
+        if (!body_val) {
+            body_val = puppet_calloc(1, sizeof(puppet_expr_t));
+            body_val->type = PUPPET_EXPR_VALUE;
+            body_val->loc = node_location(node);
+            body_val->data.value = puppet_calloc(1, sizeof(puppet_value_t));
+            body_val->data.value->type = PUPPET_VALUE_UNDEF;
+        }
+
+        puppet_expr_t *root = puppet_calloc(1, sizeof(puppet_expr_t));
+        root->type = PUPPET_EXPR_CONDITIONAL;
+        root->loc = node_location(node);
+        root->data.conditional.condition = cond_expr;
+        root->data.conditional.then_expr = else_val;   /* cond true -> else */
+        root->data.conditional.else_expr = body_val;   /* cond false -> body */
         return root;
     }
 

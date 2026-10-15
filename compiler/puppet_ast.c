@@ -434,6 +434,16 @@ void puppet_expr_destroy(puppet_expr_t *expr) {
             }
             break;
             
+        case PUPPET_EXPR_BLOCK:
+            if (expr->data.block) {
+                for (size_t i = 0; i < expr->data.block->count; i++) {
+                    puppet_stmt_destroy(expr->data.block->stmts[i]);
+                }
+                puppet_free(expr->data.block->stmts);
+                puppet_free(expr->data.block);
+            }
+            break;
+
         case PUPPET_EXPR_RESOURCE_REF:
             puppet_string_free(expr->data.resource_ref.type);
             puppet_expr_destroy(expr->data.resource_ref.title);

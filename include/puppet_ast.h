@@ -194,7 +194,8 @@ typedef enum {
     PUPPET_EXPR_RESOURCE_REF,       /**< Resource reference (File['name']) */
     PUPPET_EXPR_INTERPOLATED_STRING, /**< String with embedded expressions */
     PUPPET_EXPR_HASH,               /**< Hash literal with dynamic values */
-    PUPPET_EXPR_ARRAY               /**< Array literal with dynamic values */
+    PUPPET_EXPR_ARRAY,              /**< Array literal with dynamic values */
+    PUPPET_EXPR_BLOCK               /**< Statement block used as a value (if-rvalue) */
 } puppet_expr_type_t;
 
 /**
@@ -323,6 +324,9 @@ struct puppet_expr {
             puppet_expr_t *default_value;     /**< Default case value (optional) */
         } selector;
         puppet_lambda_t *lambda;
+        /* PUPPET_EXPR_BLOCK: all statements run in the current scope, the
+         * value is the last one's (like a function or lambda body). */
+        puppet_stmt_list_t *block;
         struct {
             puppet_string_t type;
             puppet_expr_t *title;

@@ -468,6 +468,12 @@ static void lint_expr(puppet_lint_result_t *r, puppet_expr_t *expr) {
             }
             break;
 
+        case PUPPET_EXPR_BLOCK:
+            if (expr->data.block) {
+                lint_stmt_list(r, expr->data.block);
+            }
+            break;
+
         case PUPPET_EXPR_HASH:
             for (size_t i = 0; i < expr->data.hash_entries.count; i++) {
                 puppet_expr_t *ki = expr->data.hash_entries.keys[i];
